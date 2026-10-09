@@ -5,7 +5,7 @@
  * primary has a value, and is imported into the primary once.
  */
 import { useAtomValue } from "@effect/atom-react";
-import type { QueueSlotSettings } from "@t3tools/contracts";
+import { AuthSettingsWriteScope, type QueueSlotSettings } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -21,6 +21,7 @@ import {
   primaryServerSettingsAtom,
   serverEnvironment,
 } from "./state/server";
+import { useEnvironmentScope } from "./state/session";
 import { useAtomCommand } from "./state/use-atom-command";
 
 /** The value the popover, the settings tab and the coordinator act on: the server's wins. */
@@ -35,6 +36,26 @@ export function useQueueSlotSettings(): QueueSlotSettings {
     })),
   );
   return hasPrimary ? (server ?? local) : local;
+}
+
+/** Whether the primary grants `settings:write` - the same check sidebar sections use. An older
+ *  pairing lacks it, and the server refuses the write. False with no primary. */
+function usePrimaryCanWriteSettings(): boolean {
+  const primaryId = usePrimaryEnvironment()?.environmentId ?? null;
+  return useEnvironmentScope(primaryId, AuthSettingsWriteScope);
+}
+
+/** How a queue slot edit lands: `write` with no primary (the device copy is the value) or when the
+ *  primary grants `settings:write`; `device` while a primary without it has no value yet (the edit
+ *  stays in the device copy, which is still the effective one); otherwise `none`. */
+export function useQueueSlotsAccess(): "write" | "device" | "none" {
+  const hasPrimary = usePrimaryEnvironment() !== null;
+  const canWrite = usePrimaryCanWriteSettings();
+  // A config that has not arrived may still carry a value, so it counts as one.
+  const config = useAtomValue(primaryServerConfigAtom);
+  const serverHasValue = config === null || config.settings.queueSlots !== undefined;
+  if (!hasPrimary || canWrite) return "write";
+  return serverHasValue ? "none" : "device";
 }
 
 /** The patch's fields as the local store normalized them, so the server gets integers in 0..99. */
@@ -55,16 +76,18 @@ function normalizedPatch(patch: QueueSlotPatch, local: QueueSlotSettings): Queue
  * the whole device copy as `queueSlotsImport`, which the server applies only when it has no value,
  * so a partial patch never lands on an absent one. Resolves to the server's value after the write,
  * or null on failure (including a server that refused to rewrite a broken or externally changed
- * settings file) or with no primary.
+ * settings file) or with no primary. It also returns null without sending anything when the primary
+ * lacks `settings:write`; the edit then stays on this device.
  */
 export function useSetQueueSlots(): (patch: QueueSlotPatch) => Promise<QueueSlotSettings | null> {
   const primaryId = usePrimaryEnvironment()?.environmentId ?? null;
   // A failed edit is reported like other settings writes; the device copy already has it.
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings);
+  const canWrite = usePrimaryCanWriteSettings();
   return useCallback(
     async (patch) => {
       useQueueSlotSettingsStore.getState().apply(patch);
-      if (primaryId === null) return null;
+      if (primaryId === null || !canWrite) return null;
       const local = readLocalQueueSlots();
       const result = await updateSettings({
         environmentId: primaryId,
@@ -72,7 +95,7 @@ export function useSetQueueSlots(): (patch: QueueSlotPatch) => Promise<QueueSlot
       });
       return result._tag === "Success" ? (result.value.queueSlots ?? local) : null;
     },
-    [primaryId, updateSettings],
+    [canWrite, primaryId, updateSettings],
   );
 }
 
@@ -98,9 +121,11 @@ export function useImportLocalQueueSlots(): void {
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     reportFailure: false,
   });
+  const writable = usePrimaryCanWriteSettings();
   const state = useRef<"idle" | "sending" | "done">("idle");
   const attempts = useRef(0);
   useEffect(() => {
+    if (!writable) return;
     if (primaryId === null || config === null || config.settings.queueSlots !== undefined) return;
     if (state.current !== "idle" || attempts.current >= MAX_IMPORT_ATTEMPTS) return;
     if (!hasLocalQueueSlots()) return;
@@ -113,5 +138,5 @@ export function useImportLocalQueueSlots(): void {
       state.current =
         result._tag === "Success" && result.value.queueSlots !== undefined ? "done" : "idle";
     });
-  }, [config, primaryId, updateSettings]);
+  }, [config, primaryId, updateSettings, writable]);
 }

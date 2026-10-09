@@ -16,9 +16,12 @@ const ACTIVE_SLOTS_ANCHOR = searchableSetting("queue-slots").id;
 /**
  * The queue's slot settings. Rows deliberately set neither `serverScoped` nor `settingKeys`: the
  * control must keep working with no primary environment, where the store holds the value locally.
+ * The rows gate on the primary's `settings:write` grant themselves, because `serverScoped` checks
+ * the settings scope's environments, not the primary. They also stay editable while the primary
+ * has no queue value yet (see `useQueueSlotsAccess`).
  */
 export function QueueSettingsView(props: ReturnType<typeof useQueueSlots>) {
-  const { slots, perProvider, providerSlots, instances } = props;
+  const { slots, perProvider, providerSlots, instances, writable, notice } = props;
   const setQueueSlots = useSetQueueSlots();
 
   return (
@@ -28,11 +31,12 @@ export function QueueSettingsView(props: ReturnType<typeof useQueueSlots>) {
           <SettingsRow
             {...searchableSetting("queue-slots")}
             description={ACTIVE_SLOTS_HINT}
-            control={<ActiveSlotsField value={slots} />}
+            control={<ActiveSlotsField value={slots} disabled={!writable} />}
           />
         )}
         <SettingsRow
           {...searchableSetting("queue-per-provider")}
+          status={notice ?? undefined}
           description={
             perProvider
               ? PER_PROVIDER_HINT
@@ -43,6 +47,7 @@ export function QueueSettingsView(props: ReturnType<typeof useQueueSlots>) {
               checked={perProvider}
               onCheckedChange={(value) => void setQueueSlots({ perProvider: value })}
               aria-label="Per provider"
+              disabled={!writable}
             />
           }
         />
@@ -62,6 +67,7 @@ export function QueueSettingsView(props: ReturnType<typeof useQueueSlots>) {
                     label={i.label}
                     instanceId={i.instanceId}
                     providerSlots={providerSlots}
+                    disabled={!writable}
                   />
                 }
               />

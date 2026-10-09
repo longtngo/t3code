@@ -1,6 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
 import { createEnvironmentSessionAtoms } from "@t3tools/client-runtime/state/session";
-import { sessionResultGrantsScope } from "@t3tools/client-runtime/state/sessionScope";
+import {
+  sessionResultDeniesScope,
+  sessionResultGrantsScope,
+} from "@t3tools/client-runtime/state/sessionScope";
 import {
   type AuthEnvironmentScope,
   type AuthSessionState,
@@ -28,6 +31,17 @@ export function useEnvironmentScope(
       : environmentSession.sessionStateAtom(environmentId),
   );
   return sessionHasScope(result, scope);
+}
+
+/** See `sessionResultDeniesScope`: only a current answer without `scope` is a denial. */
+export function readEnvironmentScopeDenied(
+  environmentId: EnvironmentId,
+  scope: AuthEnvironmentScope,
+): boolean {
+  return sessionResultDeniesScope(
+    appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId)),
+    scope,
+  );
 }
 
 function sessionHasScope(

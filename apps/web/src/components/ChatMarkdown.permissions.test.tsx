@@ -1,4 +1,5 @@
 import {
+  AuthFilesystemReadScope,
   AuthOrchestrationOperateScope,
   EnvironmentId,
   ProjectId,
@@ -15,6 +16,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   allowed: true,
+  fileRead: true,
+  previewAvailable: false,
   listeners: new Set<() => void>(),
   openEditor: vi.fn(),
   updateMetadata: vi.fn(),
@@ -54,6 +57,7 @@ vi.mock("../state/session", async () => {
   const { useSyncExternalStore } = await import("react");
   const readEnvironmentScope = (id: EnvironmentId | null, scope: AuthEnvironmentScope) =>
     id !== null &&
+    (scope !== AuthFilesystemReadScope || state.fileRead) &&
     (scope !== AuthOrchestrationOperateScope || id !== threadRef.environmentId || state.allowed);
   return {
     // Asset atoms read these at module scope; the markdown tests only exercise
@@ -74,6 +78,10 @@ vi.mock("../state/session", async () => {
     usePreparedConnection: () => ({ _tag: "None" }),
   };
 });
+vi.mock("../browser/previewRuntime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../browser/previewRuntime")>()),
+  isPreviewAvailableFor: () => state.previewAvailable,
+}));
 vi.mock("../state/server", () => ({
   serverEnvironment: { configValueAtom: () => "config" },
 }));
@@ -147,6 +155,8 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
   state.allowed = true;
+  state.fileRead = true;
+  state.previewAvailable = false;
   state.listeners.clear();
   state.linkedPullRequest = null;
   state.openEditor.mockReset().mockResolvedValue(AsyncResult.success(undefined));
@@ -246,6 +256,19 @@ it("does not reveal a file after revocation during its workspace lookup", async 
     finishLookup();
   });
   expect(state.openEditor).not.toHaveBeenCalled();
+});
+
+it("offers the integrated browser for a file only while the grant can read host files", async () => {
+  state.previewAvailable = true;
+  await renderMarkdown("[Page](/tmp/page.html)");
+  await openContextMenu();
+  expect(offeredActions()).toContain("open-in-browser");
+  await act(async () => {
+    state.fileRead = false;
+    for (const listener of state.listeners) listener();
+  });
+  await openContextMenu();
+  expect(offeredActions()).not.toContain("open-in-browser");
 });
 
 it.each([false, true])(

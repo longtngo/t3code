@@ -26,6 +26,7 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("./session", () => ({
   environmentSession: { sessionStateAtom: () => state.sessionAtom },
+  useEnvironmentScope: () => false,
 }));
 vi.mock("./presentation", () => ({
   useEnvironmentPresentation: () => ({

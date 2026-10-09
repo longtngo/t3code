@@ -92,6 +92,11 @@ vi.mock("../state/environments", () => ({
   // No primary unless a test sets one: slot settings then come from the local store.
   usePrimaryEnvironment: () => fixture.primary,
 }));
+// The primary grants settings:write, so slot edits and the device-copy import are allowed.
+vi.mock("../state/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/session")>()),
+  useEnvironmentScope: () => true,
+}));
 vi.mock("../state/entities", () => ({
   useThreadShells: () => fixture.threads,
   useAllEnvironmentShellsBootstrapped: () => true,

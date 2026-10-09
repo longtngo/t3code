@@ -95,17 +95,19 @@ export function useTrustedMarkdownHtmlQuery(
   environmentId: EnvironmentId | null,
   path: string | null,
 ): ProjectQueryState<{ readonly html: string }> {
+  const fileAccess = useFilesystemReadAccess(environmentId);
   const enabled = environmentId !== null && path !== null;
-  const atom = enabled
-    ? projectEnvironment.renderTrustedMarkdown({ environmentId, input: { path } })
-    : EMPTY_RENDERED_HTML_ATOM;
+  const atom =
+    enabled && fileAccess.canReadFiles
+      ? projectEnvironment.renderTrustedMarkdown({ environmentId, input: { path } })
+      : EMPTY_RENDERED_HTML_ATOM;
   const result = useAtomValue(atom);
   const refreshAtom = useAtomRefresh(atom);
   const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
   return {
     data: Option.getOrNull(AsyncResult.value(result)),
-    error: errorMessage(result),
-    isPending: result.waiting,
+    error: fileAccessError(fileAccess, enabled, failureCause(result)),
+    isPending: enabled && (fileAccess.isPending || result.waiting),
     refresh,
   };
 }
@@ -216,6 +218,18 @@ function failureCause<A>(result: AsyncResult.AsyncResult<A, unknown>): unknown {
 function errorMessage(cause: unknown): string | null {
   if (cause === null) return null;
   return cause instanceof Error ? cause.message : "Workspace query failed.";
+}
+
+type FileAccess = ReturnType<typeof useFilesystemReadAccess>;
+
+/** FORK: the error the trusted and listing queries report, matching upstream's gated queries above
+ *  and below: nothing while disabled or while access is still being checked, the server's error
+ *  once the read ran, and the access error when it may not run. */
+function fileAccessError(fileAccess: FileAccess, enabled: boolean, cause: unknown): string | null {
+  if (!enabled || fileAccess.isPending) return null;
+  return fileAccess.canReadFiles
+    ? errorMessage(cause)
+    : (fileAccess.error ?? "This connection cannot read host files.");
 }
 
 const isProjectReadFileError = Schema.is(ProjectReadFileError);
@@ -332,17 +346,19 @@ export function useTrustedFileQuery(
   environmentId: EnvironmentId | null,
   path: string | null,
 ): ProjectQueryState<ProjectReadFileResult> {
+  const fileAccess = useFilesystemReadAccess(environmentId);
   const enabled = environmentId !== null && path !== null;
-  const atom = enabled
-    ? getTrustedFileQueryAtom(environmentId, path)
-    : EMPTY_PROJECT_FILE_QUERY_ATOM;
+  const atom =
+    enabled && fileAccess.canReadFiles
+      ? getTrustedFileQueryAtom(environmentId, path)
+      : EMPTY_PROJECT_FILE_QUERY_ATOM;
   const result = useAtomValue(atom);
   const refreshAtom = useAtomRefresh(atom);
   const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
   return {
     data: Option.getOrNull(AsyncResult.value(result)),
-    error: errorMessage(result),
-    isPending: result.waiting,
+    error: fileAccessError(fileAccess, enabled, failureCause(result)),
+    isPending: enabled && (fileAccess.isPending || result.waiting),
     refresh,
   };
 }
@@ -367,8 +383,10 @@ export function useDirectoryListingQuery(
   environmentId: EnvironmentId | null,
   directoryPath: string | null,
 ): ProjectQueryState<FilesystemBrowseResult> {
+  const fileAccess = useFilesystemReadAccess(environmentId);
+  const enabled = environmentId !== null && directoryPath !== null;
   const atom =
-    environmentId !== null && directoryPath !== null
+    enabled && fileAccess.canReadFiles
       ? filesystemEnvironment.browse({
           environmentId,
           input: {
@@ -386,8 +404,10 @@ export function useDirectoryListingQuery(
   const supported = value === null || isDirectoryListing(value);
   return {
     data: supported ? value : null,
-    error: supported ? errorMessage(result) : "This server cannot list folders.",
-    isPending: result.waiting,
+    error: supported
+      ? fileAccessError(fileAccess, enabled, failureCause(result))
+      : "This server cannot list folders.",
+    isPending: enabled && (fileAccess.isPending || result.waiting),
     refresh,
   };
 }

@@ -12,12 +12,18 @@ const fixture = vi.hoisted(() => ({
   // The server's `queueSlots` in the reply; `undefined` models a refused import.
   replyQueueSlots: undefined as unknown,
   replyFails: false,
+  canWrite: true,
   // While set, each call waits on it before replying.
   hold: null as Promise<void> | null,
 }));
 
 vi.mock("./state/environments", () => ({
   usePrimaryEnvironment: () => fixture.primary,
+}));
+vi.mock("./state/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./state/session")>()),
+  useEnvironmentScope: (environmentId: string | null, scope: string) =>
+    fixture.canWrite && scope === "settings:write" && environmentId === "env-primary",
 }));
 vi.mock("./state/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./state/server")>();
@@ -54,6 +60,7 @@ import {
 } from "./queueSlotSettingsStore";
 import {
   useImportLocalQueueSlots,
+  useQueueSlotsAccess,
   useQueueSlotSettings,
   useSetQueueSlots,
 } from "./queueSlotSettings";
@@ -113,6 +120,7 @@ beforeEach(() => {
   fixture.calls.length = 0;
   fixture.replyQueueSlots = undefined;
   fixture.replyFails = false;
+  fixture.canWrite = true;
   fixture.hold = null;
 });
 
@@ -268,5 +276,92 @@ describe("importing the device copy", () => {
     storeLocalKey();
     await setConfig(server);
     expect(updateCalls()).toEqual([]);
+  });
+});
+
+describe("queue slot settings permission", () => {
+  let writable: string | null = null;
+  function WritableProbe() {
+    const value = useQueueSlotsAccess();
+    useEffect(() => {
+      writable = value;
+    });
+    return null;
+  }
+  const mountWritable = () =>
+    renderDom(
+      <RegistryContext.Provider value={registry}>
+        <WritableProbe />
+      </RegistryContext.Provider>,
+    );
+
+  it("is writable with no primary, and not on a primary lacking the scope", async () => {
+    fixture.primary = null;
+    fixture.canWrite = false;
+    await mountWritable();
+    expect(writable).toBe("write");
+    fixture.primary = { environmentId: "env-primary" };
+    await mountWritable();
+    await setConfig(server);
+    expect(writable).toBe("none");
+    fixture.canWrite = true;
+    await mountWritable();
+    expect(writable).toBe("write");
+  });
+
+  it("is not writable without the scope until the primary's config has loaded", async () => {
+    fixture.canWrite = false;
+    await mountWritable();
+    expect(writable).toBe("none");
+    await setConfig();
+    expect(writable).toBe("device");
+  });
+
+  it("imports the device copy only once the scope is granted, exactly once", async () => {
+    storeLocalKey();
+    fixture.canWrite = false;
+    const view = await mount(true);
+    await setConfig();
+    expect(updateCalls()).toEqual([]);
+    fixture.canWrite = true;
+    await view.rerender(
+      <RegistryContext.Provider value={registry}>
+        <Probe importLocal />
+      </RegistryContext.Provider>,
+    );
+    await setConfig();
+    expect(updateCalls()).toHaveLength(1);
+  });
+});
+
+describe("legacy login on a server with no queue value yet", () => {
+  it("keeps the device copy editable without sending a write", async () => {
+    fixture.canWrite = false;
+    let writable: string | null = null;
+    function Both() {
+      const value = useQueueSlotsAccess();
+      useEffect(() => {
+        writable = value;
+      });
+      return <Probe />;
+    }
+    await renderDom(
+      <RegistryContext.Provider value={registry}>
+        <Both />
+      </RegistryContext.Provider>,
+    );
+    await setConfig();
+    expect(writable).toBe("device");
+    let reply: QueueSlotSettings | null | undefined;
+    await act(async () => {
+      reply = await seen.set!({ slots: 9 });
+    });
+    expect(reply).toBeNull();
+    expect(seen.value?.slots).toBe(9);
+    expect(fixture.calls).toEqual([]);
+
+    // Once the server has a value, the same login is read-only.
+    await setConfig(server);
+    expect(writable).toBe("none");
   });
 });

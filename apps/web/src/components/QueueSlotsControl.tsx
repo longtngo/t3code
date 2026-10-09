@@ -4,7 +4,7 @@ import { MAX_QUEUE_SLOTS, type QueueSlotSettings } from "@t3tools/contracts";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { environmentServerConfigsAtom } from "../state/server";
-import { useQueueSlotSettings, useSetQueueSlots } from "../queueSlotSettings";
+import { useQueueSlotSettings, useQueueSlotsAccess, useSetQueueSlots } from "../queueSlotSettings";
 import { queueSlotSources } from "./queueSlotSources";
 import { listQueueSlotInstances, providerSlotCap, queueSlotTotal } from "./threadQueue.logic";
 import {
@@ -20,6 +20,14 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 /** The visible provider instances (with their labels) and the queue's total slots across them. */
 export function useQueueSlots() {
+  const access = useQueueSlotsAccess();
+  const writable = access !== "none";
+  const notice =
+    access === "none"
+      ? QUEUE_SLOTS_READ_ONLY
+      : access === "device"
+        ? QUEUE_SLOTS_DEVICE_ONLY
+        : null;
   const { slots, perProvider, providerSlots } = useQueueSlotSettings();
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const instances = useMemo(
@@ -32,7 +40,7 @@ export function useQueueSlots() {
     providerSlots,
     instances.map((i) => i.instanceId),
   );
-  return { slots, perProvider, providerSlots, instances, total };
+  return { slots, perProvider, providerSlots, instances, total, writable, notice };
 }
 
 /**
@@ -54,6 +62,7 @@ function SlotField(props: {
   value: number;
   onCommit: (value: number) => Promise<QueueSlotSettings | null>;
   pick: (settings: QueueSlotSettings) => number;
+  disabled: boolean;
 }) {
   const [draft, setDraft] = useState(props.value);
   const sending = useRef(false);
@@ -91,6 +100,7 @@ function SlotField(props: {
     <NumberField
       aria-label={props.label}
       className="w-24"
+      disabled={props.disabled}
       max={MAX_QUEUE_SLOTS}
       min={0}
       onValueChange={(next) => {
@@ -120,12 +130,13 @@ function SlotField(props: {
 }
 
 /** The overall slot count, shown when the queue is not per provider. */
-export function ActiveSlotsField(props: { value: number }) {
+export function ActiveSlotsField(props: { value: number; disabled: boolean }) {
   const setQueueSlots = useSetQueueSlots();
   return (
     <SlotField
       setting="slots"
       label="active slots"
+      disabled={props.disabled}
       value={props.value}
       onCommit={(value) => setQueueSlots({ slots: value })}
       pick={(settings) => settings.slots}
@@ -138,12 +149,14 @@ export function ProviderSlotsField(props: {
   label: string;
   instanceId: string;
   providerSlots: QueueSlotSettings["providerSlots"];
+  disabled: boolean;
 }) {
   const setQueueSlots = useSetQueueSlots();
   return (
     <SlotField
       setting={`providerSlots.${props.instanceId}`}
       label={`${props.label} slots`}
+      disabled={props.disabled}
       value={providerSlotCap(props.providerSlots, props.instanceId)}
       onCommit={(value) => setQueueSlots({ providerSlots: { [props.instanceId]: value } })}
       pick={(settings) => providerSlotCap(settings.providerSlots, props.instanceId)}
@@ -151,6 +164,10 @@ export function ProviderSlotsField(props: {
   );
 }
 
+export const QUEUE_SLOTS_READ_ONLY =
+  "This connection does not have permission to change environment settings.";
+export const QUEUE_SLOTS_DEVICE_ONLY =
+  "Saved on this device only. This connection cannot change environment settings.";
 export const NO_PROVIDERS = "No providers enabled";
 export const ACTIVE_SLOTS_HINT =
   "Queued threads send while fewer threads are working or monitoring than this. 0 holds the queue.";
@@ -159,7 +176,7 @@ export const PER_PROVIDER_HINT =
 
 /** The queue header's slot count and the gear popover that edits it. */
 export function QueueSlotsControl(props: ReturnType<typeof useQueueSlots>) {
-  const { slots, perProvider, providerSlots, instances, total } = props;
+  const { slots, perProvider, providerSlots, instances, total, writable, notice } = props;
   const setQueueSlots = useSetQueueSlots();
   const setPerProvider = (value: boolean) => void setQueueSlots({ perProvider: value });
 
@@ -192,6 +209,7 @@ export function QueueSlotsControl(props: ReturnType<typeof useQueueSlots>) {
               label={i.label}
               instanceId={i.instanceId}
               providerSlots={providerSlots}
+              disabled={!writable}
             />
           </div>
         ));
@@ -230,14 +248,20 @@ export function QueueSlotsControl(props: ReturnType<typeof useQueueSlots>) {
             {perProvider ? null : (
               <div className="flex items-center justify-between gap-3">
                 <span>Active slots</span>
-                <ActiveSlotsField value={slots} />
+                <ActiveSlotsField value={slots} disabled={!writable} />
               </div>
             )}
             <label className="flex items-center justify-between gap-3">
               <span>Per provider</span>
-              <Switch size="sm" checked={perProvider} onCheckedChange={setPerProvider} />
+              <Switch
+                size="sm"
+                checked={perProvider}
+                onCheckedChange={setPerProvider}
+                disabled={!writable}
+              />
             </label>
             {perProvider ? providerRows : null}
+            {notice === null ? null : <p className="text-xs text-muted-foreground">{notice}</p>}
             <p className="text-xs text-muted-foreground">
               {perProvider ? PER_PROVIDER_HINT : ACTIVE_SLOTS_HINT}
             </p>

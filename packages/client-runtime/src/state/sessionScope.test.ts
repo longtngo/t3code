@@ -1,4 +1,8 @@
-import { AuthOrchestrationOperateScope, type AuthSessionState } from "@t3tools/contracts";
+import {
+  AuthFilesystemReadScope,
+  AuthOrchestrationOperateScope,
+  type AuthSessionState,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -11,7 +15,7 @@ import {
   RemoteEnvironmentAuthUndeclaredStatusError,
 } from "../rpc/http.ts";
 import { ConnectionTransientError } from "../connection/model.ts";
-import { sessionResultGrantsScope } from "./sessionScope.ts";
+import { sessionResultDeniesScope, sessionResultGrantsScope } from "./sessionScope.ts";
 
 const URL = "https://env.example.test/api/auth/session";
 const session = {
@@ -80,5 +84,24 @@ describe("sessionResultGrantsScope", () => {
     expect(sessionResultGrantsScope(AsyncResult.initial(), AuthOrchestrationOperateScope)).toBe(
       false,
     );
+  });
+});
+
+describe("sessionResultDeniesScope", () => {
+  it("denies only a loaded session that lacks the scope", () => {
+    expect(sessionResultDeniesScope(AsyncResult.success(session), AuthFilesystemReadScope)).toBe(
+      true,
+    );
+    expect(
+      sessionResultDeniesScope(AsyncResult.success(session), AuthOrchestrationOperateScope),
+    ).toBe(false);
+  });
+
+  it("defers to the server while the grant is loading or its refresh failed", () => {
+    expect(sessionResultDeniesScope(AsyncResult.initial(), AuthFilesystemReadScope)).toBe(false);
+    const answered = new RemoteEnvironmentAuthUndeclaredStatusError(URL, 502);
+    for (const error of [answered, fetchError()]) {
+      expect(sessionResultDeniesScope(failedRefresh(error), AuthFilesystemReadScope)).toBe(false);
+    }
   });
 });

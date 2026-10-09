@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 // released separately from the settings echo (the config atom), as on the wire.
 const fixture = vi.hoisted(() => ({
   primary: null as { environmentId: string } | null,
+  canWrite: true,
   calls: [] as Array<{
     value: { input: { patch: { queueSlots?: unknown } } };
     reply: (queueSlots: unknown) => void;
@@ -18,6 +19,10 @@ const fixture = vi.hoisted(() => ({
 
 vi.mock("../state/environments", () => ({
   usePrimaryEnvironment: () => fixture.primary,
+}));
+vi.mock("../state/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/session")>()),
+  useEnvironmentScope: () => fixture.canWrite,
 }));
 vi.mock("../state/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/server")>();
@@ -101,6 +106,7 @@ beforeEach(() => {
   useQueueSlotSettingsStore.setState({ slots: 1, perProvider: false, providerSlots: {} });
   registry = AtomRegistry.make();
   fixture.primary = null;
+  fixture.canWrite = true;
   fixture.calls.length = 0;
 });
 
@@ -109,6 +115,45 @@ const openPopover = async () => {
   await view.click(view.find('button[aria-label="Queue slots"]'));
   return view;
 };
+
+describe("QueueSlotsControl settings permission", () => {
+  const MESSAGE = "This connection does not have permission to change environment settings.";
+  const disabledOf = (el: Element) =>
+    el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true";
+  const controls = () => [
+    ...document.querySelectorAll("input[aria-label$='slots']"),
+    ...document.querySelectorAll('[role="switch"]'),
+  ];
+
+  it("locks the slot inputs and the switch, with the message, without the scope", async () => {
+    fixture.primary = { environmentId: "env-primary" };
+    fixture.canWrite = false;
+    // The server has its own value, so the device copy is not the one being edited.
+    registry.set(configAtom, {
+      settings: { queueSlots: { slots: 1, perProvider: false, providerSlots: {} } },
+    });
+    await openPopover();
+    expect(controls().length).toBeGreaterThanOrEqual(2);
+    expect(controls().map(disabledOf)).not.toContain(false);
+    expect(document.body.textContent).toContain(MESSAGE);
+    registry.set(configAtom, {
+      settings: { queueSlots: { slots: 1, perProvider: true, providerSlots: {} } },
+    });
+    await openPopover();
+    expect(document.querySelectorAll("input[aria-label$='slots']").length).toBeGreaterThanOrEqual(
+      2,
+    );
+    expect(controls().map(disabledOf)).not.toContain(false);
+  });
+
+  it("leaves them enabled, with no message, with the scope", async () => {
+    fixture.primary = { environmentId: "env-primary" };
+    await openPopover();
+    expect(controls().length).toBeGreaterThanOrEqual(2);
+    expect(controls().map(disabledOf)).not.toContain(true);
+    expect(document.body.textContent).not.toContain(MESSAGE);
+  });
+});
 
 describe("QueueSlotsControl per provider", () => {
   // The switch's label text. happy-dom runs a label's activation even when the switch's own click

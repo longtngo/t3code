@@ -21,6 +21,7 @@ const authorizationMocks = vi.hoisted(() => ({
 
 vi.mock("~/state/session", () => ({
   environmentSession: { sessionStateAtom: () => authorizationMocks.sessionAtom },
+  useEnvironmentScope: () => false,
 }));
 
 vi.mock("~/state/presentation", () => ({
@@ -34,7 +35,11 @@ const projectMocks = vi.hoisted(() => ({
   listEntries: vi.fn(),
   optimisticFile: vi.fn(),
   readFile: vi.fn(),
+  readTrustedFile: vi.fn(),
+  renderTrustedMarkdown: vi.fn(),
 }));
+
+const filesystemMocks = vi.hoisted(() => ({ browse: vi.fn() }));
 
 const atomHooks = vi.hoisted(() => ({
   registry: null as {
@@ -90,6 +95,11 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
+vi.mock("~/state/filesystem", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/filesystem")>()),
+  filesystemEnvironment: filesystemMocks,
+}));
+
 vi.mock("~/state/projects", () => ({
   projectEnvironment: projectMocks,
 }));
@@ -100,7 +110,13 @@ vi.mock("~/state/queries", () => ({
 
 import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
 import { useT3ProjectFileState } from "~/hooks/useT3ProjectFileScripts";
-import { useProjectEntriesQuery, useProjectFileQuery } from "./projectFilesQueryState";
+import {
+  useDirectoryListingQuery,
+  useProjectEntriesQuery,
+  useProjectFileQuery,
+  useTrustedFileQuery,
+  useTrustedMarkdownHtmlQuery,
+} from "./projectFilesQueryState";
 
 const environmentId = EnvironmentId.make("environment-1");
 const decodeReadError = Schema.decodeSync(ProjectReadFileError);
@@ -537,5 +553,184 @@ describe("project query refresh", () => {
       registry.dispose();
       atomHooks.registry = null;
     }
+  });
+});
+
+describe("cannot read host files", () => {
+  const permissionMessage = "This connection cannot read host files.";
+
+  beforeEach(() => {
+    authorizationMocks.sessionAtom = Atom.make(
+      AsyncResult.success({ authenticated: true, scopes: [AuthFilesystemReadScope] }),
+    );
+    authorizationMocks.phase = "connected";
+    projectMocks.readTrustedFile.mockReset();
+    projectMocks.renderTrustedMarkdown.mockReset();
+    filesystemMocks.browse.mockReset();
+    reactHooks.reset();
+  });
+
+  function withRegistry(run: () => void) {
+    const registry = AtomRegistry.make();
+    atomHooks.registry = registry;
+    try {
+      run();
+    } finally {
+      registry.dispose();
+      atomHooks.registry = null;
+    }
+  }
+
+  function withoutAccess() {
+    authorizationMocks.sessionAtom = Atom.make(
+      AsyncResult.success({ authenticated: true, scopes: [] }),
+    );
+  }
+
+  it("does not read a trusted file without access", () => {
+    withoutAccess();
+    withRegistry(() => {
+      const query = useTrustedFileQuery(environmentId, "/a.md");
+      expect(projectMocks.readTrustedFile).not.toHaveBeenCalled();
+      expect(query.error).toBe(permissionMessage);
+      expect(query.data).toBeNull();
+      expect(query.isPending).toBe(false);
+    });
+  });
+
+  it("does not read a trusted file while access is pending", () => {
+    authorizationMocks.sessionAtom = Atom.make(AsyncResult.initial());
+    withRegistry(() => {
+      const query = useTrustedFileQuery(environmentId, "/a.md");
+      expect(projectMocks.readTrustedFile).not.toHaveBeenCalled();
+      expect(query.error).toBeNull();
+      expect(query.isPending).toBe(true);
+    });
+  });
+
+  it("reports no error for a successful trusted read", async () => {
+    const readAtom = Atom.make(Effect.succeed(file("hello")));
+    projectMocks.readTrustedFile.mockReturnValue(readAtom);
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(readAtom);
+    atomHooks.registry = registry;
+    try {
+      await flushEffects();
+      const query = useTrustedFileQuery(environmentId, "/a.md");
+      expect(query.error).toBeNull();
+      expect(query.data?.contents).toBe("hello");
+    } finally {
+      unmount();
+      registry.dispose();
+      atomHooks.registry = null;
+    }
+  });
+
+  it("reports no error for a pending trusted read", () => {
+    projectMocks.readTrustedFile.mockReturnValue(Atom.make(Effect.never));
+    withRegistry(() => {
+      const query = useTrustedFileQuery(environmentId, "/a.md");
+      expect(query.error).toBeNull();
+      expect(query.isPending).toBe(true);
+    });
+  });
+
+  it("reports the cause message of a failed trusted read", async () => {
+    const readAtom = Atom.make(Effect.fail(new Error("boom")));
+    projectMocks.readTrustedFile.mockReturnValue(readAtom);
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(readAtom);
+    atomHooks.registry = registry;
+    try {
+      await flushEffects();
+      expect(useTrustedFileQuery(environmentId, "/a.md").error).toBe("boom");
+    } finally {
+      unmount();
+      registry.dispose();
+      atomHooks.registry = null;
+    }
+  });
+
+  it("reports no error for a pending or successful folder listing", async () => {
+    filesystemMocks.browse.mockReturnValue(Atom.make(Effect.never));
+    withRegistry(() => {
+      const query = useDirectoryListingQuery(environmentId, "/dir");
+      expect(query.error).toBeNull();
+      expect(query.isPending).toBe(true);
+    });
+
+    const listing = { parentPath: "/dir", entries: [], listedFiles: true };
+    const listedAtom = Atom.make(Effect.succeed(listing));
+    filesystemMocks.browse.mockReturnValue(listedAtom);
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(listedAtom);
+    atomHooks.registry = registry;
+    try {
+      await flushEffects();
+      const query = useDirectoryListingQuery(environmentId, "/dir");
+      expect(query.error).toBeNull();
+      expect(query.data).not.toBeNull();
+    } finally {
+      unmount();
+      registry.dispose();
+      atomHooks.registry = null;
+    }
+  });
+
+  it("reports that a server answering without a listing cannot list folders", async () => {
+    const legacyAtom = Atom.make(Effect.succeed({ parentPath: "/dir", entries: [] }));
+    filesystemMocks.browse.mockReturnValue(legacyAtom);
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(legacyAtom);
+    atomHooks.registry = registry;
+    try {
+      await flushEffects();
+      const query = useDirectoryListingQuery(environmentId, "/dir");
+      expect(query.error).toBe("This server cannot list folders.");
+      expect(query.data).toBeNull();
+    } finally {
+      unmount();
+      registry.dispose();
+      atomHooks.registry = null;
+    }
+  });
+
+  it("reports no error for a pending markdown render", () => {
+    projectMocks.renderTrustedMarkdown.mockReturnValue(Atom.make(Effect.never));
+    withRegistry(() => {
+      const query = useTrustedMarkdownHtmlQuery(environmentId, "/a.md");
+      expect(query.error).toBeNull();
+      expect(query.isPending).toBe(true);
+    });
+  });
+
+  it("stays idle without an environment or path", () => {
+    withRegistry(() => {
+      for (const query of [useTrustedFileQuery(null, null), useDirectoryListingQuery(null, null)]) {
+        expect(query.error).toBeNull();
+        expect(query.isPending).toBe(false);
+      }
+    });
+  });
+
+  it("reports no access error for a disabled query", () => {
+    withoutAccess();
+    withRegistry(() => {
+      const query = useTrustedFileQuery(environmentId, null);
+      expect(query.error).toBeNull();
+      expect(query.isPending).toBe(false);
+    });
+  });
+
+  it("gates directory listings and rendered markdown without access", () => {
+    withoutAccess();
+    withRegistry(() => {
+      const listing = useDirectoryListingQuery(environmentId, "/dir");
+      const html = useTrustedMarkdownHtmlQuery(environmentId, "/a.md");
+      expect(filesystemMocks.browse).not.toHaveBeenCalled();
+      expect(projectMocks.renderTrustedMarkdown).not.toHaveBeenCalled();
+      expect(listing.error).toBe(permissionMessage);
+      expect(html.error).toBe(permissionMessage);
+    });
   });
 });

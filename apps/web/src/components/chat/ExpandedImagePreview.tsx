@@ -50,6 +50,8 @@ export async function resolveMarkdownMediaPreview(input: {
   threadRef?: ScopedThreadRef | undefined;
   httpBaseUrl?: string | undefined;
   onOpenFile?: ((relativePath: string) => void) | undefined;
+  /** False once the grant is known to lack host file reads, which signing a host file needs. */
+  canReadHostFiles?: boolean | undefined;
   createAssetUrl: (input: {
     environmentId: EnvironmentId;
     input: { resource: AssetResource };
@@ -71,6 +73,9 @@ export async function resolveMarkdownMediaPreview(input: {
   } else {
     if (media.access === "unavailable" || !input.threadRef || !input.httpBaseUrl) {
       throw new Error("Reconnect to this environment and open the media again.");
+    }
+    if (input.canReadHostFiles === false) {
+      throw new Error("This connection cannot read host files.");
     }
     asset = { environmentId: input.threadRef.environmentId, resource: media.resource };
     const result = await input.createAssetUrl({

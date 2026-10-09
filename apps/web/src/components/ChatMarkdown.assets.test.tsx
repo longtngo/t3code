@@ -2,9 +2,11 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
-import { expect, it, vi } from "vite-plus/test";
+import { beforeEach, expect, it, vi } from "vite-plus/test";
 
 const mint = vi.hoisted(() => vi.fn());
+const toast = vi.hoisted(() => vi.fn());
+const grant = vi.hoisted(() => ({ fileReadDenied: false }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../hooks/useSettings", async (importOriginal) => {
@@ -29,11 +31,16 @@ vi.mock("./ui/tooltip", async () => {
     TooltipPopup: () => null,
   };
 });
+vi.mock("./ui/toast", () => ({
+  toastManager: { add: toast },
+  stackedThreadToast: (value: unknown) => value,
+}));
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => mint }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/session")>()),
   readEnvironmentScope: () => false,
+  readEnvironmentScopeDenied: () => grant.fileReadDenied,
   useEnvironmentScope: () => false,
   usePreparedConnection: () => ({ _tag: "Some", value: { httpBaseUrl: "https://host.test" } }),
 }));
@@ -59,16 +66,19 @@ vi.mock("~/lib/openPullRequestLink", () => ({
 
 import ChatMarkdown from "./ChatMarkdown";
 
-it("opens host media through server authorization before the client grant loads", async () => {
+const threadRef = {
+  environmentId: EnvironmentId.make("media-environment"),
+  threadId: ThreadId.make("media-thread"),
+};
+
+beforeEach(() => {
+  grant.fileReadDenied = false;
+  mint.mockReset();
+  toast.mockReset();
+});
+
+async function clickHostImage(onImageExpand: () => void) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  mint.mockResolvedValue(
-    AsyncResult.success({ relativeUrl: "/api/assets/image.png", expiresAt: 1 }),
-  );
-  const onImageExpand = vi.fn();
-  const threadRef = {
-    environmentId: EnvironmentId.make("media-environment"),
-    threadId: ThreadId.make("media-thread"),
-  };
   let renderer: ReactTestRenderer | undefined;
   try {
     await act(async () => {
@@ -88,13 +98,35 @@ it("opens host media through server authorization before the client grant loads"
       expect(link).toBeDefined();
       link!.props.onClick({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
     });
-    expect(onImageExpand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        images: [expect.objectContaining({ src: "https://host.test/api/assets/image.png" })],
-      }),
-    );
   } finally {
     await act(async () => renderer?.unmount());
     vi.unstubAllGlobals();
   }
+}
+
+it("opens host media through server authorization before the client grant loads", async () => {
+  mint.mockResolvedValue(
+    AsyncResult.success({ relativeUrl: "/api/assets/image.png", expiresAt: 1 }),
+  );
+  const onImageExpand = vi.fn();
+  await clickHostImage(onImageExpand);
+  expect(onImageExpand).toHaveBeenCalledWith(
+    expect.objectContaining({
+      images: [expect.objectContaining({ src: "https://host.test/api/assets/image.png" })],
+    }),
+  );
+});
+
+it("explains a grant without host file reads instead of asking the server", async () => {
+  grant.fileReadDenied = true;
+  const onImageExpand = vi.fn();
+  await clickHostImage(onImageExpand);
+  expect(mint).not.toHaveBeenCalled();
+  expect(onImageExpand).not.toHaveBeenCalled();
+  expect(toast).toHaveBeenCalledWith(
+    expect.objectContaining({
+      title: "Media unavailable",
+      description: "This connection cannot read host files.",
+    }),
+  );
 });

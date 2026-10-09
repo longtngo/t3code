@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 // the outgoing command are stubbed; each `updateSettings` call waits on its own deferred reply.
 const fixture = vi.hoisted(() => ({
   primary: null as { environmentId: string } | null,
+  canWrite: true,
   calls: [] as Array<{
     value: { input: { patch: { queueSlots?: unknown } } };
     reply: (queueSlots: unknown) => void;
@@ -36,6 +37,10 @@ vi.mock("./SettingsScopeContext", () => ({
 vi.mock("../../state/environments", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/environments")>()),
   usePrimaryEnvironment: () => fixture.primary,
+}));
+vi.mock("../../state/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/session")>()),
+  useEnvironmentScope: () => fixture.canWrite,
 }));
 vi.mock("../../state/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/server")>();
@@ -119,6 +124,7 @@ beforeEach(() => {
   useQueueSlotSettingsStore.setState({ slots: 1, perProvider: false, providerSlots: {} });
   registry = AtomRegistry.make();
   fixture.primary = null;
+  fixture.canWrite = true;
   fixture.calls.length = 0;
 });
 
@@ -199,6 +205,54 @@ describe("QueueSettingsView", () => {
     expect(fixture.calls.map((c) => c.value.input.patch.queueSlots)).toEqual([
       { providerSlots: { claudeAgent_personalsub: 3 } },
     ]);
+  });
+});
+
+describe("QueueSettingsView settings permission", () => {
+  const MESSAGE = "This connection does not have permission to change environment settings.";
+  const controls = () => [
+    ...document.querySelectorAll<HTMLInputElement>("input[aria-label$='slots']"),
+    ...document.querySelectorAll<HTMLElement>('[role="switch"][aria-label="Per provider"]'),
+  ];
+  const disabledOf = (el: HTMLElement) =>
+    el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true";
+
+  it("locks every slot input and the Per provider switch on a primary without the scope", async () => {
+    fixture.primary = { environmentId: "env-primary" };
+    fixture.canWrite = false;
+    // The server has its own value, so the device copy is not the one being edited.
+    registry.set(configAtom, {
+      settings: { queueSlots: { slots: 1, perProvider: false, providerSlots: {} } },
+    });
+    await mount();
+    expect(controls().length).toBeGreaterThanOrEqual(2);
+    expect(controls().map(disabledOf)).not.toContain(false);
+    expect(text()).toContain(MESSAGE);
+    registry.set(configAtom, {
+      settings: { queueSlots: { slots: 1, perProvider: true, providerSlots: {} } },
+    });
+    await mount();
+    expect(document.querySelectorAll("input[aria-label$='slots']").length).toBeGreaterThanOrEqual(
+      2,
+    );
+    expect(controls().map(disabledOf)).not.toContain(false);
+  });
+
+  it("keeps them editable on a server with no value yet, and says the edit stays here", async () => {
+    fixture.primary = { environmentId: "env-primary" };
+    fixture.canWrite = false;
+    registry.set(configAtom, { settings: {} });
+    await mount();
+    expect(controls().map(disabledOf)).not.toContain(true);
+    expect(text()).toContain("Saved on this device only");
+    expect(text()).not.toContain(MESSAGE);
+  });
+
+  it("leaves them enabled, with no message, when the primary grants the scope", async () => {
+    fixture.primary = { environmentId: "env-primary" };
+    await mount();
+    expect(controls().map(disabledOf)).not.toContain(true);
+    expect(text()).not.toContain(MESSAGE);
   });
 });
 

@@ -39,3 +39,14 @@ export function sessionResultGrantsScope(
   }
   return sessionGrantsScope(session, scope);
 }
+
+/**
+ * Whether a current session answer lacks `scope`, so the client can explain the refusal
+ * itself. A grant still loading or a failed refresh defers to the server.
+ */
+export function sessionResultDeniesScope(
+  result: AsyncResult.AsyncResult<AuthSessionState, unknown>,
+  scope: AuthEnvironmentScope,
+): boolean {
+  return result._tag === "Success" && !sessionGrantsScope(result.value, scope);
+}

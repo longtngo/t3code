@@ -193,7 +193,12 @@ import { readThreadShell, useProjects } from "../state/entities";
 import { serverEnvironment } from "../state/server";
 import { shellEnvironment } from "../state/shell";
 import { assetEnvironment } from "../state/assets";
-import { readEnvironmentScope, usePreparedConnection, useEnvironmentScope } from "../state/session";
+import {
+  readEnvironmentScope,
+  readEnvironmentScopeDenied,
+  usePreparedConnection,
+  useEnvironmentScope,
+} from "../state/session";
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
@@ -2729,6 +2734,8 @@ function useChatMarkdownState({
   const environmentId = threadRef?.environmentId ?? explicitEnvironmentId ?? null;
   const canOperateHost = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperatePreview = useEnvironmentScope(environmentId, AuthPreviewOperateScope);
+  // Signing any file for the browser needs host file reads.
+  const canReadHostFiles = useEnvironmentScope(environmentId, AuthFilesystemReadScope);
   const remoteOpen = useRemoteOpenResolution(environmentId);
   const canUseShellActions =
     canOperateHost &&
@@ -2745,6 +2752,9 @@ function useChatMarkdownState({
         httpBaseUrl:
           preparedConnection._tag === "Some" ? preparedConnection.value.httpBaseUrl : undefined,
         createAssetUrl,
+        canReadHostFiles:
+          threadRef === undefined ||
+          !readEnvironmentScopeDenied(threadRef.environmentId, AuthFilesystemReadScope),
         onOpenFile: threadRef
           ? (path) => useRightPanelStore.getState().openFile(threadRef, path)
           : undefined,
@@ -3124,6 +3134,7 @@ function useChatMarkdownState({
           onOpenInBrowser={
             threadRef &&
             canOperatePreview &&
+            canReadHostFiles &&
             isPreviewAvailableFor(threadRef.environmentId) &&
             isBrowserPreviewFile(fileLinkMeta.filePath)
               ? openMarkdownFileInPreview
@@ -3135,6 +3146,7 @@ function useChatMarkdownState({
     [
       canUseShellActions,
       canOperatePreview,
+      canReadHostFiles,
       fileLinkParentSuffixByPath,
       openFileInPanel,
       openInPreferredEditor,
