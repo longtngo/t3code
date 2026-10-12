@@ -214,7 +214,7 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
   // Mirrors ChatView + ChatComposer's provider and model resolution.
   const providers = snapshot.providers;
   const entries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, project.id),
   );
   const selectedProviderByThread = draft?.activeProvider ?? null;
   const lockedProvider = deriveLockedProviderForThread({

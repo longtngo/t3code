@@ -16,8 +16,8 @@ import {
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import { truncate } from "@t3tools/shared/String";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
 
-import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "../../components/chat/composerPromptHistory";
 import type {
   ComposerFileAttachment,
   ComposerImageAttachment,

@@ -1,5 +1,3 @@
-import * as NodeOS from "node:os";
-
 import type { ClaudeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -8,6 +6,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 /** Config slice that determines where this Claude instance reads/writes state. */
 type ClaudeHomeConfig = Pick<ClaudeSettings, "homePath"> & {
@@ -19,8 +18,9 @@ export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function
   config: Pick<ClaudeSettings, "homePath">,
 ): Effect.fn.Return<string, never, Path.Path> {
   const path = yield* Path.Path;
+  const home = yield* HostProcess.HomeDirectory;
   const homePath = config.homePath.trim();
-  return path.resolve(homePath.length > 0 ? expandHomePath(homePath) : NodeOS.homedir());
+  return path.resolve(homePath.length > 0 ? expandHomePath(homePath, home) : home);
 });
 
 /**
@@ -34,8 +34,9 @@ export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath"
   config: ClaudeHomeConfig,
 ): Effect.fn.Return<string, never, Path.Path> {
   const path = yield* Path.Path;
+  const home = yield* HostProcess.HomeDirectory;
   const configDirPath = (config.configDirPath ?? "").trim();
-  return configDirPath.length > 0 ? path.resolve(expandHomePath(configDirPath)) : "";
+  return configDirPath.length > 0 ? path.resolve(expandHomePath(configDirPath, home)) : "";
 });
 
 export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function* (

@@ -1,7 +1,23 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { FilesystemBrowseError, FilesystemBrowseInput } from "./filesystem.ts";
+import {
+  FilesystemBrowseError,
+  FilesystemBrowseInput,
+  FilesystemGetMetadataInput,
+} from "./filesystem.ts";
+
+describe("FilesystemGetMetadataInput", () => {
+  const decode = Schema.decodeUnknownSync(FilesystemGetMetadataInput);
+  it("bounds request size and path lengths", () => {
+    expect(() => decode({ paths: [] })).toThrow();
+    expect(() => decode({ paths: Array.from({ length: 65 }, () => "/file") })).toThrow();
+    // The fork's wire path bound is 4096 (Linux PATH_MAX), not upstream's 512.
+    expect(() => decode({ paths: ["/" + "x".repeat(4096)] })).toThrow();
+    expect(decode({ paths: ["/" + "x".repeat(4095)] }).paths).toHaveLength(1);
+    expect(decode({ paths: Array.from({ length: 64 }, () => "/file") }).paths).toHaveLength(64);
+  });
+});
 
 describe("FilesystemBrowseError", () => {
   it("derives a stable message from browse context while retaining the cause", () => {

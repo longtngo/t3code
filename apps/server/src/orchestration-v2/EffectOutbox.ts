@@ -3,6 +3,7 @@ import {
   CheckpointScopeId,
   CommandId,
   MessageId,
+  NodeId,
   ProviderSessionId,
   RunAttemptId,
   ProviderApprovalDecision,
@@ -50,6 +51,7 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     providerTurnId: ProviderTurnId,
     /** FORK: first Stop rung; see `run.interrupt` `mode`. */
     cooperative: Schema.optional(Schema.Boolean),
+    subagent: Schema.optional(Schema.Struct({ id: NodeId, nativeTaskId: Schema.String })),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-turn.steer"),

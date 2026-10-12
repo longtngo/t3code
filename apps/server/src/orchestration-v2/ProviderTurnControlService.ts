@@ -1,6 +1,7 @@
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   MessageId,
+  type NodeId,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
@@ -63,11 +64,15 @@ const COOPERATIVE_SETTLE_POLL = Duration.millis(100);
 const isTurnNotActiveFailure = (errorText: string) =>
   /is not active|is not the active turn/i.test(errorText);
 
-/** Which rung an interrupt ended on. Only a hard stop ends background work. */
-export type ProviderTurnInterruptOutcome = "cooperative" | "hard";
+/**
+ * Which rung an interrupt ended on. Only a hard stop ends background work; a
+ * subagent stop ends one native subagent and leaves its owner running.
+ */
+export type ProviderTurnInterruptOutcome = "cooperative" | "hard" | "subagent";
 
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
+    readonly subagent?: { readonly id: NodeId; readonly nativeTaskId: string };
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
     readonly providerThreadId: ProviderThreadId;
@@ -223,6 +228,21 @@ export const layer: Layer.Layer<
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
           if (Option.isNone(session)) return "hard" as const;
+          if (input.subagent !== undefined) {
+            if (session.value.stopSubagent === undefined) {
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "interrupt",
+                providerTurnId: input.providerTurnId,
+                cause: "The provider does not support stopping a native subagent.",
+              });
+            }
+            yield* session.value.stopSubagent({
+              providerThread: loaded.providerThread,
+              nativeTaskId: input.subagent.nativeTaskId,
+            });
+            return "subagent" as const;
+          }
           if (input.cooperative === true) {
             // The turn ended before the effect ran: nothing is left to end,
             // and the session and its background work stay as they are.

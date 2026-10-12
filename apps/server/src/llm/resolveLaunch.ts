@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import type {
@@ -134,18 +135,20 @@ export function resolveLaunch(
     return { error: `Provider ${config.providerId} has no models directory configured.` };
   }
 
+  // Synchronous by design (no Effect context here), so the home directory is read directly.
+  const home = NodeOS.homedir();
   const engineId = prov.id as ManagedEngineId;
   const port = config.port ?? prov.port;
   const modelPath = config.modelPathOverride
-    ? expandHomePath(config.modelPathOverride)
-    : NodePath.join(expandHomePath(prov.modelsDir as string), model.resourceName);
+    ? expandHomePath(config.modelPathOverride, home)
+    : NodePath.join(expandHomePath(prov.modelsDir as string, home), model.resourceName);
 
   const flat = launchArgs(config, prov.defaultArgs, model.defaultArgs);
   if (config.contextWindow != null && !flat.includes(CTX_FLAG)) {
     flat.push(CTX_FLAG, String(config.contextWindow));
   }
 
-  const executable = expandHomePath(prov.binaryPath);
+  const executable = expandHomePath(prov.binaryPath, home);
   const portArgs = ["--host", prov.host, "--port", String(port)];
   const args = ["--serve", ...flat, ...portArgs, "--model", modelPath];
 

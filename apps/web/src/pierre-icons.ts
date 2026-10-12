@@ -4,8 +4,7 @@ import {
   type FileTreeIcons,
 } from "@pierre/trees";
 import { VIDEO_FILE_EXTENSIONS } from "@t3tools/shared/video";
-
-import { basenamePathSegment } from "./filePathDisplay";
+import { fileIconPathForMimeType } from "@t3tools/shared/filePreview";
 
 export interface PierreIconResolution {
   name: string;
@@ -146,15 +145,6 @@ const LANGUAGE_EXTENSION_ALIASES: Record<string, string> = {
   yaml: "yml",
 };
 
-export function inferEntryKindFromPath(pathValue: string): "file" | "directory" {
-  // A trailing separator is the author stating the kind outright, so it outranks
-  // the guess below — which would otherwise read `config.d/` as a file.
-  if (/[\\/]$/.test(pathValue)) return "directory";
-  const base = basenamePathSegment(pathValue);
-  if (base.startsWith(".") && !base.slice(1).includes(".")) return "directory";
-  return base.includes(".") ? "file" : "directory";
-}
-
 /** Languages whose files are recognised by name rather than by extension. */
 const LANGUAGE_FILE_NAMES: Record<string, string> = {
   dockerfile: "Dockerfile",
@@ -171,9 +161,16 @@ export function syntheticFileNameForLanguageId(languageId: string): string {
 export function resolvePierreIconForEntry(
   pathValue: string,
   kind: "file" | "directory",
+  mimeType?: string,
 ): PierreIconResolution | null {
   if (kind === "directory") return null;
-  return completeIconResolver.resolveIcon("file-tree-icon-file", pathValue);
+  const icon = completeIconResolver.resolveIcon("file-tree-icon-file", pathValue);
+  return icon?.token === "default" && mimeType
+    ? completeIconResolver.resolveIcon(
+        "file-tree-icon-file",
+        fileIconPathForMimeType(pathValue, mimeType),
+      )
+    : icon;
 }
 
 export function hasSpecificPierreIconForFileName(fileName: string): boolean {

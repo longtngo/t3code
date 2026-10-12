@@ -22,6 +22,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -55,7 +56,12 @@ function makeHarness(
     layerRegistry,
     { databaseLayer: layerDatabase, runEffectWorker: false },
   );
-  const layerThreadManagement = ThreadManagement.layer.pipe(Layer.provide(layerOrchestrator));
+  const layerServerSettings = ServerSettings.layerTest({});
+  const layerThreadManagement = ThreadManagement.layer.pipe(
+    Layer.provide(layerOrchestrator),
+    Layer.provide(layerServerSettings),
+    Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
+  );
   const layerOutbox = EffectOutbox.layer.pipe(Layer.provide(layerDatabase));
   const generateThreadTitle = vi.fn(
     options.generateTitle ?? (() => Effect.succeed({ title: "Generated title" })),
@@ -88,7 +94,7 @@ function makeHarness(
         layerThreadManagement,
         layerProjectedProjects,
         Layer.mock(TextGeneration.TextGeneration)({ generateThreadTitle }),
-        ServerSettings.layerTest({}),
+        layerServerSettings,
       ),
     ),
   );

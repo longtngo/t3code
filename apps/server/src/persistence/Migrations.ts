@@ -173,6 +173,10 @@ import Migration0067 from "./Migrations/058_WebhookRelayDeliveries.ts";
 // their filename numbers (registry section 1).
 import Migration0068 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0069 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
+// Upstream's 061 (pull request review guides, #18124) arrives after the fork already
+// deployed ids 33-69, so it takes the next free id (70) rather than its filename
+// number (registry section 1).
+import Migration0070 from "./Migrations/061_PullRequestReviewGuides.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -257,6 +261,7 @@ export const migrationEntries = [
   [67, "WebhookRelayDeliveries", Migration0067],
   [68, "McpAppModelContext", Migration0068],
   [69, "ThreadSnapshotWindowIndexes", Migration0069],
+  [70, "PullRequestReviewGuides", Migration0070],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

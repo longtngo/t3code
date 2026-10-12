@@ -23,7 +23,7 @@ import type {
   ProjectSearchEntriesResult,
 } from "@t3tools/contracts";
 import { FILESYSTEM_BROWSE_MAX_ENTRIES } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
 import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
@@ -140,7 +140,7 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
   input: FilesystemBrowseInput,
   path: Path.Path,
 ): Effect.fn.Return<string, WorkspaceEntriesBrowseError> {
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   if (platform !== "win32" && isWindowsAbsolutePath(input.partialPath)) {
     return yield* new WorkspaceEntriesWindowsPathUnsupportedError({
       cwd: input.cwd,
@@ -150,7 +150,7 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
   }
 
   if (!isExplicitRelativePath(input.partialPath)) {
-    return path.resolve(expandHomePath(input.partialPath));
+    return path.resolve(expandHomePath(input.partialPath, yield* HostProcess.HomeDirectory));
   }
 
   if (!input.cwd) {
@@ -158,7 +158,10 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
       partialPath: input.partialPath,
     });
   }
-  return path.resolve(expandHomePath(input.cwd), input.partialPath);
+  return path.resolve(
+    expandHomePath(input.cwd, yield* HostProcess.HomeDirectory),
+    input.partialPath,
+  );
 });
 
 /** @public Service construction is part of the canonical Effect module API. */

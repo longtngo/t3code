@@ -7,6 +7,7 @@ import { renderDom } from "../testing/renderDom";
 // Only the server-config atom for ENVIRONMENT carries Jira settings, so an
 // unscoped render (no environment) reads the same empty config production does.
 const atomReader = vi.hoisted(() => ({ read: (_atom: unknown): unknown => null }));
+vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: (atom: unknown) => atomReader.read(atom) }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../hooks/useSettings", async (importOriginal) => {

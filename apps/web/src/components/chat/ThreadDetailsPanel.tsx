@@ -12,19 +12,21 @@ import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
 import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import { BackgroundTasksPanel } from "../BackgroundTasksPanel";
-import GitActionsControl from "../GitActionsControl";
+import BaseGitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { TaskListPanel } from "../TaskListPanel";
 import type { TaskListView } from "../TaskListPanel.logic";
-import type { ComponentProps } from "react";
+import { memo, type ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+
+const GitActionsControl = memo(BaseGitActionsControl);
 
 export interface ThreadDetailsPanelProps extends Pick<
   ComponentProps<typeof ThreadDetailsCard>,
@@ -76,6 +78,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     props.activeProjectScripts ? props.gitCwd : null,
   );
   const threadKey = `${props.environmentId}:${props.threadId}`;
+  const activeThreadRef = { environmentId: props.environmentId, threadId: props.threadId };
   const branchToolbarProps = {
     showGitControls: props.isGitRepo,
     environmentId: props.environmentId,
@@ -169,10 +172,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                     displayMode="panel"
                     compact={density !== "full"}
                     gitCwd={props.gitCwd}
-                    activeThreadRef={{
-                      environmentId: props.environmentId,
-                      threadId: props.threadId,
-                    }}
+                    activeThreadRef={activeThreadRef}
                     {...(props.draftId ? { draftId: props.draftId } : {})}
                     {...(props.onOpenChanges ? { onOpenChanges: props.onOpenChanges } : {})}
                   />

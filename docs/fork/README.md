@@ -64,6 +64,14 @@ mirrors for it (`configDirPath`, `outputStyle`, Codex `setupMode`) and their tes
 copy was retired for upstream's per-environment failure messages, and the composer's
 resume-compaction menu for upstream's Compact/Full chip.
 
+The 47th reconcile (2026-10-12, 319 commits) moved source control into
+`packages/source-control-*` (host settings now live under `sourceControlHosts`, edited by
+`SourceControlHostSettings`, which carries the fork's `settings:write` gate) and host-process
+references into `@t3tools/shared/HostProcess`. Typecheck is `tsc-rs`. Mobile's markdown renderer
+is upstream's Enriched now; the fork's Jira links on native mobile markdown went with the old
+module (web keeps them). Claude task lists are upstream's per-turn list with the fork's
+`blockedBy` grafted on.
+
 The 43rd reconcile (2026-10-02, 55 commits) stopped at `e0db2a5e58`, just before #2829. Upstream's
 beta Working shelf (#13926) is taken alongside the fork's Queue: the Queue block renders above it,
 and its resting-section rule keeps `sidebarRestingSection` with Working as the inbox's fold.
@@ -112,10 +120,11 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 69 entries, ids 1-69, unique and monotonic. Upstream's v2 schema
+Current: 70 entries, ids 1-70, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
-`059_McpAppModelContext` is **68** and `060_ThreadSnapshotWindowIndexes` is **69**.
+`059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69** and
+`061_PullRequestReviewGuides` is **70**.
 Filename numbers double up on `033`, `037`, `038`, `039`, `041` and `042`. Id `34` is
 `PushSubscriptions`, the fork's first Web Push migration: real databases record it, so the manifest
 registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
@@ -131,7 +140,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `69 69 ok` and `1`.
+Expect `70 70 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -415,6 +424,9 @@ under `/var/folders` every new nested file read as outside the workspace. The fo
 `realPathNearestAncestor` (`provider/acp/AntigravityClientFiles.ts`) realpaths the nearest existing
 ancestor and re-joins the missing tail. Not test-only: a symlinked project root hits the same
 branch in production.
+
+**Recurred at the 47th reconcile** in upstream's `storageCleanup.test.ts`: the sweep refuses a
+root whose realpath differs, so on macOS it removed nothing. Its fixture now realpaths the base dir.
 
 **Recurred at the 36th reconcile**, in a file byte-identical to upstream:
 `apps/server/src/usage/UsageService.test.ts` makes its home with `mkdtemp` and asserts against
@@ -1310,6 +1322,17 @@ the General panel and both read as missing.
 The check now also scans the sibling components the panel imports, one level deep, and carries a
 negative control (`not-a-real-settings-anchor`) so a substring search over several whole files
 cannot silently start matching everything.
+
+### 65. Fork WebSocket RPCs get their own handler layer
+
+`ws.ts` builds handlers with `UpstreamServerWsRpcGroup.toLayer` plus `ForkServerWsRpcGroup.toLayer`,
+not one `ServerWsRpcGroup.toLayer`. A single `toLayer` over all ~196 RPCs exceeds the checker's
+instantiation budget (TS2589, measured at the 47th reconcile; upstream alone sits just under it).
+`tsc-rs` splits files across checkers, so the TS2589 is dropped and only its `any` surfaces, as
+`TS377030 any in the requirements channel` in whichever file first needs `Ws.layer`
+(`cli/app.test.ts`, `theme.test.ts`, `server.ts` - it moves). `--checkers 1` shows the real error.
+Runtime is unaffected: `RpcServer` reads each RPC and its middleware from `ServerWsRpcGroup` and
+looks the handler up by tag. A new fork RPC goes in both the fork group and the `omit` list.
 
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 

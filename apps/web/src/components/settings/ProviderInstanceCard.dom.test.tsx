@@ -119,6 +119,7 @@ describe("deriveProviderModelsForDisplay", () => {
         modelOrder: [],
         onHiddenModelsChange: () => undefined,
         onFavoriteModelsChange: () => undefined,
+        onToggleFavorite: () => undefined,
         onModelOrderChange: () => undefined,
       }),
     );
@@ -162,6 +163,7 @@ describe("deriveProviderModelsForDisplay", () => {
         modelOrder: [],
         onHiddenModelsChange: () => undefined,
         onFavoriteModelsChange: () => undefined,
+        onToggleFavorite: () => undefined,
         onModelOrderChange: () => undefined,
       }),
     );
@@ -206,6 +208,7 @@ describe("deriveProviderModelsForDisplay", () => {
       modelOrder: [],
       onHiddenModelsChange: () => undefined,
       onFavoriteModelsChange: () => undefined,
+      onToggleFavorite: () => undefined,
       onModelOrderChange: () => undefined,
     } as const;
 

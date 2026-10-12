@@ -17,6 +17,7 @@ import {
   WORKSPACE_TEXT_VIEWER_EXTENSIONS,
   WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
 } from "@t3tools/shared/filePreview";
+import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import { summarizeOtlpTraceData } from "./observability/otlpTraceSummary.ts";
 import * as Clock from "effect/Clock";
@@ -42,7 +43,12 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import * as ServerConfig from "./config.ts";
-import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
+import {
+  ASSET_ROUTE_PREFIX,
+  readMcpAppHtml,
+  resolveAsset,
+  type ResolvedAsset,
+} from "./assets/AssetAccess.ts";
 import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
@@ -72,7 +78,11 @@ import {
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { WEBHOOK_ROUTE_PREFIX } from "./scheduledTasks/ScheduledTaskService.ts";
-import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
+import {
+  browserApiCorsAllowedHeaders,
+  browserApiCorsAllowedMethods,
+  DESKTOP_RENDERER_ORIGINS,
+} from "./httpCors.ts";
 import { resolveViewerRange } from "./viewerRange.ts";
 import { WebPushRelay } from "./push/WebPushRelay.ts";
 import { registerPushSubscription } from "./push/register.ts";
@@ -81,7 +91,6 @@ const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const PUSH_SUBSCRIPTIONS_PATH = "/api/push/subscriptions";
 const PUSH_VAPID_PUBLIC_KEY_PATH = "/api/push/vapid-public-key";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
-const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 // HTML previews are agent output, not the app. The sandbox gives the document an
 // opaque origin: scripts run, but same-origin cookies, storage, and API calls are
@@ -197,12 +206,30 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
     readonly fileName?: string;
     readonly mimeType?: string;
     readonly file?: OpenMediaFile;
+    readonly renderIntent?: "mcp-app";
   },
   rangeHeader?: string,
   ifRangeHeader?: string,
   method: "GET" | "HEAD" = "GET",
 ) {
   const headers = assetResponseHeaders(asset.path, asset);
+  if (
+    asset.renderIntent === "mcp-app" &&
+    !asset.download &&
+    headers["Content-Type"] === "text/html; charset=utf-8"
+  ) {
+    const bytes = yield* readMcpAppHtml(asset.path);
+    if (bytes === null) {
+      return HttpServerResponse.text("MCP app is too large to preview.", { status: 413 });
+    }
+    const body = new TextEncoder().encode(
+      injectMcpAppCookieBootstrap(injectMcpAppThemeBootstrap(new TextDecoder().decode(bytes))),
+    );
+    headers["Content-Length"] = String(body.byteLength);
+    return method === "HEAD"
+      ? HttpServerResponse.empty({ status: 200, headers })
+      : HttpServerResponse.uint8Array(body, { headers });
+  }
   const mediaFile = asset.file;
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
   const isMedia = /^(?:audio|video)\//i.test(headers["Content-Type"] ?? "");
@@ -566,7 +593,8 @@ export const layerAssetRoute = HttpRouter.add(
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
 
-    const asset = yield* resolveAsset(
+    // Annotated so the inferred literal union keeps the optional fields every file claim may carry.
+    const asset: ResolvedAsset | null = yield* resolveAsset(
       suffix.slice(0, separatorIndex),
       suffix.slice(separatorIndex + 1),
     );

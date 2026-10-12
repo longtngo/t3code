@@ -2,7 +2,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId, type ServerSettings } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -187,7 +187,7 @@ describe("setBackend", () => {
 
         try {
           const result = yield* setBackend({ backend: "cursor", instanceId: cursorId }).pipe(
-            Effect.provideService(HostProcessEnvironment, { PATH: binDir }),
+            Effect.provideService(HostProcess.Environment, { PATH: binDir }),
           );
           expect(result.binaryPath).toBe(executablePath);
         } finally {

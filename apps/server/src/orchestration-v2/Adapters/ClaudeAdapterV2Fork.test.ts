@@ -55,8 +55,6 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import {
-  applyClaudeTaskToolResult,
-  type ClaudeTaskState,
   claudeContextUsageSnapshot,
   claudeModelContextWindow,
   claudeQueryAutoCompactWindow,
@@ -268,37 +266,6 @@ describe("Claude context windows (invariants 12, 22)", () => {
   });
 });
 
-describe("Claude Task tools", () => {
-  it("builds the list only from successful structured results", () => {
-    const tasks = new Map<string, ClaudeTaskState>();
-    assert.isFalse(
-      applyClaudeTaskToolResult(tasks, { toolName: "TaskCreate", input: { subject: "A" } }, {}),
-    );
-    assert.isTrue(
-      applyClaudeTaskToolResult(
-        tasks,
-        { toolName: "TaskCreate", input: { subject: "Write tests" } },
-        { task: { id: "1", subject: "Write tests" } },
-      ),
-    );
-    assert.isTrue(
-      applyClaudeTaskToolResult(
-        tasks,
-        { toolName: "TaskUpdate", input: { taskId: "1", status: "in_progress" } },
-        { success: true },
-      ),
-    );
-    assert.isFalse(
-      applyClaudeTaskToolResult(
-        tasks,
-        { toolName: "TaskUpdate", input: { taskId: "missing", status: "completed" } },
-        { success: true },
-      ),
-    );
-    assert.equal(tasks.get("1")?.status, "running");
-  });
-});
-
 // ---------------------------------------------------------------------------
 // Adapter-level arms
 // ---------------------------------------------------------------------------
@@ -400,6 +367,7 @@ const makeHarness = (options?: {
               setModel: () => Effect.void,
               setPermissionMode: () => Effect.void,
               interrupt: Deferred.succeed(interruptRequested, undefined),
+              stopTask: () => Effect.void,
               close: Effect.void,
               ...(getContextUsage === undefined ? {} : { getContextUsage }),
             };

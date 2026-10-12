@@ -3,6 +3,7 @@ import {
   CheckpointId,
   CheckpointScopeId,
   CommandId,
+  NodeId,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
@@ -997,5 +998,36 @@ it.effect("settles a delegated child once its restart continuation fails for goo
       );
       assert.deepEqual(yield* Ref.get(recovered), [threadId]);
     }).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect("a native subagent stop does not settle its owner's background work", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const events = yield* Ref.make<ReadonlyArray<string>>([]);
+    const layer = layerExecutorFor({
+      events,
+      interrupt: (input) => {
+        assert.equal(input.subagent?.nativeTaskId, "native-task");
+        return Ref.update(events, (current) => [...current, "stop-child"]).pipe(
+          Effect.as("subagent" as const),
+        );
+      },
+      threads: { dispatch: () => Effect.die("The owner's background work must stay running") },
+    });
+    yield* Effect.gen(function* () {
+      const executor = yield* EffectWorker.OrchestrationEffectExecutorV2;
+      yield* executor.execute({
+        ...restartEffect(now, { type: "detach" }),
+        request: {
+          type: "provider-turn.interrupt",
+          providerSessionId: oldSessionId,
+          providerThreadId,
+          providerTurnId,
+          subagent: { id: NodeId.make("subagent"), nativeTaskId: "native-task" },
+        },
+      });
+    }).pipe(Effect.provide(layer));
+    assert.deepEqual(yield* Ref.get(events), ["stop-child"]);
   }),
 );

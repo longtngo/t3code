@@ -14,6 +14,7 @@ import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 import { renderDom } from "../testing/renderDom";
 
+vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("./chat/MermaidDiagram", () => ({
   // Real Mermaid needs layout APIs jsdom lacks; a rendered diagram is an SVG.

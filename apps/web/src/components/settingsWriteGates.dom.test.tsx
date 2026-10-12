@@ -50,7 +50,8 @@ vi.mock("./ui/tooltip", async () => {
 });
 
 import ProjectScriptsControl from "./ProjectScriptsControl";
-import { BitbucketCredentialsSettings } from "./settings/BitbucketCredentialsSettings";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { SourceControlHostSettings } from "./settings/SourceControlHostSettings";
 import { GitHubAccountSettings } from "./settings/GitHubAccountSettings";
 import { GitHubTokenSettings } from "./settings/GitHubTokenSettings";
 import { CursorEnableButton } from "./usage/UsagePage";
@@ -100,6 +101,10 @@ const projectActions = (onAddScript: () => Promise<unknown>, withFileScript: boo
   />
 );
 
+const bitbucket = sourceControlClients.find("bitbucket");
+if (!bitbucket?.settings) throw new Error("Bitbucket client definition declares no settings");
+const bitbucketDefinition = { ...bitbucket, settings: bitbucket.settings };
+
 describe.each(logins)("settings write gates, %s login", (_name, grant, denied) => {
   it("GitHub token", async () => {
     fixture.grant = grant;
@@ -111,9 +116,13 @@ describe.each(logins)("settings write gates, %s login", (_name, grant, denied) =
   it("Bitbucket credentials", async () => {
     fixture.grant = grant;
     const dom = await renderDom(
-      <BitbucketCredentialsSettings environmentId={env} onSaved={() => {}} />,
+      <SourceControlHostSettings
+        environmentId={env}
+        definition={bitbucketDefinition}
+        onSaved={() => {}}
+      />,
     );
-    expect(isDisabled(dom.find("#bitbucket-access-token-env-1"))).toBe(denied);
+    expect(isDisabled(dom.find("#source-control-bitbucket-env-1-accessToken"))).toBe(denied);
     expect(dom.text().includes(SENTENCE)).toBe(denied);
   });
 

@@ -19,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "../../../config.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as CommandReceiptStore from "../../../orchestration-v2/CommandReceiptStore.ts";
 import { CreditSpendGuard } from "../../../provider/Services/CreditSpendGuard.ts";
@@ -149,6 +150,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     // Read by the "Allow to spend credits" gate in ThreadMessageIntake.launchThread.
     CreditSpendGuard,
     CommandReceiptStore.CommandReceiptStoreV2,
+    ServerSettings.ServerSettingsService,
   ],
 })
   .annotate(Tool.Destructive, true)

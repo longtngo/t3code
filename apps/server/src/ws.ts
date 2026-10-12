@@ -102,6 +102,24 @@ import {
   SUBAGENT_BACKEND_DEFAULT,
   WS_METHODS,
   WsRpcGroup,
+  WsServerSetThreadQueueRpc,
+  WsGetResourceQueueRpc,
+  WsPushSubscriptionsRegisterRpc,
+  WsSubagentBackendGetRpc,
+  WsSubagentBackendSetRpc,
+  WsSubagentBackendUsageRpc,
+  WsProjectsRenderTrustedMarkdownRpc,
+  WsAttachmentsUploadRpc,
+  WsProjectsReadTrustedFileRpc,
+  WsVcsRefreshLocalStatusRpc,
+  WsWorkspaceMemberBranchesRpc,
+  WsWorkspaceMemberActionPrepareRpc,
+  WsWorkspaceMemberPrBaseWriteRpc,
+  WsSubscribeHostMetricsRpc,
+  WsLlmServeLoadRpc,
+  WsLlmServeUnloadRpc,
+  WsSubscribeLlmModelsRpc,
+  WsServerSubscribeThreadQueueRpc,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import {
@@ -110,7 +128,7 @@ import {
   HttpServerRespondable,
   HttpServerResponse,
 } from "effect/http";
-import { RpcSerialization, RpcServer } from "effect/rpc";
+import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import { writeUploadedAttachment } from "./attachmentUpload.ts";
@@ -185,6 +203,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as StorageCleanup from "./storageCleanup.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -245,17 +264,15 @@ import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
+import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
+import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
-import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
-import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
-import * as GitHubApi from "./sourceControl/GitHubApi.ts";
-import * as GitLabCli from "./sourceControl/GitLabCli.ts";
-import * as ForgejoCli from "./sourceControl/ForgejoCli.ts";
+import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
@@ -606,6 +623,48 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+// Fork RPCs get their own handler layer. One toLayer over every RPC exceeds the
+// type checker's instantiation budget (TS2589), which leaks `any` into the R channel.
+const ForkServerWsRpcGroup = RpcGroup.make(
+  WsServerSetThreadQueueRpc,
+  WsGetResourceQueueRpc,
+  WsPushSubscriptionsRegisterRpc,
+  WsSubagentBackendGetRpc,
+  WsSubagentBackendSetRpc,
+  WsSubagentBackendUsageRpc,
+  WsProjectsRenderTrustedMarkdownRpc,
+  WsAttachmentsUploadRpc,
+  WsProjectsReadTrustedFileRpc,
+  WsVcsRefreshLocalStatusRpc,
+  WsWorkspaceMemberBranchesRpc,
+  WsWorkspaceMemberActionPrepareRpc,
+  WsWorkspaceMemberPrBaseWriteRpc,
+  WsSubscribeHostMetricsRpc,
+  WsLlmServeLoadRpc,
+  WsLlmServeUnloadRpc,
+  WsSubscribeLlmModelsRpc,
+  WsServerSubscribeThreadQueueRpc,
+).middleware(RpcInstrumentation);
+const UpstreamServerWsRpcGroup = ServerWsRpcGroup.omit(
+  WS_METHODS.serverSetThreadQueue,
+  WS_METHODS.getResourceQueue,
+  WS_METHODS.pushSubscriptionsRegister,
+  WS_METHODS.subagentBackendGet,
+  WS_METHODS.subagentBackendSet,
+  WS_METHODS.subagentBackendUsage,
+  WS_METHODS.projectsRenderTrustedMarkdown,
+  WS_METHODS.attachmentsUpload,
+  WS_METHODS.projectsReadTrustedFile,
+  WS_METHODS.vcsRefreshLocalStatus,
+  WS_METHODS.workspaceMemberBranches,
+  WS_METHODS.workspaceMemberActionPrepare,
+  WS_METHODS.workspaceMemberPrBaseWrite,
+  WS_METHODS.subscribeHostMetrics,
+  WS_METHODS.llmServeLoad,
+  WS_METHODS.llmServeUnload,
+  WS_METHODS.subscribeLlmModels,
+  WS_METHODS.serverSubscribeThreadQueue,
+);
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
 // snapshot instead. Replaying each intervening event costs a shell refetch;
@@ -1300,7 +1359,7 @@ const layerWsRpc = (
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
 ) =>
-  ServerWsRpcGroup.toLayer(
+  Layer.unwrap(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
@@ -1312,6 +1371,7 @@ const layerWsRpc = (
         | ServerConfig.ServerConfig
         | CreditSpendGuard.CreditSpendGuard
         | CommandReceiptStore.CommandReceiptStoreV2
+        | ServerSettings.ServerSettingsService
       >();
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
@@ -1339,6 +1399,7 @@ const layerWsRpc = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
+      const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
       const deviceHostContext =
@@ -1406,6 +1467,7 @@ const layerWsRpc = (
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+      const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
@@ -1430,6 +1492,7 @@ const layerWsRpc = (
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
+      const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map(
           (settings) => resolveServerBackgroundActivitySettings(settings).automaticGitFetchInterval,
@@ -1963,7 +2026,7 @@ const layerWsRpc = (
         return result;
       });
 
-      const handlers = ServerWsRpcGroup.of({
+      const handlers = UpstreamServerWsRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -2013,6 +2076,7 @@ const layerWsRpc = (
                 ),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) => threadManagement.stopWorkflow(input),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
           readWorkflowScript({ scriptPath: input.scriptPath }),
         [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: (input) =>
@@ -2180,6 +2244,13 @@ const layerWsRpc = (
                         commandId: input.commandId,
                         projectId: input.projectId,
                         message: "Failed to launch thread",
+                        cause,
+                      }),
+                    ThreadManagementProviderInstanceDisabledError: (cause) =>
+                      new OrchestrationV2ThreadLaunchError({
+                        commandId: input.commandId,
+                        projectId: input.projectId,
+                        message: cause.message,
                         cause,
                       }),
                   }),
@@ -2534,6 +2605,8 @@ const layerWsRpc = (
             const keybindingsConfig = yield* keybindings.removeKeybindingRule(rule);
             return { keybindings: keybindingsConfig, issues: [] };
           }),
+        [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
+        [WS_METHODS.serverGetStorageCleanupReport]: () => storageCleanup.reports,
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
         [WS_METHODS.serverUpdateSettings]: ({ patch, providerInstanceMutation }) =>
@@ -2564,39 +2637,8 @@ const layerWsRpc = (
         [WS_METHODS.serverGetUsageSummary]: (input) => usage.readSummary(input),
         [WS_METHODS.serverRefreshUsageRates]: (_input) => usage.refreshRates,
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) => resourceTelemetry.retry,
-        [WS_METHODS.serverSetThreadQueue]: (input) => threadQueue.set(input),
+        [WS_METHODS.serverCheckOtlpEndpoint]: (input) => otlpEndpointCheck.check(input),
         [WS_METHODS.serverSignalProcess]: (input) => processDiagnostics.signal(input),
-        [WS_METHODS.getResourceQueue]: (_input) => resourceQueue.read,
-        // Shared with the HTTP route the service worker calls on
-        // pushsubscriptionchange (SSRF guard + upsert live in one place). The
-        // helper never fails; a non-"registered" outcome collapses to ok:false.
-        [WS_METHODS.pushSubscriptionsRegister]: (input) =>
-          registerPushSubscription(input.subscription).pipe(
-            Effect.map((outcome) => ({ ok: outcome === "registered" })),
-          ),
-        [WS_METHODS.subagentBackendGet]: (input) =>
-          Effect.gen(function* () {
-            const persisted = yield* SubagentBackend.readBackendFile();
-            const settings = yield* serverSettings.getRawSettings;
-            // Never probe under master-off: the panel still renders, but spawning the
-            // Cursor CLI to list models for a backend nothing may dispatch to is work
-            // the user has explicitly switched off.
-            const refresh =
-              (input.refreshModels ?? false) && settings.subagentBackendEnabled !== false;
-            const models = yield* SubagentBackend.modelsForPersistedBackend(persisted, refresh);
-            return SubagentBackend.buildState(persisted, settings, models);
-          }).pipe(
-            Effect.catch(subagentBackendDegraded("The subagent backend state could not be read.")),
-          ),
-        // The body lives in `SubagentBackend.setBackendState`, which never probes — see
-        // its doc for why that is structural here and not a `false` passed from this file.
-        [WS_METHODS.subagentBackendSet]: (input) =>
-          SubagentBackend.setBackendState(input).pipe(
-            Effect.catch(
-              subagentBackendDegraded("The subagent backend selection could not be saved."),
-            ),
-          ),
-        [WS_METHODS.subagentBackendUsage]: (_input) => readCursorUsage(),
         [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
           Ref.update(rpcClientIds, (clientIds) => {
             const next = new Set(clientIds);
@@ -2666,6 +2708,10 @@ const layerWsRpc = (
           withPullRequestViewer(input, pullRequests.checks(input)),
         [WS_METHODS.pullRequestsActivity]: (input) =>
           withPullRequestViewer(input, pullRequests.activity(input)),
+        [WS_METHODS.pullRequestsReviewGuide]: (input) =>
+          withPullRequestViewer(input, reviewGuides.get(input)),
+        [WS_METHODS.pullRequestsGenerateReviewGuide]: (input) =>
+          withPullRequestViewer(input, reviewGuides.generate(input)),
         [WS_METHODS.pullRequestsThreadComments]: (input) =>
           withPullRequestViewer(input, pullRequests.threadComments(input)),
         [WS_METHODS.pullRequestsDiffFileContents]: (input) =>
@@ -2698,6 +2744,7 @@ const layerWsRpc = (
           withPullRequestViewer(input, pullRequests.setThreadResolution(input)),
         [WS_METHODS.pullRequestsSetReaction]: (input) =>
           withPullRequestViewer(input, pullRequests.setReaction(input)),
+        [WS_METHODS.pullRequestsReportState]: (input) => pullRequests.reportState(input),
         [WS_METHODS.pullRequestsInvalidate]: (input) =>
           pullRequests.invalidate(input, { notifyReaders: true }).pipe(
             // A reader asking for fresh host state also wants the thread badges it feeds to
@@ -2833,45 +2880,6 @@ const layerWsRpc = (
                 }),
             ),
           ),
-        [WS_METHODS.projectsRenderTrustedMarkdown]: (input) =>
-          workspaceFileSystem.readTrustedFile(input).pipe(
-            Effect.flatMap((file) => markdownHtmlRenderer.render(file.contents)),
-            Effect.map((html) => ({ html })),
-            Effect.mapError(
-              (cause) =>
-                new ProjectReadFileError({
-                  cwd: input.path,
-                  relativePath: input.path,
-                  message: trustedReadErrorMessage(input.path, cause),
-                  ...projectFileFailureContext(cause),
-                  cause,
-                }),
-            ),
-          ),
-        [WS_METHODS.attachmentsUpload]: (input) =>
-          writeUploadedAttachment({
-            attachmentsDir: config.attachmentsDir,
-            threadId: input.threadId,
-            fileName: input.fileName,
-            dataBase64: input.dataBase64,
-          }),
-        [WS_METHODS.projectsReadTrustedFile]: (input) =>
-          workspaceFileSystem.readTrustedFile(input).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProjectReadFileError({
-                  // No cwd/relativePath split exists for an absolute trusted
-                  // read, so an explicit message is supplied rather than
-                  // letting the workspace-relative template render the same
-                  // path twice.
-                  cwd: input.path,
-                  relativePath: input.path,
-                  message: trustedReadErrorMessage(input.path, cause),
-                  ...projectFileFailureContext(cause),
-                  cause,
-                }),
-            ),
-          ),
         [WS_METHODS.projectsWriteFile]: (input) =>
           workspaceFileSystem.writeFile(input).pipe(
             Effect.mapError(
@@ -2889,6 +2897,7 @@ const layerWsRpc = (
             .enqueueCommand(mutateProject(mutation))
             .pipe(Effect.mapError((cause) => toProjectMutationError(mutation.commandId, cause))),
         [WS_METHODS.shellOpenInEditor]: (input) => externalLauncher.launchEditor(input),
+        [WS_METHODS.filesystemGetMetadata]: (input) => workspaceFileSystem.getMetadata(input),
         [WS_METHODS.filesystemBrowse]: (input) =>
           workspaceEntries.browse(input).pipe(
             Effect.mapError(
@@ -3000,12 +3009,6 @@ const layerWsRpc = (
             .cancel(input.threadId)
             .pipe(Effect.map((cancelled) => ({ cancelled }))),
         [WS_METHODS.vcsRefreshStatus]: (input) => vcsStatusBroadcaster.refreshStatus(input.cwd),
-        [WS_METHODS.vcsRefreshLocalStatus]: (input) =>
-          vcsStatusBroadcaster.refreshLocalStatus(input.cwd),
-        [WS_METHODS.workspaceMemberBranches]: (input) => workspaceMemberRpc.branches(input),
-        [WS_METHODS.workspaceMemberActionPrepare]: (input) =>
-          workspaceMemberRpc.actionPrepare(input),
-        [WS_METHODS.workspaceMemberPrBaseWrite]: (input) => workspaceMemberRpc.prBaseWrite(input),
         [WS_METHODS.vcsPull]: (input) =>
           gitWorkflow.pullCurrentBranch(input.cwd).pipe(
             Effect.matchCauseEffect({
@@ -3316,13 +3319,6 @@ const layerWsRpc = (
               );
             }),
           ),
-        [WS_METHODS.subscribeHostMetrics]: (input) => hostMetrics.stream(input.intervalMs),
-        [WS_METHODS.llmServeLoad]: (input) => llmServeManager.load(input.configId),
-        [WS_METHODS.llmServeUnload]: (input) => llmServeManager.unload(input.configId),
-        [WS_METHODS.subscribeLlmModels]: (input) =>
-          llmModelsStream(input.intervalMs ?? 2000).pipe(
-            Stream.provideService(LlmServeManager, llmServeManager),
-          ),
         [WS_METHODS.subscribeBackgroundPolicy]: (_input) =>
           Stream.unwrap(
             Effect.map(backgroundPolicy.subscribe, ({ latest, changes }) =>
@@ -3335,9 +3331,98 @@ const layerWsRpc = (
               Stream.concat(Stream.make(latest), changes),
             ),
           ),
+      });
+      const forkHandlers = ForkServerWsRpcGroup.of({
+        [WS_METHODS.serverSetThreadQueue]: (input) => threadQueue.set(input),
+        [WS_METHODS.getResourceQueue]: (_input) => resourceQueue.read,
+        // Shared with the HTTP route the service worker calls on
+        // pushsubscriptionchange (SSRF guard + upsert live in one place). The
+        // helper never fails; a non-"registered" outcome collapses to ok:false.
+        [WS_METHODS.pushSubscriptionsRegister]: (input) =>
+          registerPushSubscription(input.subscription).pipe(
+            Effect.map((outcome) => ({ ok: outcome === "registered" })),
+          ),
+        [WS_METHODS.subagentBackendGet]: (input) =>
+          Effect.gen(function* () {
+            const persisted = yield* SubagentBackend.readBackendFile();
+            const settings = yield* serverSettings.getRawSettings;
+            // Never probe under master-off: the panel still renders, but spawning the
+            // Cursor CLI to list models for a backend nothing may dispatch to is work
+            // the user has explicitly switched off.
+            const refresh =
+              (input.refreshModels ?? false) && settings.subagentBackendEnabled !== false;
+            const models = yield* SubagentBackend.modelsForPersistedBackend(persisted, refresh);
+            return SubagentBackend.buildState(persisted, settings, models);
+          }).pipe(
+            Effect.catch(subagentBackendDegraded("The subagent backend state could not be read.")),
+          ),
+        // The body lives in `SubagentBackend.setBackendState`, which never probes — see
+        // its doc for why that is structural here and not a `false` passed from this file.
+        [WS_METHODS.subagentBackendSet]: (input) =>
+          SubagentBackend.setBackendState(input).pipe(
+            Effect.catch(
+              subagentBackendDegraded("The subagent backend selection could not be saved."),
+            ),
+          ),
+        [WS_METHODS.subagentBackendUsage]: (_input) => readCursorUsage(),
+        [WS_METHODS.projectsRenderTrustedMarkdown]: (input) =>
+          workspaceFileSystem.readTrustedFile(input).pipe(
+            Effect.flatMap((file) => markdownHtmlRenderer.render(file.contents)),
+            Effect.map((html) => ({ html })),
+            Effect.mapError(
+              (cause) =>
+                new ProjectReadFileError({
+                  cwd: input.path,
+                  relativePath: input.path,
+                  message: trustedReadErrorMessage(input.path, cause),
+                  ...projectFileFailureContext(cause),
+                  cause,
+                }),
+            ),
+          ),
+        [WS_METHODS.attachmentsUpload]: (input) =>
+          writeUploadedAttachment({
+            attachmentsDir: config.attachmentsDir,
+            threadId: input.threadId,
+            fileName: input.fileName,
+            dataBase64: input.dataBase64,
+          }),
+        [WS_METHODS.projectsReadTrustedFile]: (input) =>
+          workspaceFileSystem.readTrustedFile(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProjectReadFileError({
+                  // No cwd/relativePath split exists for an absolute trusted
+                  // read, so an explicit message is supplied rather than
+                  // letting the workspace-relative template render the same
+                  // path twice.
+                  cwd: input.path,
+                  relativePath: input.path,
+                  message: trustedReadErrorMessage(input.path, cause),
+                  ...projectFileFailureContext(cause),
+                  cause,
+                }),
+            ),
+          ),
+        [WS_METHODS.vcsRefreshLocalStatus]: (input) =>
+          vcsStatusBroadcaster.refreshLocalStatus(input.cwd),
+        [WS_METHODS.workspaceMemberBranches]: (input) => workspaceMemberRpc.branches(input),
+        [WS_METHODS.workspaceMemberActionPrepare]: (input) =>
+          workspaceMemberRpc.actionPrepare(input),
+        [WS_METHODS.workspaceMemberPrBaseWrite]: (input) => workspaceMemberRpc.prBaseWrite(input),
+        [WS_METHODS.subscribeHostMetrics]: (input) => hostMetrics.stream(input.intervalMs),
+        [WS_METHODS.llmServeLoad]: (input) => llmServeManager.load(input.configId),
+        [WS_METHODS.llmServeUnload]: (input) => llmServeManager.unload(input.configId),
+        [WS_METHODS.subscribeLlmModels]: (input) =>
+          llmModelsStream(input.intervalMs ?? 2000).pipe(
+            Stream.provideService(LlmServeManager, llmServeManager),
+          ),
         [WS_METHODS.serverSubscribeThreadQueue]: (_input) => threadQueue.changes,
       });
-      return handlers;
+      return Layer.merge(
+        UpstreamServerWsRpcGroup.toLayer(handlers),
+        ForkServerWsRpcGroup.toLayer(forkHandlers),
+      );
     }),
   );
 
@@ -3370,6 +3455,7 @@ export const layer = Layer.unwrap(
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3439,19 +3525,19 @@ export const layer = Layer.unwrap(
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              Layer.provide(OtlpEndpointCheck.layer),
+              // Shared like the pull request service, so concurrent generations single-flight.
+              Layer.provide(
+                Layer.succeed(
+                  PullRequestReviewGuideService.PullRequestReviewGuideService,
+                  reviewGuides,
+                ),
+              ),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(
                     SourceControlProviderRegistry.layer.pipe(
-                      Layer.provide(
-                        Layer.mergeAll(
-                          AzureDevOpsCli.layer,
-                          BitbucketApi.layer,
-                          GitHubApi.layerWithDependencies,
-                          GitLabCli.layer,
-                          ForgejoCli.layer,
-                        ),
-                      ),
+                      Layer.provide(SourceControlBuiltInDrivers.layer),
                       Layer.provideMerge(GitVcsDriver.layer),
                       Layer.provide(
                         VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),

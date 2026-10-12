@@ -1,7 +1,7 @@
 import * as NodeOS from "node:os";
 
 import type { HostMetricsSample } from "@t3tools/contracts";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -112,7 +112,7 @@ const readGpu: Effect.Effect<
   never,
   ChildProcessSpawner.ChildProcessSpawner
 > = Effect.gen(function* () {
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   if (platform !== "darwin") return null;
   return yield* Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -134,8 +134,8 @@ const readGpu: Effect.Effect<
 
 /** Static host descriptor (platform/arch injected via References; cores from the OS). */
 const readHostInfo: Effect.Effect<HostMetricsSample["host"]> = Effect.gen(function* () {
-  const platform = yield* HostProcessPlatform;
-  const arch = yield* HostProcessArchitecture;
+  const platform = yield* HostProcess.Platform;
+  const arch = yield* HostProcess.Architecture;
   return {
     platform,
     arch,

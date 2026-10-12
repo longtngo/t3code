@@ -94,6 +94,7 @@ import { previewBridge } from "./preview/previewBridge";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { observeResize } from "~/lib/observeResize";
 
 interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -127,8 +128,11 @@ interface RightPanelTabsProps {
   onCloseOtherSurfaces: (surface: RightPanelSurface) => void;
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
   onCloseAllSurfaces: () => void;
-  /** Drag-to-reorder: move the tab to `toIndex` in `surfaces`. */
-  onMoveSurface: (surfaceId: string, toIndex: number) => void;
+  /**
+   * Drag-to-reorder: move the tab to `toIndex` in `surfaces`. Tabs are draggable
+   * only when the owner can persist the new order.
+   */
+  onMoveSurface?: (surfaceId: string, toIndex: number) => void;
   onCopyFilePath: (relativePath: string) => void;
   onAddBrowser: () => void;
   /**
@@ -599,9 +603,14 @@ type SortableTabBag = Pick<
   "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
 >;
 
-function SortableTab(props: { id: string; children: (bag: SortableTabBag) => ReactNode }) {
+function SortableTab(props: {
+  id: string;
+  disabled: boolean;
+  children: (bag: SortableTabBag) => ReactNode;
+}) {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.id,
+    disabled: props.disabled,
   });
   return props.children({ listeners, setNodeRef, transform, transition, isDragging });
 }
@@ -1084,7 +1093,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       setDraggingTab(false);
       if (event.over === null || event.over.id === event.active.id) return;
       const toIndex = surfaces.findIndex((surface) => surface.id === event.over?.id);
-      if (toIndex >= 0) onMoveSurface(String(event.active.id), toIndex);
+      if (toIndex >= 0) onMoveSurface?.(String(event.active.id), toIndex);
     },
     [onMoveSurface, surfaces],
   );
@@ -1113,14 +1122,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     if (!viewport) return;
 
     const content = viewport.firstElementChild;
-    const resizeObserver = new ResizeObserver(updateTabScrollState);
-    resizeObserver.observe(viewport);
-    if (content) resizeObserver.observe(content);
+    const stopObserving = observeResize(
+      content ? [viewport, content] : viewport,
+      updateTabScrollState,
+    );
     viewport.addEventListener("scroll", updateTabScrollState, { passive: true });
     updateTabScrollState();
 
     return () => {
-      resizeObserver.disconnect();
+      stopObserving();
       viewport.removeEventListener("scroll", updateTabScrollState);
     };
   }, [updateTabScrollState]);
@@ -1208,7 +1218,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     ? (props.previewRuntimeTabId?.(previewTabId) ?? null)
                     : null;
                   return (
-                    <SortableTab key={surface.id} id={surface.id}>
+                    <SortableTab
+                      key={surface.id}
+                      id={surface.id}
+                      disabled={!props.onMoveSurface || renamingDevice === surface.id}
+                    >
                       {(sortable) => (
                         <div
                           ref={sortable.setNodeRef}
@@ -1286,7 +1300,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                           {renamingDevice === surface.id ? (
                             <input
                               aria-label="Device tab name"
-                              className="w-24 min-w-0 rounded-sm bg-background px-1 outline-none ring-1 ring-ring"
+                              className="w-24 min-w-0 rounded-sm bg-background px-1 outline-none ring-1 ring-inset ring-ring"
                               defaultValue={title}
                               ref={(element) => {
                                 element?.focus();

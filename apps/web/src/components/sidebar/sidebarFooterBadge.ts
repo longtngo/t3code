@@ -34,4 +34,4 @@ export function sidebarFooterSeverityBadgeClass(level: Severity): string {
  * to these controls and `components/ui` exports own theirs.
  */
 export const SIDEBAR_FOOTER_CONTROL_CLASS =
-  "flex h-8 w-auto shrink-0 cursor-pointer items-center gap-1 overflow-hidden rounded-lg px-1.5 text-muted-foreground/70 text-xs outline-hidden ring-ring transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 [&>svg]:shrink-0";
+  "flex h-8 w-auto shrink-0 cursor-pointer items-center gap-1 overflow-hidden rounded-lg px-1.5 text-muted-foreground/70 text-xs outline-hidden ring-ring transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-50 [&>svg]:shrink-0";

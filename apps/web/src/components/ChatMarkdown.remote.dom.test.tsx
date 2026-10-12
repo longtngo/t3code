@@ -12,6 +12,7 @@ import { renderDom } from "../testing/renderDom";
  * without shell actions renders correctly there. This file exists to hold that arm;
  * the mock is the whole point of the separate file.
  */
+vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));

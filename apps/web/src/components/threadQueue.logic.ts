@@ -339,7 +339,12 @@ export function listQueueSlotInstances(
   const slots = new Map<string, QueueSlotInstance>();
   for (const { providers, settings } of sources) {
     const entries = sortProviderInstanceEntries(
-      applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
+      // Queue slots are machine-wide, so no project override applies.
+      applyProviderInstanceSettings(
+        deriveProviderInstanceEntries(providers),
+        { providerInstances: settings.providerInstances, projectSettingsOverrides: {} },
+        null,
+      ),
     ).filter(isProviderInstancePickerVisible);
     for (const entry of entries) {
       if (slots.has(entry.instanceId)) continue;

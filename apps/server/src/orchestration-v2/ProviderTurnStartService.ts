@@ -690,6 +690,7 @@ export const layer: Layer.Layer<
           return yield* loadFromProvider(
             session.ensureThread({
               threadId: projection.thread.id,
+              title: projection.thread.title,
               modelSelection: run.modelSelection,
               runtimePolicy: resolvedRuntimePolicy,
               providerSessionId,
@@ -735,6 +736,7 @@ export const layer: Layer.Layer<
         const replacement = yield* loadFromProvider(
           session.ensureThread({
             threadId: projection.thread.id,
+            title: projection.thread.title,
             modelSelection: run.modelSelection,
             runtimePolicy: resolvedRuntimePolicy,
             providerSessionId,

@@ -97,6 +97,7 @@ const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 // Holds session/set_config_option open so a test can land an interrupt while an
 // adapter is still preparing a turn, before it reaches session/prompt.
 const setConfigOptionDelayMs = Number(process.env.T3_ACP_SET_CONFIG_OPTION_DELAY_MS ?? "0");
+const failSetModeConfigOption = process.env.T3_ACP_FAIL_SET_MODE_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const omitModelConfigOption = process.env.T3_ACP_OMIT_MODEL_CONFIG_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
@@ -781,7 +782,7 @@ const program = Effect.gen(function* () {
       if (setConfigOptionDelayMs > 0) {
         yield* Effect.sleep(`${setConfigOptionDelayMs} millis`);
       }
-      if (failSetConfigOption) {
+      if (failSetConfigOption || (failSetModeConfigOption && request.configId === "mode")) {
         return yield* AcpError.AcpRequestError.invalidParams(
           "Mock invalid params for session/set_config_option",
           {

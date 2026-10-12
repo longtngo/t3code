@@ -29,9 +29,14 @@ vi.mock("../ui/tooltip", () => {
 });
 
 import { CursorEnableButton } from "../usage/UsagePage";
-import { BitbucketCredentialsSettings } from "./BitbucketCredentialsSettings";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { SourceControlHostSettings } from "./SourceControlHostSettings";
 import { GitHubAccountSettings } from "./GitHubAccountSettings";
 import { GitHubTokenSettings } from "./GitHubTokenSettings";
+
+const bitbucket = sourceControlClients.find("bitbucket");
+if (!bitbucket?.settings) throw new Error("Bitbucket client definition declares no settings");
+const bitbucketDefinition = { ...bitbucket, settings: bitbucket.settings };
 
 const SENTENCE = "This connection does not have permission to change environment settings.";
 const environmentId = EnvironmentId.make("env-1");
@@ -65,8 +70,14 @@ const controls: ReadonlyArray<readonly [string, () => ReactNode, string]> = [
   ],
   [
     "Bitbucket credentials",
-    () => <BitbucketCredentialsSettings environmentId={environmentId} onSaved={() => {}} />,
-    "#bitbucket-access-token-env-1",
+    () => (
+      <SourceControlHostSettings
+        environmentId={environmentId}
+        definition={bitbucketDefinition}
+        onSaved={() => {}}
+      />
+    ),
+    "#source-control-bitbucket-env-1-accessToken",
   ],
 ];
 

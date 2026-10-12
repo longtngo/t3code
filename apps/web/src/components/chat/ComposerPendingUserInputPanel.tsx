@@ -101,13 +101,6 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   }, [onAdvance]);
 
   useEffect(() => {
-    if (disabled && autoAdvanceTimerRef.current !== null) {
-      window.clearTimeout(autoAdvanceTimerRef.current);
-      autoAdvanceTimerRef.current = null;
-    }
-  }, [disabled]);
-
-  useEffect(() => {
     if (!activeQuestion || activeQuestion.multiSelect || !optimisticSingleSelect) {
       return;
     }
@@ -128,14 +121,17 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     progress.selectedOptionValues,
   ]);
 
-  // Clear auto-advance timer on unmount
+  // A delayed answer only advances its own question, while permission remains granted.
   useEffect(() => {
-    return () => {
+    const clearAutoAdvance = () => {
       if (autoAdvanceTimerRef.current !== null) {
         window.clearTimeout(autoAdvanceTimerRef.current);
+        autoAdvanceTimerRef.current = null;
       }
     };
-  }, []);
+    if (disabled || activeQuestion?.id === undefined) clearAutoAdvance();
+    return clearAutoAdvance;
+  }, [activeQuestion?.id, disabled]);
 
   // useCallback rather than useEffectEvent, taking upstream's #6646 fix ("keep
   // multi-select questions open after the first click"). Both forms already had
@@ -238,7 +234,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 aria-expanded={!isCollapsed}
                 aria-controls={optionsListId}
                 aria-label={visibility.toggleLabel}
-                className="-my-1 ml-auto flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-secondary-label outline-none transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-primary/25"
+                className="-my-1 ml-auto flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-secondary-label outline-none transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25"
               />
             }
           >
@@ -263,7 +259,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                   data-pending-user-input-dismiss
                   aria-label="Dismiss question without answering"
                   onClick={() => onDismiss(prompt.requestId)}
-                  className="-my-1 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-secondary-label outline-none transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="-my-1 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-secondary-label outline-none transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-50"
                 />
               }
             >
@@ -281,7 +277,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         <button
           type="button"
           onClick={() => setIsCollapsed(false)}
-          className="mt-2 cursor-pointer rounded-md text-secondary-label text-xs underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-1 focus-visible:ring-primary/25"
+          className="mt-2 cursor-pointer rounded-md text-secondary-label text-xs underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25"
         >
           {visibility.hintLabel}
         </button>
@@ -308,7 +304,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             (!customAnswerActive && progress.selectedOptionValues.includes(optionValue));
           const shortcutKey = index < 9 ? index + 1 : null;
           const className = cn(
-            "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-primary/25",
+            "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25",
             isSelected
               ? "border-primary/30 bg-primary/8 text-foreground"
               : "border-transparent bg-muted/22 text-foreground/85 hover:border-border/45 hover:bg-muted/34",

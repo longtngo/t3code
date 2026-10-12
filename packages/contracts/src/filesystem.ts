@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { FilePathString, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { FilePathString, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
  * Bound on a path on the wire. 512 sat below every supported platform's real
@@ -16,6 +16,31 @@ const FILESYSTEM_PATH_MAX_LENGTH = 4096;
  * serializes to 2.43 MiB compressed with 327ms of blocking encode.
  */
 export const FILESYSTEM_BROWSE_MAX_ENTRIES = 10_000;
+
+export const FILESYSTEM_METADATA_BATCH_LIMIT = 64;
+
+export const FilesystemGetMetadataInput = Schema.Struct({
+  // Absolute host paths, including ~/ paths. Relative paths need a workspace
+  // anchor on the client; the server never resolves them against its own cwd.
+  paths: Schema.Array(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH)),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(FILESYSTEM_METADATA_BATCH_LIMIT)),
+});
+export type FilesystemGetMetadataInput = typeof FilesystemGetMetadataInput.Type;
+
+export const FilesystemEntryMetadata = Schema.Struct({
+  kind: Schema.Literals(["file", "directory", "other"]),
+  byteLength: Schema.optionalKey(NonNegativeInt),
+  mimeType: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type FilesystemEntryMetadata = typeof FilesystemEntryMetadata.Type;
+
+// Results follow request order so paths do not have to travel back over the wire.
+// A null entry means the path is missing, unreadable, or unsupported.
+export const FilesystemGetMetadataResult = Schema.Struct({
+  entries: Schema.Array(Schema.NullOr(FilesystemEntryMetadata)),
+});
+export type FilesystemGetMetadataResult = typeof FilesystemGetMetadataResult.Type;
 
 export const FilesystemBrowseInput = Schema.Struct({
   partialPath: FilePathString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH)),

@@ -9,7 +9,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import { FetchHttpClient, HttpClient, HttpServer, HttpServerResponse } from "effect/http";
 
-import { HostProcessPlatform } from "../hostProcess.ts";
+import * as HostProcess from "../HostProcess.ts";
 import { layerTestLoopback } from "./loopbackHttpServer.ts";
 
 const FOREIGN_BODY = "foreign listener";
@@ -56,7 +56,7 @@ const serveOwnBody = HttpServer.serveEffect(Effect.succeed(HttpServerResponse.te
 
 describe("layerTestLoopback", () => {
   // The control documents the macOS behaviour the helper works around, hence darwin-only.
-  it.effect.skipIf(HostProcessPlatform.defaultValue() !== "darwin")(
+  it.effect.skipIf(HostProcess.Platform.defaultValue() !== "darwin")(
     "control: an all-interfaces server on a port held on 127.0.0.1 is answered by the foreign listener",
     () =>
       Effect.gen(function* () {
