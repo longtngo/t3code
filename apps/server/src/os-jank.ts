@@ -4,7 +4,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   listLoginShellCandidates,
   mergePathEntries,
-  readPathFromLoginShell,
+  readEnvironmentFromLoginShell,
   readPathFromLaunchctl,
   resolveWindowsEnvironment,
 } from "@t3tools/shared/shell";
@@ -69,17 +69,21 @@ function hydratePosixPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): vo
   const homeDir = NodeOS.homedir();
   const cachePath = defaultPathCacheFile(homeDir);
 
-  let shellPath: string | undefined;
+  let shellEnvironment: Partial<Record<string, string>> = {};
   for (const shell of listLoginShellCandidates(platform, env.SHELL)) {
     try {
-      shellPath = readPathFromLoginShell(shell);
+      // mise's record of the PATH entries it added. It must travel with the
+      // shell's PATH, or `mise x` can rebuild PATH behind a same-named wrapper
+      // (`exec mise x claude -- claude`) that then re-runs itself forever.
+      shellEnvironment = readEnvironmentFromLoginShell(shell, ["PATH", "__MISE_DIFF"]);
     } catch (error) {
       logPathHydrationWarning(`Failed to read PATH from login shell ${shell}.`, error);
     }
 
-    if (shellPath) break;
+    if (shellEnvironment.PATH) break;
   }
 
+  const shellPath = shellEnvironment.PATH;
   const launchctlPath = platform === "darwin" && !shellPath ? readPathFromLaunchctl() : undefined;
 
   // A fresh login-shell read is authoritative. When it (and launchctl) fail —
@@ -99,6 +103,9 @@ function hydratePosixPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): vo
   const mergedPath = mergePathEntries(preferredPath, env.PATH, platform);
   if (mergedPath) {
     env.PATH = mergedPath;
+  }
+  if (shellPath && shellEnvironment.__MISE_DIFF) {
+    env.__MISE_DIFF = shellEnvironment.__MISE_DIFF;
   }
 
   // Persist only after an authoritative shell read, so a degraded boot (which

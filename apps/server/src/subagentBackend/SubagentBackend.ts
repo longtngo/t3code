@@ -330,12 +330,14 @@ const resolveCursorTarget = Effect.fn("subagentBackend.resolveCursorTarget")(fun
 ) {
   const { config } = validated;
   const configured = cursorCliBinaryPath(config);
-  const resolution = yield* Effect.result(resolveCommandPath(configured));
-  const binaryPath = Result.isSuccess(resolution) ? resolution.success : configured;
-  const degraded = Result.isFailure(resolution)
-    ? `Could not resolve "${configured}" on the server's PATH; wrote it as-is ` +
-      `because the wrapper's own shell PATH may still find it.`
-    : null;
+  // `null` is "not found": the resolver no longer fails for it.
+  const resolved = yield* resolveCommandPath(configured);
+  const binaryPath = resolved ?? configured;
+  const degraded =
+    resolved === null
+      ? `Could not resolve "${configured}" on the server's PATH; wrote it as-is ` +
+        `because the wrapper's own shell PATH may still find it.`
+      : null;
   return {
     schemaVersion: SUBAGENT_BACKEND_SCHEMA_VERSION,
     backend: SUBAGENT_BACKEND_CURSOR,

@@ -22,15 +22,7 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
-import {
-  type MouseEvent,
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   CheckIcon,
@@ -1133,7 +1125,6 @@ export default function GitActionsControl({
   );
   const vcsActionState = useAtomValue(vcsActionManager.stateAtom(sourceControlScope));
   const visibleInlineSuccess = inlineSuccess?.scopeKey === successScopeKey ? inlineSuccess : null;
-  let runGitActionWithToast: (input: RunGitActionWithToastInput) => Promise<void>;
 
   useEffect(() => {
     if (!inlineSuccess) return;
@@ -1329,8 +1320,10 @@ export default function GitActionsControl({
     };
   }, [activeEnvironmentId, gitCwd, refreshVcsStatus]);
 
-  runGitActionWithToast = useEffectEvent(
-    async ({
+  // React 19.2 leaves useEffectEvent stale inside the memoized details panel.
+  // Bind each render's actions to its checkout and thread, including retained toast actions.
+  const runGitActionWithToast = useCallback(
+    async function runGitActionWithToast({
       action,
       commitMessage,
       onConfirmed,
@@ -1340,7 +1333,7 @@ export default function GitActionsControl({
       filePaths,
       skipMemberPrBasePrompt = false,
       repoId,
-    }: RunGitActionWithToastInput) => {
+    }: RunGitActionWithToastInput) {
       let skipDefaultBranchPrompt = skipDefaultBranchPromptInput;
       let featureBranch = featureBranchInput;
       if (
@@ -1629,6 +1622,28 @@ export default function GitActionsControl({
         });
       }
     },
+    [
+      activeDraftThread,
+      activeEnvironmentId,
+      activeMemberRepo,
+      activeRepo,
+      activeServerThread,
+      gitStatusForActions,
+      isDefaultRef,
+      isLocalDraftThread,
+      isPanel,
+      isPreparingMember,
+      memberProjectId,
+      memberThreadId,
+      openPrLink,
+      prepareMemberAction,
+      primaryGitCwd,
+      runImmediateGitAction,
+      successScopeKey,
+      syncThreadBranchAfterGitAction,
+      threadToastData,
+      workspaceRepos,
+    ],
   );
 
   const continuePendingDefaultBranchAction = () => {

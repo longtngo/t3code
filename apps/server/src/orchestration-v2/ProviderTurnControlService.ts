@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import type * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -18,6 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 
@@ -66,13 +68,21 @@ const isTurnNotActiveFailure = (errorText: string) =>
 
 /**
  * Which rung an interrupt ended on. Only a hard stop ends background work; a
- * subagent stop ends one native subagent and leaves its owner running.
+ * subagent stop ends one native subagent, leaves its owner running, and carries
+ * the outcome the provider confirmed for it, if any.
  */
-export type ProviderTurnInterruptOutcome = "cooperative" | "hard" | "subagent";
+export type ProviderTurnInterruptOutcome =
+  | "cooperative"
+  | "hard"
+  | { readonly subagent: ProviderAdapter.ProviderAdapterV2SubagentOutcome | undefined };
 
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
-    readonly subagent?: { readonly id: NodeId; readonly nativeTaskId: string };
+    readonly subagent?: {
+      readonly id: NodeId;
+      readonly nativeTaskId: string;
+      readonly requestedAt?: DateTime.Utc;
+    };
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
     readonly providerThreadId: ProviderThreadId;
@@ -227,7 +237,17 @@ export const layer: Layer.Layer<
           const session = Option.isSome(loaded.session)
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session)) return "hard" as const;
+          if (Option.isNone(session)) {
+            if (input.subagent !== undefined) {
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "interrupt",
+                providerTurnId: input.providerTurnId,
+                cause: "No live provider session can confirm this subagent's outcome.",
+              });
+            }
+            return "hard" as const;
+          }
           if (input.subagent !== undefined) {
             if (session.value.stopSubagent === undefined) {
               return yield* new ProviderTurnControlError({
@@ -237,11 +257,14 @@ export const layer: Layer.Layer<
                 cause: "The provider does not support stopping a native subagent.",
               });
             }
-            yield* session.value.stopSubagent({
+            const outcome = yield* session.value.stopSubagent({
               providerThread: loaded.providerThread,
               nativeTaskId: input.subagent.nativeTaskId,
+              ...(input.subagent.requestedAt === undefined
+                ? {}
+                : { requestedAt: input.subagent.requestedAt }),
             });
-            return "subagent" as const;
+            return { subagent: outcome ?? undefined };
           }
           if (input.cooperative === true) {
             // The turn ended before the effect ran: nothing is left to end,

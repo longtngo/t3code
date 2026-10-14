@@ -120,11 +120,14 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 70 entries, ids 1-70, unique and monotonic. Upstream's v2 schema
+Current: 71 entries, ids 1-71, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
-`059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69** and
-`061_PullRequestReviewGuides` is **70**.
+`059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
+`061_PullRequestReviewGuides` is **70** and `062_ThreadFailureLookupIndex` is **71**.
+Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
+adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
+upstream's `reconcileV2PreviewMigration` stays out.
 Filename numbers double up on `033`, `037`, `038`, `039`, `041` and `042`. Id `34` is
 `PushSubscriptions`, the fork's first Web Push migration: real databases record it, so the manifest
 registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
@@ -140,7 +143,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `70 70 ok` and `1`.
+Expect `71 71 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -383,7 +386,9 @@ cooperative: true })` and then waits for the projected turn to leave `running`, 
   `cooperative: true` so an earlier hard stop mid-teardown is left alone). The cancelled fiber is
   interrupted before it can escalate: exactly one hard stop runs, at once.
 - `EffectWorker` dispatches `thread.background-work.settle` only after the hard rung. The
-  cooperative rung keeps the process, which still reports on its background work.
+  cooperative rung keeps the process, which still reports on its background work. A subagent
+  Stop settles only when the provider confirmed an outcome (upstream #18778); the fork's
+  `ProviderTurnInterruptOutcome` carries it as `{ subagent }` beside `"cooperative"` / `"hard"`.
 - Adapters: an interrupt without `requestRuntimeRestart` was already soft in Codex, Cursor,
   OpenCode, OpenCode2, Pi and ACP (Grok, Antigravity), so they ignore the flag. Claude's
   restart-steer interrupt closes its query, so `ClaudeAdapterV2.interruptTurn` reads
@@ -1304,6 +1309,12 @@ test, upstream's `composerContextLegacy.test.ts` "does not replace terminal labe
 
 A red test in a file with a **zero-line diff against upstream** is the signature: baseline it
 against the pinned runtime before believing the merge caused it.
+
+**The floor moved at the 48th reconcile: run the gate on Node >= 24.21.** Upstream CI resolves the
+`^24.13.1` range to the newest 24.x, and upstream #19305's `nodeSqliteClient.test.ts` binds a raw
+`ArrayBuffer`, which `node:sqlite` stores as a blob on 24.21.0 and as NULL on 24.13.1, 24.16.0 and
+26.2.0 (measured with `SELECT length(?)`). The red is the runtime, in a file byte-identical to
+upstream.
 
 ### 48. RETIRED with orchestrator v2: the `activitiesInOrder` identity memo
 

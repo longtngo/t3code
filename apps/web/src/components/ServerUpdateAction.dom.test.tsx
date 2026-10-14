@@ -476,13 +476,12 @@ describe("ServerUpdateProgress", () => {
 
     expect(view.text()).toContain("Restarting…");
     // The wait state is monochrome and calm: no versions, no step rail, no
-    // success/warning colors, one duty-cycled pulse on the dot.
+    // success/warning colors, and a static dot that never repaints.
     expect(view.text()).not.toContain("0.0.30");
     expect(view.text()).not.toContain("Resum");
     expect(view.findAll('[class*="text-success"]')).toHaveLength(0);
     expect(view.findAll('[class*="text-primary"]')).toHaveLength(0);
-    expect(view.find(".animate-status-pulse")).not.toBeNull();
-    expect(view.findAll('[class*="animate-spin"]')).toHaveLength(0);
+    expect(view.findAll('[class*="animate-"]')).toHaveLength(0);
   });
 
   it("folds the sub-second installing handoff into the download phase", async () => {

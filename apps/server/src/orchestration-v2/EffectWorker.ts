@@ -171,12 +171,28 @@ export const layerExecutor: Layer.Layer<
                 providerThreadId: request.providerThreadId,
                 providerTurnId: request.providerTurnId,
                 ...(request.cooperative === true ? { cooperative: true } : {}),
-                ...(request.subagent === undefined ? {} : { subagent: request.subagent }),
+                ...(request.subagent === undefined
+                  ? {}
+                  : {
+                      subagent: {
+                        ...request.subagent,
+                        requestedAt: DateTime.makeUnsafe(effect.createdAt),
+                      },
+                    }),
               })
               .pipe(
+                Effect.tapError((cause) =>
+                  request.subagent === undefined
+                    ? Effect.void
+                    : Effect.logWarning("orchestration-v2.subagent-stop-failed", {
+                        effectId: effect.id,
+                        cause,
+                      }),
+                ),
                 Effect.catch((cause) =>
+                  request.subagent === undefined &&
                   isNonRetryableProviderTurnControlFailure(
-                    effect.request.type,
+                    request.type,
                     Cause.pretty(Cause.fail(cause)),
                   )
                     ? Effect.void
@@ -187,20 +203,32 @@ export const layerExecutor: Layer.Layer<
                 // work no process will report on, so the Stop ends it too.
                 // One Stop can interrupt several provider threads, so the
                 // settle is keyed by effect, not by the Stop command.
-                // FORK: not after the cooperative rung, which keeps the process
-                // and the background work it still reports on. Nor after a
-                // subagent stop, which leaves its owner running.
-                Effect.flatMap((outcome) =>
-                  request.subagent !== undefined || outcome === "cooperative"
+                // A targeted Stop repairs only an outcome the provider actually observed.
+                // FORK: nothing is settled after the cooperative rung, which keeps the
+                // process and the background work it still reports on.
+                Effect.flatMap((outcome) => {
+                  const subagentOutcome =
+                    typeof outcome === "object" ? outcome.subagent : undefined;
+                  return (request.subagent !== undefined && subagentOutcome === undefined) ||
+                    outcome === "cooperative"
                     ? Effect.void
                     : threads.dispatch({
                         type: "thread.background-work.settle",
                         commandId: CommandId.make(`${effect.id}:background-work-settled`),
+                        ...(request.subagent === undefined || subagentOutcome === undefined
+                          ? {}
+                          : {
+                              subagent: {
+                                id: request.subagent.id,
+                                stoppedAt: DateTime.makeUnsafe(effect.createdAt),
+                                outcome: subagentOutcome,
+                              },
+                            }),
                         threadId: effect.threadId,
                         providerThreadId: request.providerThreadId,
                         providerTurnId: request.providerTurnId,
-                      }),
-                ),
+                      });
+                }),
                 Effect.mapError(
                   (cause) =>
                     new OrchestrationEffectExecutionError({

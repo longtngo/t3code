@@ -87,7 +87,10 @@ it.each(["workspace-file", "media-file"] as const)(
 
 it("hides host assets with a denied grant while preserving attachments", () => {
   state.session = { authenticated: true, scopes: [] };
-  expect(useAssetUrlState(environmentId, resource)).toEqual({ _tag: "Failure" });
+  expect(useAssetUrlState(environmentId, resource)).toEqual({
+    _tag: "Failure",
+    reason: "missing-file-access",
+  });
   expect(state.assetQuery).not.toHaveBeenCalled();
   expect(useAssetUrlState(environmentId, { _tag: "attachment", attachmentId: "upload" })).toEqual({
     _tag: "Success",
@@ -139,7 +142,10 @@ const hostFileResources = [
 
 it.each(hostFileResources)("gates a $_tag asset on a denied grant", async (hostResource) => {
   state.session = { authenticated: true, scopes: [] };
-  expect(useAssetUrlState(environmentId, hostResource)).toEqual({ _tag: "Failure" });
+  expect(useAssetUrlState(environmentId, hostResource)).toEqual({
+    _tag: "Failure",
+    reason: "missing-file-access",
+  });
   expect(state.assetQuery).not.toHaveBeenCalled();
   await expect(useAssetUrlRefresh(environmentId, hostResource)()).rejects.toThrow(
     "This connection cannot read host files.",

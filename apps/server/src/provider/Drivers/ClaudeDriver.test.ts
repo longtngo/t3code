@@ -140,6 +140,7 @@ describe("ClaudeDriver offerThreadCompaction wiring", () => {
               offer: () => Effect.void,
               setModel: () => Effect.void,
               setPermissionMode: () => Effect.void,
+              applyFlagSettings: () => Effect.void,
               interrupt: Effect.void,
               stopTask: () => Effect.void,
               close: Effect.void,

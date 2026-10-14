@@ -1,8 +1,10 @@
-import { RuntimeRequestId } from "@t3tools/contracts";
+import { EnvironmentId, RuntimeRequestId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { renderDom } from "../../testing/renderDom";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
+
+const threadRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("thread") };
 
 function renderPanel(
   optionCount: number,
@@ -11,6 +13,7 @@ function renderPanel(
     onAdvance?: () => void;
     onDismiss?: () => void;
     dismissible?: boolean;
+    question?: string;
   } = {},
 ) {
   return renderDom(
@@ -24,7 +27,7 @@ function renderPanel(
             {
               id: "question-1",
               header: "Approach",
-              question: "Which approach should we take?",
+              question: handlers.question ?? "Which approach should we take?",
               multiSelect: false,
               options: Array.from({ length: optionCount }, (_unused, index) => ({
                 label: `Option ${index + 1}`,
@@ -35,6 +38,8 @@ function renderPanel(
           dismissible: handlers.dismissible ?? true,
         },
       ]}
+      cwd="/repo"
+      threadRef={threadRef}
       respondingRequestIds={[]}
       answers={{}}
       questionIndex={0}
@@ -53,6 +58,13 @@ function optionsList(view: { find: (selector: string) => HTMLElement | null }) {
 }
 
 describe("ComposerPendingUserInputPanel", () => {
+  it("links URLs in the question text", async () => {
+    const url = "https://accounts.t3.codes/device?user_code=RTJS-TQGS";
+    const view = await renderPanel(2, { question: `Authorize BeeBox at ${url} and confirm.` });
+
+    expect(view.find(`a[href="${url}"]`)).not.toBeNull();
+  });
+
   // The panel's height is subtracted from the timeline's visible area, so an
   // unbounded options list is what buries the conversation behind a question.
   it("bounds the options list and scrolls it internally", async () => {

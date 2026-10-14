@@ -44,7 +44,7 @@ const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 const TEMP_ROOT = NodeFS.realpathSync(NodeOS.tmpdir());
 const makeTempDir = (name: string) =>
   Crypto.Crypto.pipe(
-    Effect.flatMap((crypto) => crypto.randomUUIDv4),
+    Effect.flatMap((crypto) => crypto.randomUUIDv4()),
     Effect.map((id) => NodePath.join(TEMP_ROOT, `${name}-${id}`)),
   );
 const isNativeTestCommandPath =

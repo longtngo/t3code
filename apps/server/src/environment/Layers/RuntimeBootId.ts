@@ -12,7 +12,7 @@ export const RuntimeBootIdLive = Layer.effect(
   RuntimeBootId,
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
-    const bootId = yield* crypto.randomUUIDv4;
+    const bootId = yield* crypto.randomUUIDv4();
     yield* Effect.logInfo("runtime.boot-id.minted", { bootId });
     return { bootId } satisfies typeof RuntimeBootId.Service;
   }),

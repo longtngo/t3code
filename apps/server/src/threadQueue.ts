@@ -126,7 +126,7 @@ const make = Effect.gen(function* () {
   const filePath = path.join(stateDir, THREAD_QUEUE_FILE_NAME);
 
   const stored = yield* loadFile(filePath);
-  const bootId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+  const bootId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
   const document = yield* Ref.make<ThreadQueueDocument>({ bootId, ...stored });
   /** Sliding(1): every message is the whole document, so a slow subscriber needs only the newest. */
   const published = yield* PubSub.sliding<ThreadQueueDocument>(1);

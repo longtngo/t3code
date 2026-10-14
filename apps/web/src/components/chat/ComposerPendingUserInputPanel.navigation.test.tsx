@@ -1,4 +1,4 @@
-import { RuntimeRequestId } from "@t3tools/contracts";
+import { EnvironmentId, RuntimeRequestId, ThreadId } from "@t3tools/contracts";
 import { act, useState, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -27,8 +27,11 @@ vi.mock("../ui/tooltip", async () => {
     TooltipPopup: () => null,
   };
 });
+vi.mock("../ChatMarkdown", () => ({ default: ({ text }: { text: string }) => <p>{text}</p> }));
 
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
+
+const threadRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("thread") };
 
 const prompt = {
   requestId: RuntimeRequestId.make("question-navigation"),
@@ -55,6 +58,8 @@ function Questions({ initialIndex = 0 }: { initialIndex?: number }) {
       <button onClick={() => setQuestionIndex(questionIndex - 1)}>Previous</button>
       <ComposerPendingUserInputPanel
         pendingUserInputs={[prompt]}
+        cwd="/repo"
+        threadRef={threadRef}
         disabled={false}
         respondingRequestIds={[]}
         answers={answers}
