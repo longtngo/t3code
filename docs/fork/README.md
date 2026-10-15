@@ -1345,6 +1345,23 @@ instantiation budget (TS2589, measured at the 47th reconcile; upstream alone sit
 Runtime is unaffected: `RpcServer` reads each RPC and its middleware from `ServerWsRpcGroup` and
 looks the handler up by tag. A new fork RPC goes in both the fork group and the `omit` list.
 
+### 66. Recreating a missing thread worktree never runs `git worktree prune`
+
+`git worktree prune` is repo-global: it drops every registration whose directory is absent right
+now (an unmounted volume, a worktree mid-move), and `repair` cannot restore them. The fork
+recreates a deleted thread worktree with `createWorktree({ ..., reuseRegisteredPath: true })`,
+which takes over that one stale entry. Two sites: `ProviderTurnStartService.ts` and
+`CheckpointRollbackService.ts`. Upstream's #15208 (49th reconcile) added the rollback site with a
+prune in front, which merged without a conflict. Probe, expect `0` and `2`:
+
+```sh
+git grep -n 'pruneWorktrees' -- apps/server/src/orchestration-v2 | grep -v -e '\.test\.' -e testkit | wc -l
+git grep -n 'reuseRegisteredPath: true' -- apps/server/src/orchestration-v2 | grep -v '\.test\.' | wc -l
+```
+
+`GitVcsDriverCore.removeWorktree` still prunes after a remove finds the worktree already gone;
+that is upstream's and outside this rule for now.
+
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 
 On orchestrator v2 the hubs are `EventSink`'s `liveEvents` plus one `PubSub.unbounded` per
