@@ -143,6 +143,7 @@ describe("ClaudeDriver offerThreadCompaction wiring", () => {
               applyFlagSettings: () => Effect.void,
               interrupt: Effect.void,
               stopTask: () => Effect.void,
+              backgroundTasks: () => Effect.succeed(false),
               close: Effect.void,
             };
           }),

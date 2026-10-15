@@ -369,6 +369,7 @@ const makeHarness = (options?: {
               applyFlagSettings: () => Effect.void,
               interrupt: Deferred.succeed(interruptRequested, undefined),
               stopTask: () => Effect.void,
+              backgroundTasks: () => Effect.succeed(false),
               close: Effect.void,
               ...(getContextUsage === undefined ? {} : { getContextUsage }),
             };
