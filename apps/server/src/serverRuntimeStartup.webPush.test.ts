@@ -270,9 +270,10 @@ it.live("the startup finalizer silences web push before shutdown cancels running
       scope,
     );
     yield* Effect.yieldNow;
-    // Control arm: before shutdown the relay does push for this exact event shape.
+    // Control arm: before shutdown the relay does push for a run ending. A failure,
+    // which is never held for the final-finish grace, so `drain` does not wait it out.
     const before = runUpdated(
-      run({ id: RunId.make("run-control"), status: "completed", completedAt: yield* DateTime.now }),
+      run({ id: RunId.make("run-control"), status: "failed", completedAt: yield* DateTime.now }),
     );
     yield* relay.handleEvent(before);
     yield* relay.drain;

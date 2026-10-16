@@ -18,13 +18,17 @@ import type {
   NotificationCategorySettings,
   OrchestrationV2DomainEvent,
   OrchestrationV2ThreadShell,
+  RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FiberSet from "effect/FiberSet";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -136,6 +140,10 @@ export interface PushEdge {
   /** One push per key: a run id or a runtime-request id. */
   readonly key: string;
   readonly edge: ThreadNotifyEdge;
+  /** The finished run; null for an asking edge. */
+  readonly runId: RunId | null;
+  /** When the finished run started; null for an asking edge or an unstarted run. */
+  readonly startedAt: DateTime.Utc | null;
 }
 
 /**
@@ -165,6 +173,8 @@ export function classifyPushEdge(
         threadId: run.threadId,
         key: `run:${run.id}`,
         edge: { kind: "finished", outcome },
+        runId: run.id,
+        startedAt: run.startedAt,
       });
       switch (run.status) {
         case "completed":
@@ -181,7 +191,13 @@ export function classifyPushEdge(
     case "runtime-request.updated": {
       const request = event.payload;
       return request.kind === "user_input" && request.status === "pending"
-        ? { threadId: event.threadId, key: `request:${request.id}`, edge: { kind: "asking" } }
+        ? {
+            threadId: event.threadId,
+            key: `request:${request.id}`,
+            edge: { kind: "asking" },
+            runId: null,
+            startedAt: null,
+          }
         : null;
     }
     default:
@@ -195,10 +211,61 @@ function backgroundLivenessOf(shell: OrchestrationV2ThreadShell): "monitoring" |
 }
 
 /**
+ * Whether another run has started since `runId` did: the latest run started after
+ * it, or another run is executing or waiting on the user. Compares start times, not
+ * ordinals: queued runs do not execute in ordinal order (a delegated completion
+ * jumps the queue, and users reorder it). A start at the same instant is not after.
+ * The shell carries only the highest-ordinal run's start, so a lower-ordinal run
+ * that started later and has already ended is missed (rare: 1 of 3,594 runs ran
+ * out of order over two weeks).
+ */
+function anotherRunStarted(
+  shell: OrchestrationV2ThreadShell,
+  runId: RunId,
+  startedAt: DateTime.Utc | null,
+): boolean {
+  // This run cannot have started after itself, so no id check is needed.
+  const latestStartedAfter =
+    startedAt !== null &&
+    shell.latestRunStartedAt != null &&
+    DateTime.isGreaterThan(shell.latestRunStartedAt, startedAt);
+  const otherExecuting =
+    (shell.activityRunStatus === "running" || shell.activityRunStatus === "waiting") &&
+    shell.activeRunId !== runId;
+  return latestStartedAfter || otherExecuting;
+}
+
+/**
+ * Whether the thread already moved past `runId`: another run started after it, or
+ * another run is live or queued to run next. A wake is queued while the turn it
+ * continues is still running, so its finish is interim. A newer run cancelled
+ * before it started (a withdrawn queued message) does not count, so the final
+ * finish still pushes.
+ * Push only: the foreground notifiers (`apps/web/src/lib/notifier.ts`,
+ * `ThreadNotificationCoordinator`) apply neither this rule nor the final-finish
+ * grace. A wake queued before the finish keeps the thread running -> running there,
+ * so they never see that finish at all.
+ */
+function continuedPast(
+  shell: OrchestrationV2ThreadShell,
+  runId: RunId,
+  startedAt: DateTime.Utc | null,
+): boolean {
+  // A run waiting on the user is not active; `anotherRunStarted` covers it.
+  const otherActive = shell.activeRunId !== null && shell.activeRunId !== runId;
+  const latestPending =
+    shell.latestRunId !== null &&
+    shell.latestRunId !== runId &&
+    ["queued", "preparing", "starting", "running", "waiting"].includes(shell.status);
+  return otherActive || latestPending || anotherRunStarted(shell, runId, startedAt);
+}
+
+/**
  * Which category an edge belongs to. A finish splits on live background work: an
  * agent that fans out to subagents settles once per wake-up, and the last of those
  * is the genuinely final completion. A failure never becomes an interim finish.
- * Mirrored by `categoryForCompletion` in the web notifier.
+ * `categoryForCompletion` in the web notifier mirrors this split; the "working"
+ * liveness from `continuedPast` and the grace are push-only.
  */
 function categoryForEdge(
   edge: ThreadNotifyEdge,
@@ -310,6 +377,19 @@ export function isAllowedPushEndpoint(endpoint: string): boolean {
  */
 export const MAX_REMEMBERED_PUSH_KEYS = 1_000;
 const SEND_TIMEOUT = "15 seconds";
+/**
+ * How long a finish that reads as final waits for a continuation before it pushes.
+ * Claude starts its own wake a median 0.72 s after the finish (169 of 287 within
+ * 5 s), often before that wake reaches the shell. Counted from when the relay takes
+ * the edge.
+ */
+export const FINAL_FINISH_GRACE_MILLIS = 5_000;
+
+/** An edge and when the relay took it (epoch millis). */
+interface TakenEdge {
+  readonly edge: PushEdge;
+  readonly takenAt: number;
+}
 
 export interface WebPushRelayShape {
   /** The VAPID public key (base64url) clients feed to `PushManager.subscribe`. */
@@ -321,7 +401,8 @@ export interface WebPushRelayShape {
   /**
    * Take no new edges for the rest of this process. Server shutdown calls it before
    * it cancels the runs still in flight, which are not the user's work ending; edges
-   * already queued (work that really finished) still send.
+   * already queued (work that really finished) still send, and a finish held for its
+   * grace sends at once, unless another run has started since.
    *
    * Not covered: Ctrl-C in a terminal signals the whole process group, so provider
    * CLIs can exit before this finalizer runs, and the runs they leave may be marked
@@ -450,19 +531,44 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
     ),
   );
 
-  const processEdge = ({ threadId, key, edge }: PushEdge) =>
+  // Held finishes wait in their own fibers, never in the serial worker; `drain` also
+  // waits for them, and `stop` cuts their wait short.
+  const held = yield* FiberSet.make();
+  const stopSignal = yield* Deferred.make<void>();
+
+  /** The shell to classify against, or null when the thread gets no push. */
+  const readShell = (threadId: ThreadId) =>
+    threads.getThreadShell(threadId).pipe(
+      Effect.map((shell) =>
+        // A delegated subagent's run and questions belong to its parent's turn; the
+        // web notifier and the thread list skip these threads too.
+        shell === null ||
+        shell.deletedAt !== null ||
+        shell.lineage.relationshipToParent === "subagent"
+          ? null
+          : shell,
+      ),
+    );
+
+  const livenessFor = (shell: OrchestrationV2ThreadShell, { runId, startedAt }: PushEdge) =>
+    runId !== null && continuedPast(shell, runId, startedAt)
+      ? "working"
+      : backgroundLivenessOf(shell);
+
+  /**
+   * Finishes held for their grace, per thread. An asking push sent meanwhile marks
+   * them, so a held finish whose re-read fails does not replace that question on the
+   * device. Entries live only while held.
+   */
+  const heldFinishes = new Map<ThreadId, Set<{ askedSince: boolean }>>();
+
+  const send = (
+    { threadId, key, runId, edge }: PushEdge,
+    shell: OrchestrationV2ThreadShell,
+    backgroundLiveness: "working" | "monitoring" | null,
+  ) =>
     Effect.gen(function* () {
-      const shell = yield* threads.getThreadShell(threadId);
-      if (shell === null || shell.deletedAt !== null) {
-        return;
-      }
-      // A delegated subagent's run and questions belong to its parent's turn; the
-      // web notifier and the thread list skip these threads too.
-      if (shell.lineage.relationshipToParent === "subagent") {
-        return;
-      }
       const categories = yield* readNotificationCategories;
-      const backgroundLiveness = backgroundLivenessOf(shell);
       const allowed = filterEdgesByCategory([edge], categories, backgroundLiveness);
       if (allowed.length === 0) {
         yield* Effect.logDebug("web push edge suppressed by notification categories", {
@@ -488,20 +594,151 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
         (subscription) => sendToSubscription(subscription, payload),
         { concurrency: 8, discard: true },
       );
-    }).pipe(
-      // Reads failed before anything was sent: forget the key so a later rewrite of
-      // the same run or request can still push. Individual sends never fail here.
-      Effect.catchCause((cause) =>
-        Effect.sync(() => rememberedKeys.delete(key)).pipe(
-          Effect.andThen(
-            Effect.logWarning("web push relay failed for thread", {
-              threadId,
-              cause: Cause.pretty(cause),
-            }),
-          ),
+      if (edge.kind === "asking") {
+        for (const hold of heldFinishes.get(threadId) ?? []) hold.askedSince = true;
+      }
+      // Counts pushes per category in the logs; nothing else records a send.
+      yield* Effect.logInfo("web push dispatched", {
+        threadId,
+        key,
+        runId,
+        category: categoryForEdge(edge, backgroundLiveness),
+        backgroundLiveness,
+      });
+    });
+
+  // Reads failed before anything was sent: forget the key so a later rewrite of the
+  // same run or request can still push. Individual sends never fail here.
+  const forgetOnFailure = ({ threadId, key }: PushEdge) =>
+    Effect.catchCause((cause: Cause.Cause<unknown>) =>
+      Effect.sync(() => rememberedKeys.delete(key)).pipe(
+        Effect.andThen(
+          Effect.logWarning("web push relay failed for thread", {
+            threadId,
+            cause: Cause.pretty(cause),
+          }),
         ),
       ),
     );
+
+  /**
+   * The shell again, for a held finish; `none` when the read failed, so the caller
+   * falls back to the first read rather than losing the finish.
+   */
+  const rereadShell = (threadId: ThreadId) =>
+    readShell(threadId).pipe(
+      Effect.map(Option.some),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("web push re-read failed", {
+          threadId,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(Option.none<OrchestrationV2ThreadShell | null>())),
+      ),
+    );
+
+  /**
+   * After the grace, re-read the shell and send only a finish that still reads as
+   * final; one the agent continued meanwhile is dropped even when interim finishes
+   * push, since a late push could replace a newer question on the device.
+   *
+   * `stop` ends the wait early. Shutdown is about to cancel any run still queued,
+   * so only another run that has STARTED drops the finish (it may have asked
+   * something since); otherwise the finish sends as first read. A failed re-read
+   * on either path sends as first read too, unless a question on this thread was
+   * pushed while the finish was held.
+   */
+  const sendAfterGrace = (
+    pushEdge: PushEdge,
+    runId: RunId,
+    shell: OrchestrationV2ThreadShell,
+    backgroundLiveness: "working" | "monitoring" | null,
+    deadline: number,
+    hold: { readonly askedSince: boolean },
+  ) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const cutShort = yield* Deferred.await(stopSignal).pipe(
+        Effect.as(true),
+        Effect.timeoutOrElse({
+          duration: Math.max(0, deadline - now),
+          orElse: () => Effect.succeed(false),
+        }),
+      );
+      const reread = yield* rereadShell(pushEdge.threadId);
+      if (Option.isNone(reread)) {
+        if (hold.askedSince) {
+          yield* Effect.logDebug("web push finish dropped; a question was pushed since", {
+            threadId: pushEdge.threadId,
+          });
+          return;
+        }
+        return yield* send(pushEdge, shell, backgroundLiveness);
+      }
+      if (reread.value === null) return;
+      if (cutShort) {
+        if (anotherRunStarted(reread.value, runId, pushEdge.startedAt)) {
+          yield* Effect.logDebug("web push finish dropped at stop; another run started", {
+            threadId: pushEdge.threadId,
+          });
+          return;
+        }
+        return yield* send(pushEdge, shell, backgroundLiveness);
+      }
+      const rereadLiveness = livenessFor(reread.value, pushEdge);
+      if (categoryForEdge(pushEdge.edge, rereadLiveness) !== "finished") {
+        yield* Effect.logDebug("web push finish continued during its grace", {
+          threadId: pushEdge.threadId,
+          backgroundLiveness: rereadLiveness,
+        });
+        return;
+      }
+      yield* send(pushEdge, reread.value, rereadLiveness);
+    }).pipe(forgetOnFailure(pushEdge));
+
+  /** Hold a final-looking finish for its grace in its own fiber, outside the worker. */
+  const holdFinish = (
+    pushEdge: PushEdge,
+    runId: RunId,
+    shell: OrchestrationV2ThreadShell,
+    backgroundLiveness: "working" | "monitoring" | null,
+    takenAt: number,
+  ) =>
+    Effect.suspend(() => {
+      const hold = { askedSince: false };
+      const holds = heldFinishes.get(pushEdge.threadId) ?? new Set<{ askedSince: boolean }>();
+      heldFinishes.set(pushEdge.threadId, holds.add(hold));
+      const release = Effect.sync(() => {
+        holds.delete(hold);
+        if (holds.size === 0) heldFinishes.delete(pushEdge.threadId);
+      });
+      return FiberSet.run(
+        held,
+        sendAfterGrace(
+          pushEdge,
+          runId,
+          shell,
+          backgroundLiveness,
+          takenAt + FINAL_FINISH_GRACE_MILLIS,
+          hold,
+        ).pipe(Effect.ensuring(release)),
+      );
+    });
+
+  const processEdge = ({ edge: pushEdge, takenAt }: TakenEdge) =>
+    Effect.gen(function* () {
+      const shell = yield* readShell(pushEdge.threadId);
+      if (shell === null) return;
+      const backgroundLiveness = livenessFor(shell, pushEdge);
+      // A finish that reads as final may be one the agent has not continued yet.
+      if (
+        pushEdge.runId !== null &&
+        categoryForEdge(pushEdge.edge, backgroundLiveness) === "finished"
+      ) {
+        yield* holdFinish(pushEdge, pushEdge.runId, shell, backgroundLiveness, takenAt);
+        return;
+      }
+      yield* send(pushEdge, shell, backgroundLiveness);
+    }).pipe(forgetOnFailure(pushEdge));
 
   const worker = yield* makeDrainableWorker(processEdge);
 
@@ -517,7 +754,8 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
         const oldest = rememberedKeys.values().next().value;
         if (oldest !== undefined) rememberedKeys.delete(oldest);
       }
-      return worker.enqueue(edge).pipe(
+      return Clock.currentTimeMillis.pipe(
+        Effect.flatMap((takenAt) => worker.enqueue({ edge, takenAt })),
         Effect.andThen(
           Effect.logDebug("web push edge queued", {
             threadId: edge.threadId,
@@ -536,11 +774,11 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
   return WebPushRelay.of({
     vapidPublicKey: vapidKeys.publicKey,
     handleEvent,
-    drain: worker.drain,
+    drain: worker.drain.pipe(Effect.andThen(FiberSet.awaitEmpty(held))),
     start,
     stop: Effect.sync(() => {
       stopped = true;
-    }),
+    }).pipe(Effect.andThen(Deferred.succeed(stopSignal, undefined))),
   });
 });
 

@@ -23,10 +23,13 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
@@ -48,6 +51,7 @@ import { layerMemory as SqlitePersistenceMemory } from "../persistence/Sqlite.ts
 import * as ServerSettings from "../serverSettings.ts";
 import { shutdownWithNotificationsSilenced } from "../serverRuntimeStartup.ts";
 import {
+  FINAL_FINISH_GRACE_MILLIS,
   buildPushPayload,
   classifyPushEdge,
   filterEdgesByCategory,
@@ -59,6 +63,7 @@ import {
 const THREAD_ID = ThreadId.make("push-thread");
 const NOW = DateTime.makeUnsafe("2026-10-03T12:00:00.000Z");
 const EARLIER = DateTime.makeUnsafe("2026-10-03T11:00:00.000Z");
+const LATER = DateTime.makeUnsafe("2026-10-03T12:00:01.000Z");
 const providerInstanceId = ProviderInstanceId.make("codex");
 const modelSelection = {
   instanceId: providerInstanceId,
@@ -190,6 +195,10 @@ describe("classifyPushEdge", () => {
     assert.deepEqual(outcome("interrupted"), { kind: "finished", outcome: "interrupted" });
     assert.deepEqual(outcome("cancelled"), { kind: "finished", outcome: "interrupted" });
     assert.equal(classifyPushEdge(runUpdated(run()), NOW)?.key, "run:run-1");
+    assert.equal(
+      classifyPushEdge(runUpdated(run({ startedAt: EARLIER })), NOW)?.startedAt,
+      EARLIER,
+    );
   });
 
   it("raises nothing for a run that is still active or rolled back", () => {
@@ -223,6 +232,8 @@ describe("classifyPushEdge", () => {
       threadId: THREAD_ID,
       key: "request:request-1",
       edge: { kind: "asking" },
+      runId: null,
+      startedAt: null,
     });
     assert.isNull(classifyPushEdge(requestUpdated({ status: "resolved" }), NOW));
     assert.isNull(classifyPushEdge(requestUpdated({ kind: "permission" }), NOW));
@@ -338,6 +349,7 @@ const makeHarness = (input: {
   readonly onDelete?: (endpoint: string) => Effect.Effect<void>;
   readonly threads: WebPushRelayThreads;
   readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
+  readonly listFails?: () => boolean;
 }) =>
   Effect.gen(function* () {
     const harness: Harness = { sent: [], deleted: [] };
@@ -366,7 +378,8 @@ const makeHarness = (input: {
       }),
       Effect.provideService(PushSubscriptionRepository, {
         upsert: () => Effect.die("unused"),
-        list: () => Effect.sync(() => subscriptions),
+        list: () =>
+          input.listFails?.() ? Effect.die("list failed") : Effect.sync(() => subscriptions),
         deleteByEndpoint: ({ endpoint }) =>
           Effect.sync(() => {
             harness.deleted.push(endpoint);
@@ -388,9 +401,18 @@ const stubThreads = (
 
 const FCM = "https://fcm.googleapis.com/fcm/send/device-a";
 
+/** Let a final-looking finish out of its grace, then wait for every edge. */
+const settle = (relay: { readonly drain: Effect.Effect<void> }) =>
+  TestClock.adjust(FINAL_FINISH_GRACE_MILLIS).pipe(Effect.andThen(relay.drain));
+
 describe("WebPushRelay", () => {
-  it.effect("pushes a VAPID-signed, encrypted message when a run completes", () =>
-    Effect.gen(function* () {
+  it.effect("pushes a VAPID-signed, encrypted message when a run completes", () => {
+    const logged: Array<unknown> = [];
+    const dispatchLogger = Logger.make(({ message }) => {
+      const [text, fields] = Array.isArray(message) ? message : [message];
+      if (text === "web push dispatched") logged.push(fields);
+    });
+    return Effect.gen(function* () {
       const requests: Array<HttpClientRequest.HttpClientRequest> = [];
       const { relay, harness } = yield* makeHarness({
         subscriptions: [subscription(FCM)],
@@ -398,7 +420,7 @@ describe("WebPushRelay", () => {
         respond: (request) => Effect.sync(() => requests.push(request)).pipe(Effect.as(201)),
       });
       yield* relay.handleEvent(runUpdated(run()));
-      yield* relay.drain;
+      yield* settle(relay);
       assert.deepEqual(harness.sent, [FCM]);
       const headers = requests[0]!.headers;
       assert.equal(headers["content-encoding"], "aes128gcm");
@@ -407,8 +429,21 @@ describe("WebPushRelay", () => {
       // No trace context leaks to the third-party push service.
       assert.isUndefined(headers["traceparent"]);
       assert.isUndefined(headers["b3"]);
-    }).pipe(Effect.scoped),
-  );
+      // The log line that counts pushes per category.
+      assert.deepEqual(logged, [
+        {
+          threadId: THREAD_ID,
+          key: "run:run-1",
+          runId: "run-1",
+          category: "finished",
+          backgroundLiveness: null,
+        },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Logger.layer([dispatchLogger], { mergeWithExisting: true })),
+    );
+  });
 
   it.effect("pushes nothing for a delegated subagent thread's completion or question", () =>
     Effect.gen(function* () {
@@ -464,7 +499,11 @@ describe("WebPushRelay", () => {
               }),
             ),
           )
-          .pipe(Effect.andThen(Deferred.succeed(release, undefined)), Effect.andThen(relay.drain)),
+          .pipe(
+            Effect.andThen(Deferred.succeed(release, undefined)),
+            // No clock movement: `stop` sends held finishes at once.
+            Effect.andThen(relay.drain),
+          ),
       });
       // Both runs that really finished sent; the cancelled one did not.
       assert.deepEqual(harness.sent, [FCM, FCM]);
@@ -515,7 +554,7 @@ describe("WebPushRelay", () => {
         Effect.provide(ServerSettings.layerTest({})),
       );
       yield* relay.handleEvent(runUpdated(run()));
-      yield* relay.drain;
+      yield* settle(relay);
       assert.lengthOf(captured, 1);
       assert.isNull(captured[0]!.get("traceparent"));
       assert.isNull(captured[0]!.get("b3"));
@@ -535,7 +574,7 @@ describe("WebPushRelay", () => {
         threads: stubThreads(),
         respond: () => Effect.succeed(404),
       });
-      yield* relay.handleEvent(runUpdated(run())).pipe(Effect.andThen(relay.drain));
+      yield* relay.handleEvent(runUpdated(run())).pipe(Effect.andThen(settle(relay)));
       assert.deepEqual(harness.deleted, [notFound]);
     }).pipe(Effect.scoped),
   );
@@ -551,7 +590,7 @@ describe("WebPushRelay", () => {
         respond: () => Effect.succeed(410),
       });
       yield* relay.handleEvent(runUpdated(run()));
-      yield* relay.drain;
+      yield* settle(relay);
       assert.deepEqual(harness.deleted, [gone]);
       const pruneLog = logged.find((line) => line.includes("pruning gone push subscription"));
       assert.include(pruneLog ?? "", "https://fcm.googleapis.com");
@@ -575,11 +614,11 @@ describe("WebPushRelay", () => {
       assert.deepEqual(harness.sent, []);
       failReads = false;
       yield* relay.handleEvent(runUpdated(run(), "event:retry:2"));
-      yield* relay.drain;
+      yield* settle(relay);
       assert.deepEqual(harness.sent, [FCM]);
       // Once delivered, the key is remembered again.
       yield* relay.handleEvent(runUpdated(run(), "event:retry:3"));
-      yield* relay.drain;
+      yield* settle(relay);
       assert.deepEqual(harness.sent, [FCM]);
     }).pipe(Effect.scoped),
   );
@@ -599,7 +638,11 @@ describe("WebPushRelay", () => {
         },
       });
       const runN = (index: number) =>
-        runUpdated(run({ id: RunId.make(`run-bound-${index}`) }), `event:bound:${index}`);
+        // Failures: never held, so each edge is exactly one read.
+        runUpdated(
+          run({ id: RunId.make(`run-bound-${index}`), status: "failed" }),
+          `event:bound:${index}`,
+        );
       for (let index = 0; index < bound; index += 1) {
         yield* relay.handleEvent(runN(index));
       }
@@ -628,7 +671,7 @@ describe("WebPushRelay", () => {
       yield* relay.handleEvent(requestUpdated({ kind: "permission" }));
       // `finished` is off for this user: a completion stays silent.
       yield* relay.handleEvent(runUpdated(run()));
-      yield* relay.drain;
+      yield* settle(relay);
       assert.deepEqual(harness.sent, []);
 
       // A failure is its own category and still pushes, exactly once per run.
@@ -679,6 +722,7 @@ describe("WebPushRelay", () => {
         onDelete: () => Deferred.succeed(pruned, undefined).pipe(Effect.asVoid),
       });
       yield* relay.handleEvent(runUpdated(run()));
+      yield* TestClock.adjust(FINAL_FINISH_GRACE_MILLIS);
       // Both resolve while the hung endpoint is still outstanding.
       yield* Deferred.await(pruned);
       yield* Deferred.await(delivered);
@@ -786,7 +830,8 @@ it.live("keeps draining the domain-event hub while every push send is stuck", ()
     yield* sink.write({
       events: [
         runUpdated(
-          run({ id: RunId.make("run-first"), threadId: threadA.id, completedAt }),
+          // A failure is never held, so the worker itself is stuck in this send.
+          run({ id: RunId.make("run-first"), threadId: threadA.id, status: "failed", completedAt }),
           "event:push-stuck:first",
         ),
       ],
@@ -829,5 +874,742 @@ it.live("keeps draining the domain-event hub while every push send is stuck", ()
         Layer.succeed(References.MinimumLogLevel, "Debug"),
       ),
     ),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// A finish the thread already continued past is interim
+// ---------------------------------------------------------------------------
+
+describe("WebPushRelay interim finish by a newer run", () => {
+  const noInterim = { notificationCategories: { finishedBackground: false } };
+  const wakeQueued = shell({ latestRunId: RunId.make("run-wake"), status: "queued" });
+
+  it.effect("never files a failure or a question as interim", () =>
+    Effect.gen(function* () {
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: stubThreads(wakeQueued),
+        settings: noInterim,
+      });
+      yield* relay.handleEvent(runUpdated(run({ status: "failed" })));
+      yield* relay.handleEvent(requestUpdated());
+      yield* relay.drain;
+      assert.deepEqual(harness.sent, [FCM, FCM]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("falls back to background work when the shell names no latest run", () =>
+    Effect.gen(function* () {
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: stubThreads(
+          shell({ latestRunId: null, status: "running", latestRunStartedAt: NOW }),
+        ),
+        settings: noInterim,
+      });
+      yield* relay.handleEvent(runUpdated(run()));
+      yield* settle(relay);
+      assert.deepEqual(harness.sent, [FCM]);
+    }).pipe(Effect.scoped),
+  );
+
+  /**
+   * Writes run 1 running, `before`, run 1 completed, then `after` through the real
+   * sink, and returns what the relay sent for run 1's completion read from the
+   * real projection.
+   */
+  const sentForCompletion = (
+    name: string,
+    before: ReadonlyArray<Partial<OrchestrationV2Run>>,
+    after: ReadonlyArray<Partial<OrchestrationV2Run>> = [],
+    /** Written 1 s into the grace, after the relay first read the shell. */
+    during: ReadonlyArray<Partial<OrchestrationV2Run>> = [],
+    settings: Parameters<typeof ServerSettings.layerTest>[0] = noInterim,
+  ) =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: { streamDomainEvents: Stream.empty, getThreadShell: store.getThreadShell },
+        settings,
+      });
+      // Completions must postdate the relay's start to count as news.
+      const now = yield* DateTime.now;
+      const thread = appThread(ThreadId.make(`thread:${name}`));
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make(`event:${name}:created`),
+            type: "thread.created" as const,
+            threadId: thread.id,
+            providerInstanceId,
+            occurredAt: now,
+            payload: thread,
+          },
+        ],
+      });
+      // Run 2 starts queued; each override is its next state.
+      const next = (overrides: Partial<OrchestrationV2Run>) =>
+        run({
+          id: RunId.make(`${name}-2`),
+          threadId: thread.id,
+          ordinal: 2,
+          status: "queued",
+          startedAt: null,
+          completedAt: null,
+          userMessageId: MessageId.make(`${name}-m2`),
+          ...overrides,
+        });
+      const first = run({
+        id: RunId.make(`${name}-1`),
+        threadId: thread.id,
+        startedAt: now,
+        completedAt: now,
+      });
+      const writes = [
+        { ...first, status: "running" as const, completedAt: null },
+        ...before.map(next),
+        first,
+        ...after.map(next),
+      ];
+      for (const [index, written] of writes.entries()) {
+        yield* sink.write({ events: [runUpdated(written, `event:${name}:${index}`)] });
+      }
+      yield* relay.handleEvent(runUpdated(first));
+      if (during.length > 0) {
+        yield* TestClock.adjust(1_000);
+        for (const [index, written] of during.map(next).entries()) {
+          yield* sink.write({ events: [runUpdated(written, `event:${name}:during:${index}`)] });
+        }
+      }
+      yield* settle(relay);
+      return harness.sent;
+    }).pipe(Effect.scoped, Effect.provide(sinkLayer));
+
+  it.effect("pushes the final finish of a thread's only run", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(yield* sentForCompletion("solo", []), [FCM]);
+    }),
+  );
+
+  it.effect("silences a finish whose wake was queued before it", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(yield* sentForCompletion("wake", [{}]), []);
+    }),
+  );
+
+  it.effect("silences a finish whose wake already started or ended", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      // The wake starts after the run it continues (each call reads the clock anew).
+      const wakeStart = DateTime.add(now, { hours: 1 });
+      const running = { status: "running" as const, startedAt: wakeStart };
+      assert.deepEqual(yield* sentForCompletion("wake-running", [{}], [running]), []);
+      assert.deepEqual(
+        yield* sentForCompletion(
+          "wake-done",
+          [{}],
+          [running, { ...running, status: "completed", completedAt: wakeStart }],
+        ),
+        [],
+      );
+    }),
+  );
+
+  it.effect("pushes a finish whose newer run is held or cancelled unstarted", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const cancelled = { status: "cancelled" as const, completedAt: now };
+      assert.deepEqual(yield* sentForCompletion("held", [{ queueHeld: true }]), [FCM]);
+      assert.deepEqual(yield* sentForCompletion("wake-cancelled", [{}], [cancelled]), [FCM]);
+    }),
+  );
+
+  it.effect("silences a final-looking finish whose wake arrives inside the grace", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      // The wake starts after the run it continues (each call reads the clock anew).
+      const wakeStart = DateTime.add(now, { hours: 1 });
+      const running = { status: "running" as const, startedAt: wakeStart };
+      // Queued at +1 s, and queued, started and already done at +1 s.
+      assert.deepEqual(yield* sentForCompletion("late-wake", [], [], [{}]), []);
+      assert.deepEqual(
+        yield* sentForCompletion(
+          "late-wake-done",
+          [],
+          [],
+          [{}, running, { ...running, status: "completed", completedAt: wakeStart }],
+        ),
+        [],
+      );
+      // Withdrawn inside the grace: the finish was final after all.
+      assert.deepEqual(
+        yield* sentForCompletion(
+          "late-withdrawn",
+          [],
+          [],
+          [{}, { status: "cancelled", completedAt: now }],
+        ),
+        [FCM],
+      );
+    }),
+  );
+
+  it.effect("drops a held finish the agent continued, even with interim finishes on", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(yield* sentForCompletion("late-wake-all-on", [], [], [{}], {}), []);
+    }),
+  );
+
+  it.effect("decides moved-on by what ran, not by run order", () =>
+    Effect.gen(function* () {
+      const sentFor = (current: OrchestrationV2ThreadShell) =>
+        Effect.gen(function* () {
+          const { relay, harness } = yield* makeHarness({
+            subscriptions: [subscription(FCM)],
+            threads: stubThreads(current),
+            settings: noInterim,
+          });
+          // This run started at NOW.
+          yield* relay.handleEvent(runUpdated(run()));
+          yield* settle(relay);
+          return harness.sent;
+        }).pipe(Effect.scoped);
+      const other = RunId.make("run-other");
+      const self = RunId.make("run-1");
+      // Another run is executing, or waiting on a question, while this run is the latest.
+      assert.deepEqual(
+        yield* sentFor(shell({ latestRunId: self, activeRunId: other, latestRunStartedAt: NOW })),
+        [],
+      );
+      assert.deepEqual(
+        yield* sentFor(
+          shell({ latestRunId: self, activityRunStatus: "waiting", latestRunStartedAt: NOW }),
+        ),
+        [],
+      );
+      // The activity is this run's own (a stale read): final.
+      assert.deepEqual(
+        yield* sentFor(
+          shell({
+            latestRunId: self,
+            activeRunId: self,
+            activityRunStatus: "running",
+            latestRunStartedAt: NOW,
+          }),
+        ),
+        [FCM],
+      );
+      // A newer-ordinal run that started after this one, versus one that ran before it.
+      assert.deepEqual(
+        yield* sentFor(
+          shell({ latestRunId: other, status: "completed", latestRunStartedAt: LATER }),
+        ),
+        [],
+      );
+      assert.deepEqual(
+        yield* sentFor(
+          shell({ latestRunId: other, status: "completed", latestRunStartedAt: EARLIER }),
+        ),
+        [FCM],
+      );
+      // The same start instant is not "after": the finish stays final.
+      assert.deepEqual(
+        yield* sentFor(shell({ latestRunId: other, status: "completed", latestRunStartedAt: NOW })),
+        [FCM],
+      );
+    }),
+  );
+
+  /**
+   * Writes `[ordinal, status]` steps through the real sink in order (a run's
+   * startedAt is the step it first left the queue, completedAt the step it ended),
+   * takes the edge for `edgeOrdinal`'s completion, writes `during` 1 s into the
+   * grace, and returns what the relay sent.
+   */
+  const sentForSteps = (
+    name: string,
+    steps: ReadonlyArray<readonly [number, OrchestrationV2Run["status"]]>,
+    edgeOrdinal: number,
+    during: ReadonlyArray<readonly [number, OrchestrationV2Run["status"]]> = [],
+  ) =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: { streamDomainEvents: Stream.empty, getThreadShell: store.getThreadShell },
+        settings: noInterim,
+      });
+      const now = yield* DateTime.now;
+      const thread = appThread(ThreadId.make(`thread:${name}`));
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make(`event:${name}:created`),
+            type: "thread.created" as const,
+            threadId: thread.id,
+            providerInstanceId,
+            occurredAt: now,
+            payload: thread,
+          },
+        ],
+      });
+      const startedAt = new Map<number, DateTime.Utc>();
+      let index = 0;
+      const write = ([ordinal, status]: readonly [number, OrchestrationV2Run["status"]]) => {
+        const at = DateTime.add(now, { milliseconds: index });
+        if (status !== "queued" && !startedAt.has(ordinal)) startedAt.set(ordinal, at);
+        const written = run({
+          id: RunId.make(`${name}-${ordinal}`),
+          threadId: thread.id,
+          ordinal,
+          status,
+          queuePosition: status === "queued" ? ordinal : null,
+          startedAt: startedAt.get(ordinal) ?? null,
+          completedAt: ["completed", "failed", "cancelled", "interrupted"].includes(status)
+            ? at
+            : null,
+          userMessageId: MessageId.make(`${name}-m${ordinal}`),
+        });
+        return sink
+          .write({ events: [runUpdated(written, `event:${name}:${index++}`)] })
+          .pipe(Effect.as(written));
+      };
+      let edge: OrchestrationV2Run | null = null;
+      for (const step of steps) {
+        const written = yield* write(step);
+        if (step[0] === edgeOrdinal && step[1] === "completed") edge = written;
+      }
+      assert.isNotNull(edge);
+      yield* relay.handleEvent(runUpdated(edge!));
+      if (during.length > 0) {
+        yield* TestClock.adjust(1_000);
+        for (const step of during) yield* write(step);
+      }
+      yield* settle(relay);
+      return harness.sent;
+    }).pipe(Effect.scoped, Effect.provide(sinkLayer));
+
+  it.effect("pushes the final finish of a run that executed after a higher-ordinal run", () =>
+    Effect.gen(function* () {
+      // Run 3 (a delegated completion, or a reordered queue) jumped ahead of run 2.
+      const sent = yield* sentForSteps(
+        "jump-final",
+        [
+          [1, "running"],
+          [2, "queued"],
+          [3, "queued"],
+          [1, "completed"],
+          [3, "running"],
+          [3, "completed"],
+          [2, "running"],
+          [2, "completed"],
+        ],
+        2,
+      );
+      assert.deepEqual(sent, [FCM]);
+    }),
+  );
+
+  it.effect("silences a finish whose lower-ordinal queued run starts inside the grace", () =>
+    Effect.gen(function* () {
+      const sent = yield* sentForSteps(
+        "jump-interim",
+        [
+          [1, "running"],
+          [2, "queued"],
+          [3, "queued"],
+          [1, "completed"],
+          [3, "running"],
+          [3, "completed"],
+        ],
+        3,
+        [[2, "running"]],
+      );
+      assert.deepEqual(sent, []);
+    }),
+  );
+
+  it.effect("drops a held finish whose re-read fails after a newer question on its thread", () =>
+    Effect.gen(function* () {
+      // Two threads; each finish's re-read fails. Only thread A asked meanwhile.
+      const other = ThreadId.make("push-other");
+      const readsOf = new Map<string, number>();
+      const firstReads = yield* Deferred.make<void>();
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: (threadId) =>
+            Effect.suspend(() => {
+              const reads = (readsOf.get(threadId) ?? 0) + 1;
+              readsOf.set(threadId, reads);
+              if (threadId === other && reads === 1) {
+                return Deferred.succeed(firstReads, undefined).pipe(
+                  Effect.as(shell({ id: threadId })),
+                );
+              }
+              // Thread A: finish, then question; each thread's next read fails.
+              const failsAt = threadId === other ? 2 : 3;
+              return reads === failsAt
+                ? Effect.fail({ _tag: "ShellUnreadable" })
+                : Effect.succeed(shell({ id: threadId }));
+            }),
+        },
+      });
+      yield* relay.handleEvent(runUpdated(run()));
+      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-other"), threadId: other })));
+      yield* Deferred.await(firstReads);
+      yield* relay.handleEvent(requestUpdated());
+      yield* settle(relay);
+      assert.equal(readsOf.get(THREAD_ID), 3);
+      assert.equal(readsOf.get(other), 2);
+      // The question and the other thread's finish; not thread A's late finish.
+      assert.deepEqual(harness.sent, [FCM, FCM]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("counts the grace from when the relay took the edge, not from its first read", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      let reads = 0;
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: () =>
+            Effect.suspend(() => {
+              reads += 1;
+              return reads === 1
+                ? Deferred.await(release).pipe(Effect.as(shell()))
+                : Effect.succeed(shell());
+            }),
+        },
+      });
+      yield* relay.handleEvent(runUpdated(run()));
+      // A backed-up worker: the whole grace passes before the first read returns.
+      yield* TestClock.adjust(FINAL_FINISH_GRACE_MILLIS);
+      yield* Deferred.succeed(release, undefined);
+      yield* TestClock.adjust(1);
+      const drained = yield* Effect.forkChild(relay.drain);
+      for (let i = 0; i < 20; i += 1) yield* Effect.yieldNow;
+      assert.deepEqual(harness.sent, [FCM]);
+      yield* Fiber.interrupt(drained);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("sends nothing for a thread deleted while its finish was held", () => {
+    const warnings: Array<string> = [];
+    const capture = Logger.make(({ message, logLevel }) => {
+      const [text] = Array.isArray(message) ? message : [message];
+      if (logLevel === "Warn") warnings.push(String(text));
+    });
+    return Effect.gen(function* () {
+      const firstRead = yield* Deferred.make<void>();
+      let current = shell();
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: () => Deferred.succeed(firstRead, undefined).pipe(Effect.as(current)),
+        },
+      });
+      yield* relay.handleEvent(runUpdated(run()));
+      yield* Deferred.await(firstRead);
+      current = shell({ deletedAt: NOW });
+      yield* settle(relay);
+      assert.deepEqual(harness.sent, []);
+      // A deleted thread is a decision, not a failed read.
+      assert.deepEqual(warnings, []);
+    }).pipe(Effect.scoped, Effect.provide(Logger.layer([capture], { mergeWithExisting: true })));
+  });
+
+  it.effect("forgets a held finish whose send failed, so a rewrite of that run pushes", () => {
+    const warnings: Array<string> = [];
+    const capture = Logger.make(({ message, logLevel }) => {
+      const [text] = Array.isArray(message) ? message : [message];
+      if (logLevel === "Warn") warnings.push(String(text));
+    });
+    return Effect.gen(function* () {
+      let failList = true;
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: stubThreads(),
+        listFails: () => failList,
+      });
+      yield* relay.handleEvent(runUpdated(run(), "event:list:1"));
+      yield* settle(relay);
+      assert.deepEqual(harness.sent, []);
+      assert.include(warnings, "web push relay failed for thread");
+      failList = false;
+      yield* relay.handleEvent(runUpdated(run(), "event:list:2"));
+      yield* settle(relay);
+      assert.deepEqual(harness.sent, [FCM]);
+    }).pipe(Effect.scoped, Effect.provide(Logger.layer([capture], { mergeWithExisting: true })));
+  });
+
+  it.effect("stop sends a held finish once as final, without waiting out the grace", () =>
+    Effect.gen(function* () {
+      const firstRead = yield* Deferred.make<void>();
+      let current = shell();
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: () => Deferred.succeed(firstRead, undefined).pipe(Effect.as(current)),
+        },
+        settings: noInterim,
+      });
+      yield* relay.handleEvent(runUpdated(run()));
+      yield* Deferred.await(firstRead);
+      // A wake that shutdown is about to cancel does not undo the finish it held.
+      current = wakeQueued;
+      yield* relay.stop;
+      yield* relay.drain;
+      assert.deepEqual(harness.sent, [FCM]);
+      yield* settle(relay);
+      assert.deepEqual(harness.sent, [FCM]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("stop sends a held finish whose other run is only preparing", () =>
+    Effect.gen(function* () {
+      const firstRead = yield* Deferred.make<void>();
+      let current = shell();
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: () => Deferred.succeed(firstRead, undefined).pipe(Effect.as(current)),
+        },
+        settings: noInterim,
+      });
+      yield* relay.handleEvent(runUpdated(run()));
+      yield* Deferred.await(firstRead);
+      current = shell({
+        latestRunId: RunId.make("run-wake"),
+        status: "preparing",
+        activeRunId: RunId.make("run-wake"),
+        activityRunStatus: "preparing",
+      });
+      yield* relay.stop;
+      yield* relay.drain;
+      assert.deepEqual(harness.sent, [FCM]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("stop drops a held finish once another run has started and asked", () =>
+    Effect.gen(function* () {
+      const dropped = (name: string, afterFirstRead: OrchestrationV2ThreadShell) =>
+        Effect.gen(function* () {
+          const firstRead = yield* Deferred.make<void>();
+          const questionSent = yield* Deferred.make<void>();
+          let current = shell();
+          const { relay, harness } = yield* makeHarness({
+            subscriptions: [subscription(FCM)],
+            threads: {
+              streamDomainEvents: Stream.empty,
+              getThreadShell: () => Deferred.succeed(firstRead, undefined).pipe(Effect.as(current)),
+            },
+            respond: () => Deferred.succeed(questionSent, undefined).pipe(Effect.as(201)),
+          });
+          yield* relay.handleEvent(runUpdated(run()));
+          yield* Deferred.await(firstRead);
+          // The other run started and asked a question, which pushed at once.
+          current = afterFirstRead;
+          yield* relay.handleEvent(requestUpdated());
+          yield* Deferred.await(questionSent);
+          assert.deepEqual(harness.sent, [FCM], name);
+          // A late "Task finished" would replace the question on the device.
+          yield* relay.stop;
+          yield* relay.drain;
+          assert.deepEqual(harness.sent, [FCM], name);
+        }).pipe(Effect.scoped);
+      // A newer run that started later (and has since ended).
+      yield* dropped(
+        "started later",
+        shell({
+          latestRunId: RunId.make("run-wake"),
+          status: "completed",
+          latestRunStartedAt: LATER,
+        }),
+      );
+      // A lower-ordinal queued run executing now, while the latest run is this one.
+      yield* dropped(
+        "executing",
+        shell({
+          latestRunId: RunId.make("run-1"),
+          latestRunStartedAt: NOW,
+          activeRunId: RunId.make("run-0"),
+          activityRunStatus: "running",
+        }),
+      );
+    }),
+  );
+
+  it.effect("stop sends a held finish as first read when its re-read fails", () =>
+    Effect.gen(function* () {
+      const firstRead = yield* Deferred.make<void>();
+      let reads = 0;
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: () =>
+            Effect.suspend(() => {
+              reads += 1;
+              return reads === 1
+                ? Deferred.succeed(firstRead, undefined).pipe(Effect.as(shell()))
+                : Effect.fail({ _tag: "ShellUnreadable" });
+            }),
+        },
+      });
+      yield* relay.handleEvent(runUpdated(run()));
+      yield* Deferred.await(firstRead);
+      yield* relay.stop;
+      yield* relay.drain;
+      assert.equal(reads, 2);
+      assert.deepEqual(harness.sent, [FCM]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("sends a held finish as first read when its re-read after the grace fails", () =>
+    Effect.gen(function* () {
+      // Two threads; only the first one's second read fails.
+      const flaky = ThreadId.make("push-flaky");
+      const readsOf = new Map<string, number>();
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: (threadId) =>
+            Effect.suspend(() => {
+              const reads = (readsOf.get(threadId) ?? 0) + 1;
+              readsOf.set(threadId, reads);
+              return threadId === flaky && reads === 2
+                ? Effect.fail({ _tag: "ShellUnreadable" })
+                : Effect.succeed(shell({ id: threadId }));
+            }),
+        },
+      });
+      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-flaky"), threadId: flaky })));
+      yield* relay.handleEvent(runUpdated(run()));
+      yield* settle(relay);
+      assert.deepEqual(readsOf.get(flaky), 2);
+      assert.deepEqual(harness.sent, [FCM, FCM]);
+      // Sent, so the key stays remembered: a rewrite does not push again.
+      yield* relay.handleEvent(
+        runUpdated(run({ id: RunId.make("run-flaky"), threadId: flaky }), "event:rewrite"),
+      );
+      yield* settle(relay);
+      assert.deepEqual(harness.sent, [FCM, FCM]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("pushes a final finish once, and only after the grace", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const firstRead = yield* Deferred.make<void>();
+      const releaseReread = yield* Deferred.make<void>();
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: () =>
+            Effect.sync(() => (reads += 1)).pipe(
+              Effect.andThen(Deferred.succeed(firstRead, undefined)),
+              // The re-read waits for the test, so `drain` must wait for the held edge.
+              Effect.andThen(
+                Effect.suspend(() => (reads > 1 ? Deferred.await(releaseReread) : Effect.void)),
+              ),
+              Effect.as(shell()),
+            ),
+        },
+      });
+      yield* relay.handleEvent(runUpdated(run()));
+      yield* Deferred.await(firstRead);
+      // The same run re-written during the hold is the same push.
+      yield* relay.handleEvent(runUpdated(run(), "event:rewrite"));
+      yield* TestClock.adjust(FINAL_FINISH_GRACE_MILLIS - 1);
+      assert.deepEqual(harness.sent, []);
+      assert.equal(reads, 1);
+      yield* TestClock.adjust(1);
+      const drained = yield* Effect.forkChild(relay.drain);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      // The held edge is still inside its re-read: `drain` waits for it.
+      assert.isUndefined(drained.pollUnsafe());
+      yield* Deferred.succeed(releaseReread, undefined);
+      yield* Fiber.join(drained);
+      assert.deepEqual(harness.sent, [FCM]);
+      assert.equal(reads, 2);
+      yield* settle(relay);
+      assert.deepEqual(harness.sent, [FCM]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "sends another thread's failure while a finish is held",
+    () =>
+      Effect.gen(function* () {
+        const firstSend = yield* Deferred.make<void>();
+        const { relay, harness } = yield* makeHarness({
+          subscriptions: [subscription(FCM)],
+          threads: {
+            streamDomainEvents: Stream.empty,
+            getThreadShell: (threadId) => Effect.succeed(shell({ id: threadId })),
+          },
+          respond: () => Deferred.succeed(firstSend, undefined).pipe(Effect.as(201)),
+        });
+        yield* relay.handleEvent(runUpdated(run()));
+        const other = ThreadId.make("push-other");
+        yield* relay.handleEvent(
+          runUpdated(run({ id: RunId.make("run-other"), threadId: other, status: "failed" })),
+        );
+        // No clock movement: a hold inside the serial worker would never get here.
+        yield* Deferred.await(firstSend);
+        assert.deepEqual(harness.sent, [FCM]);
+        yield* settle(relay);
+        assert.deepEqual(harness.sent, [FCM, FCM]);
+      }).pipe(Effect.scoped),
+    10_000,
+  );
+
+  it.effect(
+    "a held finish ends with the relay's scope, and drain still resolves",
+    () =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const failureSent = yield* Deferred.make<void>();
+        const { relay, harness } = yield* makeHarness({
+          subscriptions: [subscription(FCM)],
+          threads: {
+            streamDomainEvents: Stream.empty,
+            getThreadShell: (threadId) => Effect.succeed(shell({ id: threadId })),
+          },
+          respond: () => Deferred.succeed(failureSent, undefined).pipe(Effect.as(201)),
+        }).pipe(Scope.provide(scope));
+        yield* relay.handleEvent(runUpdated(run()));
+        // The serial worker reaches this failure only after it has held the finish.
+        yield* relay.handleEvent(
+          runUpdated(
+            run({
+              id: RunId.make("run-other"),
+              threadId: ThreadId.make("push-other"),
+              status: "failed",
+            }),
+          ),
+        );
+        yield* Deferred.await(failureSent);
+        // Without `stop` first; server shutdown calls `stop` before this scope closes.
+        yield* Scope.close(scope, Exit.void);
+        yield* relay.drain;
+        yield* TestClock.adjust(FINAL_FINISH_GRACE_MILLIS);
+        assert.deepEqual(harness.sent, [FCM]);
+      }),
+    10_000,
   );
 });

@@ -1392,7 +1392,9 @@ reader that stopped taking, so each reader needs its own bound.
   handler must take promptly and hand work to a `DrainableWorker` carrying ids, never event
   bodies. Today: PullRequestSyncReactor, ThreadPullRequestService, ThreadSettlementService,
   AgentAwarenessRelay, StorageCleanup, WebPushRelay. WebPushRelay's handler classifies the event
-  and enqueues a run or request id; its sends (up to 15 s each) run on the worker. Test:
+  and enqueues a run or request id; its reads and sends (up to 15 s each) run on the worker,
+  except a final-looking finish, which waits out its grace in its own fiber (a `FiberSet`)
+  outside the worker; `drain` waits for those too. Test:
   `push/WebPushRelay.test.ts` "keeps draining the domain-event hub while every push send is
   stuck". The one inline-blocking reader is the Orchestrator's
   terminal-run handler, which subscribes to `run.updated` only, so a wait backs up only those.

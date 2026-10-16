@@ -43,7 +43,11 @@ export interface ThreadCompletion {
   readonly backgroundLiveness: ThreadBackgroundLiveness;
 }
 
-/** Mirrors the server-side mapping in `WebPushRelay.filterEdgesByCategory`. */
+/**
+ * Mirrors the category split in `WebPushRelay.categoryForEdge`. Push alone also
+ * treats a finish the thread already continued past as interim, and holds a final
+ * finish for a short grace; neither applies here.
+ */
 function categoryForCompletion(completion: ThreadCompletion): keyof NotificationCategorySettings {
   if (completion.outcome === "error") {
     return "failed";

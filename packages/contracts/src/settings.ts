@@ -1348,19 +1348,24 @@ export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
  * live background work rather than on what started the turn is what keeps the
  * genuinely-final alert: at the true end of a run nothing is left running, so it
  * lands in `finished` and survives silencing the interim ones.
+ *
+ * Background (push) notifications also file a finish as interim when the agent
+ * had already moved on to its next step (so it alerts under `finishedBackground`
+ * when that is on), and hold a `finished` alert a few seconds and drop it when
+ * the agent continues meanwhile, whatever the interim setting.
  */
 export const NOTIFICATION_CATEGORIES = [
   {
     key: "finished",
     label: "Task finished",
     description:
-      "A task stopped running and nothing was left working in the background. This is the alert that fires when a whole piece of work is genuinely done.",
+      "A task stopped running and nothing was left working in the background. This is the alert that fires when a whole piece of work is genuinely done. Background notifications wait a few seconds before raising it, so a finish the agent carries on from within those seconds raises no background alert. One whose next step was already queued is an Interim finish instead.",
   },
   {
     key: "finishedBackground",
     label: "Interim finish",
     description:
-      "A task stopped running while subagents or other background work were still going. On agent runs that fan out to subagents these are most of the notifications you get.",
+      "A task stopped running while subagents or other background work were still going, or after the agent had already moved on to its next step. On agent runs that fan out to subagents these are most of the notifications you get.",
   },
   {
     key: "needsInput",

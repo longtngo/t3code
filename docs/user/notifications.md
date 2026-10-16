@@ -21,12 +21,12 @@ Below the delivery switches, four categories decide which events deserve an
 alert. All of them start on, and they apply to every device connected to this
 environment.
 
-| Category                   | Raised when                                                                                                                                    |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Task finished**          | A task stopped running and nothing was left working in the background. This is the alert that means a whole piece of work is done.             |
-| **Interim finish**         | A task stopped running while subagents or other background work were still going.                                                              |
-| **Agent asked a question** | An agent is waiting on an answer before it can continue. Only background notifications raise this one, so it has no effect in the desktop app. |
-| **Task failed**            | A task stopped because of an error.                                                                                                            |
+| Category                   | Raised when                                                                                                                                                                                                                                                                              |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Task finished**          | A task stopped running and nothing was left working in the background. This is the alert that means a whole piece of work is done. Background notifications wait a few seconds before raising it, so a finish the agent carries on from within those seconds raises no background alert. |
+| **Interim finish**         | A task stopped running while subagents or other background work were still going, or after the agent had already moved on to its next step.                                                                                                                                              |
+| **Agent asked a question** | An agent is waiting on an answer before it can continue. Only background notifications raise this one, so it has no effect in the desktop app.                                                                                                                                           |
+| **Task failed**            | A task stopped because of an error.                                                                                                                                                                                                                                                      |
 
 ### If you are getting too many notifications
 
@@ -40,9 +40,13 @@ large majority of the alerts you receive, and none of them mean the work is done
 Turning them off is safe: the split is based on whether anything was still
 running at that moment, not on what woke the agent up. At the true end of a run
 nothing is left working, so the final alert lands in **Task finished** and still
-reaches you. The one exception is a background command the agent leaves running,
-such as a dev server: until it stops, the thread still has work going, so its
-finishes stay interim.
+reaches you. A finish the agent carries on from within a few seconds raises no
+background alert, which is why **Task finished** waits a few seconds before it is
+raised. If the agent's next step was already queued when the task stopped, the
+finish is an **Interim finish**, so it alerts only while that category is on. The
+one exception is a background command the agent leaves running, such as a dev
+server: until it stops, the thread still has work going, so its finishes stay
+interim.
 
 Leaving **Task failed** and **Agent asked a question** on is worth it. Both are
 rare, and both are the kind of thing you want to hear about immediately —
