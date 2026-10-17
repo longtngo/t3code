@@ -533,13 +533,8 @@ describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {
     expect(
       hasUnseenCompletion({
-        hasActionableProposedPlan: false,
-        hasPendingApprovals: false,
-        hasPendingUserInput: false,
-        interactionMode: "default",
         latestRun: makeLatestRun(),
         lastVisitedAt: "2026-03-09T10:04:00.000Z",
-        runtime: null,
       }),
     ).toBe(true);
   });
@@ -547,13 +542,8 @@ describe("hasUnseenCompletion", () => {
   it("treats a missing client visit marker as read", () => {
     expect(
       hasUnseenCompletion({
-        hasActionableProposedPlan: false,
-        hasPendingApprovals: false,
-        hasPendingUserInput: false,
-        interactionMode: "default",
         latestRun: makeLatestRun(),
         lastVisitedAt: undefined,
-        runtime: null,
       }),
     ).toBe(false);
   });

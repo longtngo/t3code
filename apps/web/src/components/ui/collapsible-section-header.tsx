@@ -23,8 +23,8 @@ export function CollapsibleSectionHeader({
   tone?: keyof typeof tones;
   variant?: "default" | "panel";
   accessory?: ReactNode;
-  // Rendered as " (N)" after the label; a long label truncates, the count never does.
-  count?: number | undefined;
+  // Count text rendered in parentheses after the label; a long label truncates, the count never does.
+  count?: number | string | undefined;
 }) {
   return (
     <button

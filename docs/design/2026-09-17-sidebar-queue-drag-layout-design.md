@@ -33,7 +33,7 @@ While a main-list drag runs, `SidebarQueueBlock` renders its header only, and th
 - the rows the preview would have covered are gone, so nothing can overlap them;
 - the freed height plus the shelf slack absorbs the label space and any cross-section growth;
 - the drop zone sits in the sidebar's empty region, where no preview moves it (P3);
-- the header carries the count (`Queue (3)`) while the rows are hidden, exactly as a user-collapsed Queue does;
+- the header carries the count (`Queue (1/3)`, active of total), which it shows whether or not the rows do;
 - the open thread keeps its Queue row, again as in a user-collapsed Queue.
 
 **The collapse is skipped when the thread list already scrolls** (measured at pickup, `sidebarScroller`). Removing height from a scrolling list makes the browser clamp `scrollTop`, which slides every row - the picked-up one included - out from under the pointer; a restore effect cannot undo it, because the clamp is a physical bound (max `scrollTop` 76 against a stored 150). A scrolling sidebar therefore keeps `personal`'s behaviour: no collapse, and no new jump.
@@ -61,7 +61,7 @@ No change to drop resolution, collisions, the sorting strategy or list motion.
 | --- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | I1  | A main-list drag hides the Queue rows                                            | `SidebarQueueBlock.dom.test.tsx` "collapses to a docked header…"                                                        |
 | I2  | The header docks above the shelves during a main-list drag                       | same test (`mt-auto`)                                                                                                   |
-| I2b | The hidden rows are accounted for by the header count                            | same test (`Queue (2)`)                                                                                                 |
+| I2b | The hidden rows are accounted for by the header count                            | same test (`Queue (1/2)`)                                                                                               |
 | I3  | Nothing overlaps mid-drag, from either origin                                    | `check.sh` overlaps (10 on `personal`)                                                                                  |
 | I4  | A drop on the header queues the thread, from Active, Settled and Snoozed origins | `check.sh` header-enqueue-3queued / -empty / shelf-flick-settled / -snoozed (shelf arms fail on the abandoned approach) |
 | I5  | Queue drags still reorder and can leave the Queue                                | `check.sh` dragout-to-active, mid-block-stays-queued; `metrics.mjs`; `repro.mjs`                                        |
@@ -92,7 +92,7 @@ Web and desktop sidebar. Mobile app has no Queue.
 
 ## 12. Tradeoffs and limitations
 
-The queued rows are not visible while a main-list drag runs; the header keeps its count ("Queue (3)") and stays the drop target. Rejected alternative: move the Queue with the preview (section 5) — it keeps the rows visible and costs three measured regressions.
+The queued rows are not visible while a main-list drag runs; the header keeps its count ("Queue (1/3)") and stays the drop target. Rejected alternative: move the Queue with the preview (section 5) — it keeps the rows visible and costs three measured regressions.
 
 Two further limitations, both accepted:
 

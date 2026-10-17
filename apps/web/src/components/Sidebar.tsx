@@ -180,7 +180,7 @@ import {
   resolveActiveThreadRouteRef,
   resolveThreadRouteTarget,
 } from "../threadRoutes";
-import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
+import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
@@ -250,6 +250,8 @@ import {
   type SidebarDropVerb,
   resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
+  isSidebarThreadWoke,
+  sidebarSectionCounts,
   buildSidebarListItems,
   customSectionHeaderId,
   countSidebarThreads,
@@ -1067,6 +1069,7 @@ function SidebarDragBoundary(props: {
 function SidebarSectionHeader(props: {
   marker: "working-header" | "snoozed-header" | "settled-header";
   label: string;
+  count: string;
   className?: string;
   // While dragging, the settled header reads at full strength and takes the
   // accent while the lifted row is over it.
@@ -1094,6 +1097,7 @@ function SidebarSectionHeader(props: {
           props.isDropTarget ? "accent" : props.dragging ? "emphasized" : snoozed ? "info" : "muted"
         }
         data-testid={`sidebar-${shelf}-shelf-toggle`}
+        count={props.count}
       >
         {props.label}
       </CollapsibleSectionHeader>
@@ -1105,8 +1109,8 @@ function SidebarSectionHeader(props: {
 function SidebarCustomSectionHeader(props: {
   sectionId: string;
   name: string;
-  // Shown after the name while collapsed; a long name truncates, the count stays visible.
-  collapsedCount: number | undefined;
+  // Active/total after the name; a long name truncates, the count stays visible.
+  count: string;
   dragging: boolean;
   isDropTarget: boolean;
   toggle: { expanded: boolean; onToggle: () => void };
@@ -1138,7 +1142,7 @@ function SidebarCustomSectionHeader(props: {
               // long name truncates before it reaches the button laid over this spacer.
               accessory: <span aria-hidden className="w-5 shrink-0" />,
             })}
-        count={props.collapsedCount}
+        count={props.count}
         expanded={props.toggle.expanded}
         tone={props.isDropTarget ? "accent" : props.dragging ? "emphasized" : "muted"}
       >
@@ -1505,7 +1509,8 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
           className="flex h-full w-full cursor-pointer items-center gap-2 px-2 text-left text-xs font-medium text-sidebar-muted-foreground/60"
         >
           <span className="shrink-0">
-            {expanded ? "Not started" : `Not started (${drafts.length})`}
+            {/* Drafts have no status, so they count idle, as in the Queue. */}
+            {`Not started (0/${drafts.length})`}
           </span>
           <span aria-hidden className="h-px min-w-2 flex-1 bg-sidebar-border/60" />
           <ChevronDownIcon
@@ -1780,12 +1785,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // message, settling, archiving, or a change request state that settles the
   // thread. Timer wakes survive a mere visit. An unparseable visit timestamp
   // counts as never-visited, so corrupt local data cannot eat the wake signal.
-  const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
-  const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
-  const isWoke =
-    wokeAtDate !== null &&
-    (lastVisitedDate === null || lastVisitedDate < wokeAtDate) &&
-    thread.settledOverride !== "settled";
+  const isWoke = isSidebarThreadWoke({
+    lastVisitedAt,
+    wokeAt: props.wokeAt,
+    settledOverride: thread.settledOverride,
+  });
   // Background work always recedes when it is not selected: an unread parent
   // completion must not pull a still-working thread back into the foreground.
   // Ready and action-required rows keep their unread and wake prominence.
@@ -3515,6 +3519,35 @@ export default function Sidebar() {
     });
   }, [shownQueueEntries, threads]);
 
+  const threadLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
+  const sectionCounts = useMemo(
+    () =>
+      sidebarSectionCounts(
+        {
+          working: workingThreads,
+          snoozed: snoozedThreads,
+          settled: settledThreads,
+          custom: customThreads,
+          queued: queuedThreads,
+        },
+        threadLastVisitedAtById,
+        snoozeNow,
+      ),
+    [
+      customThreads,
+      queuedThreads,
+      settledThreads,
+      snoozeNow,
+      snoozedThreads,
+      threadLastVisitedAtById,
+      workingThreads,
+    ],
+  );
+  const isQueueEntryActive = useCallback(
+    (entry: ThreadQueueEntry) => sectionCounts.activeQueuedKeys.has(threadQueueEntryKey(entry)),
+    [sectionCounts],
+  );
+
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
@@ -3723,7 +3756,6 @@ export default function Sidebar() {
             const rows = customThreads.get(section.id) ?? EMPTY_THREADS;
             return {
               section,
-              total: rows.length,
               visible: collapsedCustomSectionIds.includes(section.id)
                 ? rows.filter(
                     (thread) =>
@@ -6463,6 +6495,7 @@ export default function Sidebar() {
                           <SidebarQueueBlock
                             key="queue"
                             entries={sidebarQueueBlockEntries(queuePlacement, shownQueueEntries)}
+                            isEntryActive={isQueueEntryActive}
                             routeKey={routeThreadKey}
                             routeDraftId={routeDraftIdForRows}
                             expanded={queueExpanded}
@@ -6571,7 +6604,7 @@ export default function Sidebar() {
                                 key={customSectionHeaderId(item.sectionId)}
                                 sectionId={item.sectionId}
                                 name={block.section.name}
-                                collapsedCount={expanded ? undefined : block.total}
+                                count={sectionCounts.custom.get(item.sectionId) ?? "0/0"}
                                 dragging={from !== null}
                                 isDropTarget={
                                   dragTargetSection === customSidebarSection(item.sectionId)
@@ -6596,11 +6629,8 @@ export default function Sidebar() {
                                 key="working-shelf-header"
                                 marker="working-header"
                                 className="mt-auto"
-                                label={
-                                  workingShelfExpanded
-                                    ? "Working"
-                                    : `Working (${workingThreads.length})`
-                                }
+                                label="Working"
+                                count={sectionCounts.working}
                                 toggle={{
                                   expanded: workingShelfExpanded,
                                   onToggle: toggleWorkingShelf,
@@ -6615,11 +6645,8 @@ export default function Sidebar() {
                                 marker="snoozed-header"
                                 className={cn(workingThreads.length === 0 && "mt-auto")}
                                 isDropTarget={snoozeOver}
-                                label={
-                                  snoozedShelfExpanded
-                                    ? "Snoozed"
-                                    : `Snoozed (${snoozedThreads.length})`
-                                }
+                                label="Snoozed"
+                                count={sectionCounts.snoozed}
                                 toggle={{
                                   expanded: snoozedShelfExpanded,
                                   onToggle: toggleSnoozedShelf,
@@ -6644,11 +6671,8 @@ export default function Sidebar() {
                               <SidebarSectionHeader
                                 key="settled-shelf-header"
                                 marker="settled-header"
-                                label={
-                                  settledShelfExpanded
-                                    ? "Settled"
-                                    : `Settled (${settledThreads.length})`
-                                }
+                                label="Settled"
+                                count={sectionCounts.settled}
                                 dragging={from !== null}
                                 isDropTarget={dragTargetSection === "settled"}
                                 toggle={{

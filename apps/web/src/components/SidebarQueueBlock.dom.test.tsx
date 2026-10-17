@@ -28,6 +28,7 @@ function render(dragging: boolean, collapse: boolean) {
         <ul>
           <SidebarQueueBlock
             entries={entries}
+            isEntryActive={(queued) => queued.threadId === "one"}
             routeKey={null}
             routeDraftId={null}
             expanded
@@ -63,8 +64,8 @@ describe("SidebarQueueBlock", () => {
     const markup = render(true, true);
     expect(markup).not.toContain("data-row=");
     expect(markup).toContain("mt-auto");
-    // The rows are gone, so the count has to say how many are waiting.
-    expect(markup).toContain("Queue (2)");
+    // The rows are gone, so the count has to say how many are waiting and how many are active.
+    expect(markup).toContain("Queue (1/2)");
   });
 
   it("keeps the rows in place when the drag cannot collapse the list", () => {
@@ -74,7 +75,8 @@ describe("SidebarQueueBlock", () => {
     expect(markup).toContain('data-row="two"');
     expect(markup).not.toContain("mt-auto");
     expect(markup).toContain("border-dashed");
-    expect(markup).not.toContain("Queue (2)");
+    // The count shows whether or not the rows do.
+    expect(markup).toContain("Queue (1/2)");
     // This is the state the header gets covered in - no slack to collapse into, so the sorting
     // preview shifts a row onto it. BOTH classes are load-bearing and neither is cosmetic: z-20
     // wins the hit test against the transformed row, and the background is what stops the row's
@@ -105,6 +107,7 @@ describe("queue slots header control", () => {
           <ul>
             <SidebarQueueBlock
               entries={entries}
+              isEntryActive={() => false}
               routeKey={null}
               routeDraftId={null}
               expanded
@@ -132,6 +135,7 @@ describe("queue slots header control", () => {
         <ul>
           <SidebarQueueBlock
             entries={[entry("theirs"), { ...entry("mine"), ownerId: queueDeviceId() }]}
+            isEntryActive={() => false}
             routeKey={null}
             routeDraftId={null}
             expanded
@@ -279,6 +283,7 @@ describe("queue rows from another device", () => {
         <ul>
           <SidebarQueueBlock
             entries={entries}
+            isEntryActive={() => false}
             routeKey={null}
             routeDraftId={null}
             expanded
@@ -317,6 +322,7 @@ describe("an empty Queue", () => {
         <ul>
           <SidebarQueueBlock
             entries={[]}
+            isEntryActive={() => false}
             routeKey={null}
             routeDraftId={null}
             expanded
@@ -342,6 +348,7 @@ describe("an empty Queue", () => {
     const view = await mount();
     const header = view.find('[data-testid="sidebar-queue-header"]');
     expect(header?.textContent ?? "no Queue header").toContain("Paused: Fix the build failed");
+    expect(header?.textContent).toContain("Queue (0/0)");
     await view.click(view.find('button[aria-label="Resume queue"]'));
     expect(useThreadQueueStore.getState()).toMatchObject({ paused: false, lastFailure: null });
   });

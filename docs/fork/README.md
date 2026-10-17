@@ -1362,6 +1362,23 @@ git grep -n 'reuseRegisteredPath: true' -- apps/server/src/orchestration-v2 | gr
 `GitVcsDriverCore.removeWorktree` still prunes after a remove finds the worktree already gone;
 that is upstream's and outside this rule for now.
 
+### 67. Sidebar section header counts sit on upstream's row
+
+The `active/total` header counts are fork code over upstream's sidebar. `isSidebarThreadWoke`
+(`Sidebar.logic.ts`) is the one wake rule for both the row and the counts: port any upstream edit
+to the row's former inline `const isWoke` / `wokeAtDate` block into it. The counts use
+`resolveSidebarV2TopStatus`, so the row's upstream `topStatus` chain in `Sidebar.tsx` must keep the
+same statuses in the same order. The Working, Snoozed and Settled headers pass
+`count={sectionCounts.*}`; upstream builds those labels as `` `Name (${n})` ``, so a resolution
+taking upstream's side drops the count. Probe in `apps/web/src/components/Sidebar.tsx`, expect
+`>= 1`, `0` and `3`:
+
+```sh
+grep -c 'isSidebarThreadWoke({' apps/web/src/components/Sidebar.tsx
+grep -c 'const wokeAtDate' apps/web/src/components/Sidebar.tsx
+grep -c 'count={sectionCounts\.\(working\|snoozed\|settled\)}' apps/web/src/components/Sidebar.tsx
+```
+
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 
 On orchestrator v2 the hubs are `EventSink`'s `liveEvents` plus one `PubSub.unbounded` per

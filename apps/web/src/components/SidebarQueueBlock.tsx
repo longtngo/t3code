@@ -7,6 +7,7 @@ import { cn } from "../lib/utils";
 import {
   animateSidebarLayoutChanges,
   sidebarQueueRowDragDisabled,
+  sidebarSectionCountLabel,
   type SidebarOptimisticDrop,
 } from "./Sidebar.logic";
 import { threadQueueEntryKey, type ThreadQueueEntry } from "../threadQueueRules";
@@ -57,6 +58,8 @@ function SortableQueueRow(props: {
 export function SidebarQueueBlock(props: {
   /** Entries in queue order, already filtered to those this sidebar can show. */
   entries: ReadonlyArray<ThreadQueueEntry>;
+  /** Whether an entry's thread would show a status label; counted over `entries` for the header. */
+  isEntryActive: (entry: ThreadQueueEntry) => boolean;
   routeKey: string | null;
   routeDraftId: string | null;
   expanded: boolean;
@@ -106,12 +109,7 @@ export function SidebarQueueBlock(props: {
   // thread keeps its row, as it does in a collapsed Queue.
   const visibleEntries =
     props.collapse || !expanded ? props.entries.filter(routeEntry) : props.entries;
-  // The count stands in for the rows whenever they are not all on screen — collapsed by the user,
-  // or collapsed for the drag.
-  const label =
-    (expanded && !props.collapse) || props.entries.length === 0
-      ? "Queue"
-      : `Queue (${props.entries.length})`;
+  const label = `Queue (${sidebarSectionCountLabel(props.entries, props.isEntryActive)})`;
 
   return (
     <>

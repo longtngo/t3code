@@ -16,6 +16,7 @@ import { pinOrderKeyBetween, planPinnedReorder } from "@t3tools/client-runtime/s
 import {
   effectiveSnoozed,
   resolveSnoozePresets,
+  threadWokeAt,
   type ThreadSnoozeShell,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -29,6 +30,7 @@ import { cn, normalizeSearchText } from "../lib/utils";
 import { queueAndWake, threadQueueEntryKey } from "../threadQueueRules";
 import { whileLeavingThreadQueue } from "../threadQueueLeaving";
 import { isLatestRunSettled } from "../session-logic";
+import { parseTimestampDate } from "../timestampFormat";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
 export function shouldNavigateAfterThreadPark(input: {
@@ -1927,7 +1929,9 @@ export function resolveThreadLastVisitedAt(
   return serverLastVisitedAt ?? undefined;
 }
 
-export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
+export function hasUnseenCompletion(
+  thread: Pick<ThreadStatusInput, "latestRun" | "lastVisitedAt">,
+): boolean {
   if (!thread.latestRun?.completedAt) return false;
   const completedAt = Date.parse(thread.latestRun.completedAt);
   if (Number.isNaN(completedAt)) return false;
@@ -2193,6 +2197,97 @@ export function resolveSidebarV2TopStatus(input: {
     return "woke";
   }
   return input.isUnread ? "done" : null;
+}
+
+/**
+ * Woke until the user re-engages: a visit before the wake (or an unparseable one) does not
+ * clear it. A settled thread is never Woke.
+ */
+export function isSidebarThreadWoke(input: {
+  readonly lastVisitedAt: string | undefined;
+  readonly wokeAt: string | null;
+  readonly settledOverride: SidebarThreadSummary["settledOverride"];
+}): boolean {
+  const wokeAt = input.wokeAt === null ? null : parseTimestampDate(input.wokeAt);
+  if (wokeAt === null || input.settledOverride === "settled") return false;
+  const visited =
+    input.lastVisitedAt === undefined ? null : parseTimestampDate(input.lastVisitedAt);
+  return visited === null || visited < wokeAt;
+}
+
+/**
+ * Active iff the thread card would show a status label: what section counts count.
+ * Keep in step with the row's inline `topStatus` chain in Sidebar.tsx, which is upstream's
+ * and does not call this ladder.
+ */
+export function isSidebarThreadActive(
+  thread: SidebarThreadStatusInput &
+    ThreadStatusInput &
+    Pick<SidebarThreadSummary, "settledOverride">,
+  visit: { readonly lastVisitedAt: string | undefined; readonly wokeAt: string | null },
+): boolean {
+  return (
+    resolveSidebarV2TopStatus({
+      status: resolveSidebarThreadStatus(thread),
+      isUnread: hasUnseenCompletion({
+        latestRun: thread.latestRun,
+        lastVisitedAt: visit.lastVisitedAt,
+      }),
+      isWoke: isSidebarThreadWoke({ ...visit, settledOverride: thread.settledOverride }),
+    }) !== null
+  );
+}
+
+/** A section header's `active/total`, over every row the section holds. */
+export function sidebarSectionCountLabel<T>(
+  threads: ReadonlyArray<T>,
+  isActive: (thread: T) => boolean,
+): string {
+  let active = 0;
+  for (const thread of threads) if (isActive(thread)) active += 1;
+  return `${active}/${threads.length}`;
+}
+
+type SidebarSectionCountThread = Parameters<typeof isSidebarThreadActive>[0] &
+  ThreadSnoozeShell & { readonly environmentId: EnvironmentId; readonly id: ThreadId };
+
+/**
+ * Every section header's `active/total`, over every row each section holds, with the
+ * card's own visit and wake inputs. Active means the card status ladder has a label;
+ * the slim rows of Settled and Snoozed print only the Woke label.
+ * Returns the active queued keys (`activeQueuedKeys`); the Queue block counts its own entries.
+ */
+export function sidebarSectionCounts(
+  sections: {
+    readonly working: ReadonlyArray<SidebarSectionCountThread>;
+    readonly snoozed: ReadonlyArray<SidebarSectionCountThread>;
+    readonly settled: ReadonlyArray<SidebarSectionCountThread>;
+    readonly custom: ReadonlyMap<string, ReadonlyArray<SidebarSectionCountThread>>;
+    readonly queued: ReadonlyArray<SidebarSectionCountThread>;
+  },
+  lastVisitedAtById: Readonly<Record<string, string | undefined>>,
+  now: string,
+) {
+  const keyOf = (thread: SidebarSectionCountThread) =>
+    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const isActive = (thread: SidebarSectionCountThread) =>
+    isSidebarThreadActive(thread, {
+      lastVisitedAt: resolveThreadLastVisitedAt(
+        thread.lastVisitedAt,
+        lastVisitedAtById[keyOf(thread)],
+      ),
+      wokeAt: threadWokeAt(thread, { now }),
+    });
+  return {
+    working: sidebarSectionCountLabel(sections.working, isActive),
+    snoozed: sidebarSectionCountLabel(sections.snoozed, isActive),
+    settled: sidebarSectionCountLabel(sections.settled, isActive),
+    custom: new Map(
+      [...sections.custom].map(([id, rows]) => [id, sidebarSectionCountLabel(rows, isActive)]),
+    ),
+    // Drafts have no thread, so they count idle.
+    activeQueuedKeys: new Set(sections.queued.filter(isActive).map(keyOf)),
+  };
 }
 
 export function shouldShowSidebarV2Duration(status: SidebarThreadStatus): boolean {
