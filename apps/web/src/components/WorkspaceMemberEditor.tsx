@@ -95,9 +95,7 @@ export default function WorkspaceMemberEditor({
   const pathInputId = `${fieldId}-path`;
   const branchInputId = `${fieldId}-branch`;
 
-  // ---------------------------------------------------------------------------
   // Repository path
-  // ---------------------------------------------------------------------------
   const browsePath = useMemo(() => getFilesystemBrowsePath(path), [path]);
   // A pairing from before the permission split lacks `filesystem:read`; the server refuses
   // every browse, so the list says why instead of sitting empty. Only a loaded grant without
@@ -132,9 +130,7 @@ export default function WorkspaceMemberEditor({
       : entries;
   }, [browseDenied, browsePath.canBrowseUp, browsePath.parentPath, visibleEntries]);
 
-  // ---------------------------------------------------------------------------
   // Integration branch
-  // ---------------------------------------------------------------------------
   // Debounced, not deferred. `useDeferredValue` is a scheduling hint: it catches
   // up on the very next transition render, so the previous version here fired
   // one `vcs.listRefs` — a real git spawn, almost always against a directory
@@ -167,9 +163,6 @@ export default function WorkspaceMemberEditor({
     setBranch(currentBranch);
   }, [autofilledBranch, autofilledForCwd, branch, branchCwd, currentBranch]);
 
-  // ---------------------------------------------------------------------------
-  // Submit
-  // ---------------------------------------------------------------------------
   const handleSubmit = async () => {
     const draft: WorkspaceMemberDraft = { path, integrationBranch: branch };
     const message = validateMemberDraft(draft, members, editing?.id);

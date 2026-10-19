@@ -20,9 +20,7 @@ import {
   resolveClaudeCatalogContextWindowTokens,
 } from "../../provider/ClaudeModelCatalog.ts";
 
-// ---------------------------------------------------------------------------
 // Result classification (invariant 35)
-// ---------------------------------------------------------------------------
 
 // The CLI tags internal telemetry with this prefix (e.g. "[ede_diagnostic]
 // result_type=user stop_reason=tool_use") and hides it from its own UI. It can
@@ -127,9 +125,7 @@ export function claudeResultTerminalStatus(
   return "failed";
 }
 
-// ---------------------------------------------------------------------------
 // Context windows and auto-compaction (invariants 12, 22)
-// ---------------------------------------------------------------------------
 
 /**
  * The context window Claude Code ACTUALLY runs a model at. Several models are

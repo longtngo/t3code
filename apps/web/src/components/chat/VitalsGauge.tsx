@@ -49,9 +49,7 @@ import {
 } from "~/lib/vitals";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
-// ---------------------------------------------------------------------------
 // Icon — three rings cut by a straight vertical seam
-// ---------------------------------------------------------------------------
 
 /** One right-side half-ring (track + optional severity-colored fill). */
 function HalfArc(props: { r: number; arc: VitalsGaugeArc; mirror?: boolean }) {
@@ -127,9 +125,7 @@ export function VitalsGaugeIcon(props: { inputs: VitalsGaugeInputs; size?: numbe
   );
 }
 
-// ---------------------------------------------------------------------------
 // Detail popover
-// ---------------------------------------------------------------------------
 
 const CAP_CLASS = "text-3xs font-semibold uppercase tracking-widest text-muted-foreground";
 const BLOCK_CLASS = "border-t border-border px-4 py-3 first:border-t-0";
@@ -605,9 +601,7 @@ function DetailRow(props: { label: string; value: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Assembled gauge (presentational) + connected wrapper
-// ---------------------------------------------------------------------------
 
 function describeInputs(inputs: VitalsGaugeInputs): string {
   const parts: string[] = [];

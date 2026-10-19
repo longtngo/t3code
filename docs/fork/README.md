@@ -64,6 +64,13 @@ mirrors for it (`configDirPath`, `outputStyle`, Codex `setupMode`) and their tes
 copy was retired for upstream's per-environment failure messages, and the composer's
 resume-compaction menu for upstream's Compact/Full chip.
 
+The 50th reconcile (2026-10-19, 861 commits) brought three cross-cutting upstream changes. A
+comment prune (#19559) touched 3,139 files. Web React tests moved to a real-browser `browser`
+project (`*.browser.test.tsx`, no jsdom or react-test-renderer), beside the fork's `dom` project
+(invariant 36). Every web file must now compile under the React Compiler (invariant 68). Upstream
+also added a workspace write guard, `KnownWorkspaces`, which here also admits member repositories
+(invariant 69), and migrations 063/064 (ids 72/73).
+
 The 47th reconcile (2026-10-12, 319 commits) moved source control into
 `packages/source-control-*` (host settings now live under `sourceControlHosts`, edited by
 `SourceControlHostSettings`, which carries the fork's `settings:write` gate) and host-process
@@ -120,11 +127,12 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 71 entries, ids 1-71, unique and monotonic. Upstream's v2 schema
+Current: 73 entries, ids 1-73, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
-`061_PullRequestReviewGuides` is **70** and `062_ThreadFailureLookupIndex` is **71**.
+`061_PullRequestReviewGuides` is **70**, `062_ThreadFailureLookupIndex` is **71**,
+`063_DropUnusedV1Projections` is **72** and `064_CanonicalizeThreadPullRequestLinks` is **73**.
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
 upstream's `reconcileV2PreviewMigration` stays out.
@@ -143,7 +151,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `71 71 ok` and `1`.
+Expect `73 73 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -165,6 +173,11 @@ Upstream's Expo 58 upgrade (#12045) deleted its own `expo-modules-core@57.0.14` 
 `expo-notifications@57.0.15` patches (#12482, #12483) but kept their macOS-only regression tests,
 `apps/mobile/scripts/permissions-service.test.ts` and `notification-center-manager.test.ts`. Upstream
 CI does not run them on macOS, so they went red only here. Measured at the 43rd reconcile:
+
+Since the 50th reconcile the entries are keyed `expo-modules-core@58.0.22` and
+`expo-notifications@58.1.5` and still point at the `@58.0.11.patch` files: the patched sources are
+byte-identical across those versions and both patches apply cleanly (checked with `git apply --check`).
+Both regression tests pass on the new versions (5 tests, 2026-10-19).
 
 - `expo-modules-core@58.0.11` still has the unsynchronized permissions registry (ThreadSanitizer
   race). The old patch applies unchanged as `patches/expo-modules-core@58.0.11.patch`.
@@ -976,10 +989,12 @@ reads them. `claudeAccountConfigPath` is unused as a result. Upstream's two rese
 `ProviderInstanceRegistryLive.test.ts` wrote the login into `homePath`; they drive `configDirPath`
 here. They typecheck either way and only fail at run time, so check arriving tests for this field too.
 
-### 36. Web tests run two projects; `--project dom` is fork-only
+### 36. Web tests run three projects; `--project dom` is fork-only
 
-`apps/web/package.json`'s `test` script is `vp test run --passWithNoTests --project unit --project dom`.
-Upstream ships only `unit`. The fork's `*.dom.test.tsx` files - real-DOM tests via
+`apps/web/package.json`'s `test` script is
+`vp test run --passWithNoTests --project unit --project dom --project browser`. Upstream ships
+`unit` and `browser` (headless Chromium, `*.browser.test.{ts,tsx}`, since the 50th reconcile);
+`unit` excludes both other patterns. The fork's `*.dom.test.tsx` files - real-DOM tests via
 `src/testing/renderDom` - are invisible to a merge that takes upstream's script, and they fail
 open: `--passWithNoTests` means a run that matches nothing still exits 0. A gate that "passed"
 having never executed the dom project has happened twice; the only reliable signal is the **test
@@ -1378,6 +1393,27 @@ grep -c 'isSidebarThreadWoke({' apps/web/src/components/Sidebar.tsx
 grep -c 'const wokeAtDate' apps/web/src/components/Sidebar.tsx
 grep -c 'count={sectionCounts\.\(working\|snoozed\|settled\)}' apps/web/src/components/Sidebar.tsx
 ```
+
+### 68. Fork web files the React Compiler rejects sit on a shrinking allowlist
+
+Upstream (#20114, #20797) requires every `apps/web/src` file to compile under the React Compiler:
+compiler bailout rules and `t3code/no-manual-memo` are lint errors, and
+`src/reactCompilerCoverage.test.ts` fails any file the compiler skips. Fork-original files that
+predate the rule are listed in `apps/web/src/forkReactCompiler.ts`: `FORK_REACT_COMPILER_LINT_EXEMPT`
+feeds an override block in the root `vite.config.ts`, and `FORK_REACT_COMPILER_BAILOUTS` makes the
+coverage test expect a bailout instead of skipping the file, so a listed file that starts compiling turns
+the test red until its entry is deleted. Upstream-owned files (`Sidebar.tsx`, `SettingsPanels.tsx`,
+`ChatView.tsx`) are never listed: fork code inside them was made compliant. Fix a listed file, then
+delete its entry; never add an upstream file.
+
+### 69. Upstream's workspace write guard also admits member repositories
+
+`workspace/KnownWorkspaces.ts` (upstream #20449) refuses file writes outside a registered project,
+a managed worktree or a thread worktree. A fork workspace member (`members[].path`, invariant 42) is an
+arbitrary path, so the guard also accepts any path inside a project's member. Test:
+`KnownWorkspaces.test.ts`, seen red with the member loop removed. Probe:
+`grep -c 'resolveRoot(member.path)' apps/server/src/workspace/KnownWorkspaces.ts` is `1`.
+Upstream's review folder check from the same commit stays rejected (`ReviewService.ts`).
 
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 

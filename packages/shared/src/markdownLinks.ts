@@ -30,13 +30,9 @@ const INLINE_CODE_DISQUALIFIER_PATTERN = /[\s`]/;
 const PATH_SEPARATOR_PATTERN = /[\\/]/;
 
 const FILE_EXTENSION_PATTERN = /\.[A-Za-z0-9_-]+$/;
-// A final dot between digits marks a version or model id (`glm-5.3`,
-// `Qwen2.5-Coder`), not an extension. `ls.1` and `libfoo.so.1` stay files.
 const VERSION_SUFFIX_PATTERN = /\d\.\d[^.]*$/;
 const NUMERIC_DOTTED_PATTERN = /^\d+(?:\.\d+)+$/;
 
-// Standard OS and dev-container roots; deliberately excludes app-route-ish
-// prefixes like /app/ or /chat/ so SPA routes never read as files.
 const POSIX_FILE_ROOT_PREFIXES = [
   "/Users/",
   "/home/",
@@ -64,7 +60,6 @@ const POSIX_FILE_ROOT_PREFIXES = [
   "/workspaces/",
 ] as const;
 
-// `Name:digits` also matches `error:1`, `port:3000`, and `TODO:12`.
 const EXTENSIONLESS_FILE_NAMES = new Set([
   "Makefile",
   "makefile",
@@ -97,8 +92,6 @@ const EXTENSIONLESS_FILE_NAMES = new Set([
 
 const SINGLE_LABEL_HOSTNAMES = new Set(["localhost"]);
 
-// These allowlists avoid classifying dotted directories such as `conf.d/`
-// or filenames such as `Makefile.in:12` as hosts.
 const GENERIC_HOSTNAME_TLDS = new Set([
   "com",
   "net",
@@ -127,8 +120,6 @@ const GENERIC_HOSTNAME_TLDS = new Set([
   "link",
 ]);
 
-// Country codes also name file extensions. A :line suffix makes `.pl`
-// and `.pt` files more likely than hostnames.
 const COUNTRY_HOSTNAME_TLDS = new Set([
   "uk",
   "de",
@@ -175,10 +166,6 @@ function looksLikeHostname(segment: string, hasPosition: boolean): boolean {
   return !hasPosition && COUNTRY_HOSTNAME_TLDS.has(lastLabel);
 }
 
-/**
- * Picks path-shaped inline code for the client's markdown file-link resolver.
- * It does not resolve paths or turn plain prose and fenced code into links.
- */
 export function inlineCodeFilePathCandidate(codeText: string): string | null {
   const trimmed = codeText.trim();
   if (trimmed.length === 0 || INLINE_CODE_DISQUALIFIER_PATTERN.test(trimmed)) return null;
@@ -233,7 +220,6 @@ export function splitMarkdownLinkSearchAndHash(value: string): {
   };
 }
 
-/** Keeps filename and destination-path labels compact without discarding prose. */
 export function isMarkdownFileLinkLabel(label: string, href: string): boolean {
   const destination = parseMarkdownFileLink(href);
   if (!destination) return false;
@@ -282,11 +268,6 @@ function looksLikePosixFilesystemPath(path: string): boolean {
   return EXTENSIONLESS_FILE_NAMES.has(basename) || FILE_EXTENSION_PATTERN.test(basename);
 }
 
-/**
- * Decides whether a decoded link destination is a file path rather than a route
- * or prose. Only a `:line` suffix the author wrote counts as evidence; a `#L`
- * anchor never turns `/chat/settings` into a file.
- */
 function looksLikeFilePath(path: string, authoredPath: string): boolean {
   if (isWindowsAbsolutePath(path) || RELATIVE_PATH_PREFIX_PATTERN.test(path)) return true;
   if (path.startsWith("/")) return looksLikePosixFilesystemPath(authoredPath);
@@ -312,7 +293,6 @@ export function parseMarkdownFileLink(href: string): FilePathPosition | null {
   const source =
     (normalized.toLowerCase().startsWith("file:") ? parseFileUrlHref(normalized) : null) ??
     splitMarkdownLinkSearchAndHash(normalized);
-  // A percent-encoded drive colon (`/c%3A/`) only becomes strippable once decoded.
   const path = stripSlashPrefixedWindowsDrive(safeDecodeURIComponent(source.path.trim()));
   const hash = safeDecodeURIComponent(source.hash.trim());
   if (path.length === 0 || hasExternalScheme(path)) return null;
@@ -337,7 +317,6 @@ export function extractInlineCodeSpans(text: string): string[] {
   return spans;
 }
 
-/** Reuses delimiter searches when successive candidates fall in the same run. */
 function markdownRunEndFinder(markdown: string, delimiter: RegExp) {
   let runStart = -1;
   let runEnd = -1;
@@ -412,11 +391,6 @@ export function extractMarkdownLinkHrefs(markdown: string): string[] {
   return hrefs;
 }
 
-/**
- * `baseDir` anchors relative links; it defaults to the workspace root and is the
- * file's own directory when rendering a markdown file. `cwd` stays the workspace
- * root so the result still knows whether the target is inside it.
- */
 export function resolveMarkdownFileLinkTarget(
   href: string | undefined,
   cwd?: string,

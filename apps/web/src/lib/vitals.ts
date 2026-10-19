@@ -65,9 +65,7 @@ export function clampPct(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
 }
 
-// ---------------------------------------------------------------------------
 // Account usage (rolling 5-hour / 7-day windows)
-// ---------------------------------------------------------------------------
 
 /** Rolling-window durations, in ms, used to turn `resetsAt` into an elapsed fraction. */
 export const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
@@ -438,9 +436,7 @@ export function paceDiffLabel(diff: number): string {
   return `+${diff}% over pace`;
 }
 
-// ---------------------------------------------------------------------------
 // Split-ring geometry
-// ---------------------------------------------------------------------------
 
 /** SVG side length of the gauge's viewBox (square). */
 export const GAUGE_VIEWBOX = 44;

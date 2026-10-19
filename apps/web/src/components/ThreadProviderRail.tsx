@@ -1,6 +1,6 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
-import { useEnvironment } from "../state/environments";
+import { useEnvironmentProviders } from "../state/environments";
 import { cn } from "../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -19,10 +19,10 @@ type RowThread = ThreadProviderSource & { readonly environmentId: EnvironmentId 
  * list of the machine actually running it rather than the primary environment's.
  */
 function useThreadProvider(thread: RowThread): ThreadProviderPresentation | undefined {
-  const environment = useEnvironment(thread.environmentId);
+  const providersByEnvironment = useEnvironmentProviders();
   return resolveThreadProviderPresentation(
     resolveThreadProviderInstanceId(thread),
-    environment?.serverConfig?.providers ?? [],
+    providersByEnvironment.get(thread.environmentId) ?? [],
   );
 }
 

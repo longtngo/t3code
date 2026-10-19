@@ -88,6 +88,8 @@ function renderPanel(relativePath: string) {
       onPendingChange={() => undefined}
       selectedFilePending={false}
       workspaceMutationId={null}
+      folderTrail={undefined}
+      onNavigateFolder={() => undefined}
     />,
   );
 }

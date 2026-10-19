@@ -49,9 +49,7 @@ import {
 import { forkParked } from "../serverActivation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 
-// ---------------------------------------------------------------------------
 // VAPID keys (server secret, generated once)
-// ---------------------------------------------------------------------------
 
 const WEB_PUSH_VAPID_KEY_PAIR_SECRET = "web-push-vapid-key-pair";
 // VAPID requires a contact subject (mailto:/https:). Not user-visible; used only in
@@ -127,9 +125,7 @@ export const getOrCreateVapidKeys = Effect.fn("getOrCreateVapidKeys")(function* 
     );
 });
 
-// ---------------------------------------------------------------------------
 // Pure edge classification (unit-tested)
-// ---------------------------------------------------------------------------
 
 export type ThreadNotifyEdge =
   | { readonly kind: "finished"; readonly outcome: "completed" | "error" | "interrupted" }
@@ -365,9 +361,7 @@ export function isAllowedPushEndpoint(endpoint: string): boolean {
   return host.includes(".");
 }
 
-// ---------------------------------------------------------------------------
 // Service
-// ---------------------------------------------------------------------------
 
 /**
  * Remembered push keys; a run or request re-written later must not push twice.

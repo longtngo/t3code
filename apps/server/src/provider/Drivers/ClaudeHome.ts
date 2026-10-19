@@ -73,11 +73,10 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
 });
 
 /**
- * Whether an administrator installed Claude Code's `managed-mcp.json`. While it
- * exists Claude refuses `--strict-mcp-config` and exits before initializing,
- * but it already ignores user, project and `--mcp-config` servers on its own,
- * so callers that pass the flag for isolation can drop it. Paths match the
- * ones Claude Code checks.
+ * While it exists Claude refuses `--strict-mcp-config` and exits before
+ * initializing, but it already ignores user, project and `--mcp-config` servers
+ * on its own, so callers that pass the flag for isolation can drop it. Paths
+ * match the ones Claude Code checks.
  */
 export const hasClaudeManagedMcpConfig = Effect.fn("hasClaudeManagedMcpConfig")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;

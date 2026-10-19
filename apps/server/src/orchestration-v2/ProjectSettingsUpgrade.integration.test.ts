@@ -95,7 +95,6 @@ const seedV1Database = Effect.gen(function* () {
       )
     `;
   }
-  // The V1 projector had applied both events before the upgrade.
   yield* sql`
     INSERT INTO projection_projects (
       project_id, title, workspace_root, default_model_selection_json, default_thread_env_mode,
@@ -118,7 +117,6 @@ const unusedEnrichment = {
   repositoryIdentityResolved: false,
 };
 
-/** The production V2 runtime and project service against one file-backed database. */
 const layerRuntime = (dbPath: string) => {
   const layerPlatform = Layer.merge(
     NodeServices.layer,
@@ -188,7 +186,6 @@ it.live("keeps project settings through the V2 migrations and the first V2 boot"
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-project-upgrade-" });
       const dbPath = path.join(stateDir, "statev2.sqlite");
 
-      // Seed the released V1 schema, then boot the V2 runtime, which runs 055+, on the same file.
       yield* seedV1Database.pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
       yield* Effect.gen(function* () {
         yield* (yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter).reconcileShells;

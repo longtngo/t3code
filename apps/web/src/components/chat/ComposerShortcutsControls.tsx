@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronDownIcon, ChevronUpIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react";
 import type { ComposerShortcut } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
-import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
+import { updateClientSettings, useClientSettings } from "~/hooks/useSettings";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -179,7 +179,6 @@ export function ComposerShortcutsControls({
   disabled?: boolean;
 }) {
   const shortcuts = useClientSettings((s) => s.composerShortcuts);
-  const updateClientSettings = useUpdateClientSettings();
   const [managerOpen, setManagerOpen] = useState(false);
 
   return (

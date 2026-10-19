@@ -19,7 +19,6 @@ const makeTempDir = () =>
 
 describe("isEntrypoint", () => {
   it("uses the runtime answer when Node provides one", () => {
-    // Node 22.18+ and 24.2+ populate `import.meta.main`; nothing else is consulted.
     expect(
       isEntrypoint({
         moduleUrl: "file:///somewhere/bin.mjs",
@@ -73,7 +72,6 @@ describe("isEntrypoint", () => {
   );
 
   it("stays false for an imported module that is not the entrypoint", () => {
-    // This is what keeps `bin.test.ts` from launching the CLI on import.
     const dir = makeTempDir();
     const entry = NodePath.join(dir, "bin.mjs");
     const imported = NodePath.join(dir, "cli.mjs");

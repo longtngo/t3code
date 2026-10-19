@@ -68,8 +68,6 @@ export function hasDismissedResumeCompaction(
   });
 }
 
-/** True once a large Claude context's prompt cache has expired, so the next
-    turn would re-read all of it uncached. */
 export function shouldOfferResumeCompaction(input: {
   /** FORK: the server's "Offer to compact threads" setting. */
   readonly offerEnabled: boolean;

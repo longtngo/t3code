@@ -13,7 +13,24 @@ import { renderDom } from "../testing/renderDom";
  * the mock is the whole point of the separate file.
  */
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
+const atomReader = vi.hoisted(() => ({
+  initialValues: (): Array<readonly [never, unknown]> => [],
+}));
+vi.mock("@effect/atom-react", async () => {
+  const { AtomRegistry } = await import("effect/reactivity");
+  let registry: ReturnType<typeof AtomRegistry.make> | null = null;
+  // ChatMarkdown derives its server-config fields in an atom of its own; evaluate that one for
+  // real (seeded with this file's config) and keep every other read on the stub.
+  const isConfigFields = (atom: unknown) =>
+    (atom as { label?: readonly [string, string] }).label?.[0] === "markdown-server-config-fields";
+  return {
+    useAtomValue: (atom: never) => {
+      if (!isConfigFields(atom)) return null;
+      registry ??= AtomRegistry.make({ initialValues: atomReader.initialValues() });
+      return registry.get(atom);
+    },
+  };
+});
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));

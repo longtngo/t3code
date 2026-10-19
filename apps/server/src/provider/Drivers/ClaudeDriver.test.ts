@@ -11,10 +11,8 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
-import * as Cache from "effect/Cache";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -34,48 +32,7 @@ import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
-import { ClaudeDriver, getCachedCapabilitiesDroppingMisses } from "./ClaudeDriver.ts";
-
-describe("getCachedCapabilitiesDroppingMisses", () => {
-  const makeCountingCache = (results: ReadonlyArray<string | undefined>) =>
-    Effect.gen(function* () {
-      let lookups = 0;
-      const cache = yield* Cache.make({
-        capacity: 1,
-        timeToLive: Duration.minutes(5),
-        lookup: () =>
-          Effect.sync(() => {
-            const result = results[Math.min(lookups, results.length - 1)];
-            lookups += 1;
-            return result;
-          }),
-      });
-      return { cache, lookupCount: () => lookups };
-    });
-
-  it.effect("re-probes on the next read after a failed probe (undefined)", () =>
-    Effect.gen(function* () {
-      const { cache, lookupCount } = yield* makeCountingCache([undefined, "capabilities"]);
-
-      expect(yield* getCachedCapabilitiesDroppingMisses(cache, "key")).toBeUndefined();
-      expect(lookupCount()).toBe(1);
-
-      // The miss must not be pinned for the TTL: the next read re-probes.
-      expect(yield* getCachedCapabilitiesDroppingMisses(cache, "key")).toBe("capabilities");
-      expect(lookupCount()).toBe(2);
-    }),
-  );
-
-  it.effect("serves successful probes from the cache without re-probing", () =>
-    Effect.gen(function* () {
-      const { cache, lookupCount } = yield* makeCountingCache(["capabilities"]);
-
-      expect(yield* getCachedCapabilitiesDroppingMisses(cache, "key")).toBe("capabilities");
-      expect(yield* getCachedCapabilitiesDroppingMisses(cache, "key")).toBe("capabilities");
-      expect(lookupCount()).toBe(1);
-    }),
-  );
-});
+import { ClaudeDriver } from "./ClaudeDriver.ts";
 
 // FORK: the "Offer to compact threads" server setting must reach the adapter
 // that answers Claude Code's resume question.

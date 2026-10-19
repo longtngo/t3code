@@ -1,5 +1,6 @@
 import { type RuntimeRequestId, type ScopedThreadRef } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
+import { memo, useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { type PendingUserInput } from "../../session-logic";
 import {
   derivePendingUserInputProgress,
@@ -16,7 +17,6 @@ import ChatMarkdown from "../ChatMarkdown";
 
 interface PendingUserInputPanelProps {
   pendingUserInputs: PendingUserInput[];
-  /** Resolves file links in the question text. */
   cwd: string | undefined;
   threadRef: ScopedThreadRef;
   disabled?: boolean;
@@ -87,51 +87,45 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   // Message-mode requests remain answerable after their provider turn ends.
   const canRespond = prompt.responseCapability !== "not_resumable";
   const responseDisabled = disabled || isResponding || !canRespond;
-  const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
-  const activeQuestion = progress.activeQuestion;
   const autoAdvanceTimerRef = useRef<number | null>(null);
-  const onAdvanceRef = useRef(onAdvance);
+  // The auto-advance timer fires after the render that armed it.
+  const advance = useStableCallback(onAdvance);
   const optionsListRef = useRef<HTMLDivElement | null>(null);
   const optionsListId = useId();
   // Collapsing hides the options so the conversation behind the panel can be
   // read before answering. The panel is keyed by `requestId`, so it does NOT
-  // remount when `questionIndex` advances within a multi-question prompt —
-  // without the reset below a collapse would carry over and hide the next
-  // question's options.
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  // remount when `questionIndex` advances within a multi-question prompt.
+  // Storing the collapsed question's id rather than a bare flag is the reset:
+  // a collapse never carries over to hide the next question's options.
+  const [collapsedQuestionId, setCollapsedQuestionId] = useState<string | null>(null);
   const [optimisticSingleSelect, setOptimisticSingleSelect] = useState<{
     questionId: string;
     optionValue: string;
   } | null>(null);
 
-  useEffect(() => {
-    setIsCollapsed(false);
-  }, [questionIndex]);
+  const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
+  const activeQuestion = progress.activeQuestion;
+  const customAnswerActive = progress.customAnswer.trim().length > 0;
+  // Read here, before the hooks below, so the compiler can keep `activeQuestion` cached.
+  const draftSelectedOptions = activeQuestion?.options.map(
+    (option) =>
+      !customAnswerActive && progress.selectedOptionValues.includes(option.value ?? option.label),
+  );
+  const isCollapsed = collapsedQuestionId !== null && collapsedQuestionId === activeQuestion?.id;
+  const setIsCollapsed = (collapsed: boolean) =>
+    setCollapsedQuestionId(collapsed ? (activeQuestion?.id ?? null) : null);
 
-  useEffect(() => {
-    onAdvanceRef.current = onAdvance;
-  }, [onAdvance]);
-
-  useEffect(() => {
-    if (!activeQuestion || activeQuestion.multiSelect || !optimisticSingleSelect) {
-      return;
-    }
-    if (optimisticSingleSelect.questionId !== activeQuestion.id) {
-      setOptimisticSingleSelect(null);
-      return;
-    }
-    if (
-      progress.customAnswer.trim().length === 0 &&
-      progress.selectedOptionValues.includes(optimisticSingleSelect.optionValue)
-    ) {
-      setOptimisticSingleSelect(null);
-    }
-  }, [
-    activeQuestion,
-    optimisticSingleSelect,
-    progress.customAnswer,
-    progress.selectedOptionValues,
-  ]);
+  // The optimistic pick is dropped once the draft confirms it or the question moves on.
+  if (
+    optimisticSingleSelect &&
+    activeQuestion &&
+    !activeQuestion.multiSelect &&
+    (optimisticSingleSelect.questionId !== activeQuestion.id ||
+      (!customAnswerActive &&
+        progress.selectedOptionValues.includes(optimisticSingleSelect.optionValue)))
+  ) {
+    setOptimisticSingleSelect(null);
+  }
 
   // A delayed answer only advances its own question, while permission remains granted.
   useEffect(() => {
@@ -145,46 +139,36 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     return clearAutoAdvance;
   }, [activeQuestion?.id, disabled]);
 
-  // useCallback rather than useEffectEvent, taking upstream's #6646 fix ("keep
-  // multi-select questions open after the first click"). Both forms already had
-  // the multi-select early return, so the bug was in the effect-event semantics
-  // themselves, not the branch — and this fork used the same pattern, so it
-  // carried the same defect. The fork's extra `optionIndex` and its reveal
-  // behaviour ride on top of the fix rather than replacing it.
-  const handleOptionSelection = useCallback(
-    (questionId: string, optionValue: string, optionIndex: number) => {
-      if (disabled || isResponding) return;
-      // A number-key shortcut can target an option scrolled below the fold of
-      // the bounded list, or hidden outright by a collapse. Reveal it either
-      // way so a selection is never invisible. `scrollIntoView` runs after the
-      // expand has painted, and no-ops when the option is already in view.
-      setIsCollapsed(false);
-      window.requestAnimationFrame(() => {
-        optionsListRef.current
-          ?.querySelector(`[data-option-index="${optionIndex}"]`)
-          ?.scrollIntoView({ block: "nearest" });
-      });
+  const handleOptionSelection = (questionId: string, optionValue: string, optionIndex: number) => {
+    if (disabled || isResponding) return;
+    // A number-key shortcut can target an option scrolled below the fold of
+    // the bounded list, or hidden outright by a collapse. Reveal it either
+    // way so a selection is never invisible. `scrollIntoView` runs after the
+    // expand has painted, and no-ops when the option is already in view.
+    setIsCollapsed(false);
+    window.requestAnimationFrame(() => {
+      optionsListRef.current
+        ?.querySelector(`[data-option-index="${optionIndex}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
 
-      if (activeQuestion?.multiSelect) {
-        onToggleOption(questionId, optionValue);
-        return;
-      }
-      setOptimisticSingleSelect({ questionId, optionValue });
+    if (activeQuestion?.multiSelect) {
       onToggleOption(questionId, optionValue);
-      if (autoAdvanceTimerRef.current !== null) {
-        window.clearTimeout(autoAdvanceTimerRef.current);
-      }
-      autoAdvanceTimerRef.current = window.setTimeout(() => {
-        autoAdvanceTimerRef.current = null;
-        onAdvanceRef.current();
-      }, 200);
-    },
-    [activeQuestion, disabled, isResponding, onToggleOption],
-  );
+      return;
+    }
+    setOptimisticSingleSelect({ questionId, optionValue });
+    onToggleOption(questionId, optionValue);
+    if (autoAdvanceTimerRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimerRef.current);
+    }
+    autoAdvanceTimerRef.current = window.setTimeout(() => {
+      autoAdvanceTimerRef.current = null;
+      advance();
+    }, 200);
+  };
 
-  // Keyboard shortcut: number keys 1-9 select corresponding options when focus is
-  // outside editable fields. Multi-select prompts toggle options in place; single-
-  // select prompts keep the existing auto-advance behavior.
+  const selectOptionFromShortcut = useEffectEvent(handleOptionSelection);
+
   useEffect(() => {
     // FORK: no `isCollapsed` bail - the options list stays mounted through a collapse.
     if (!activeQuestion || responseDisabled) return;
@@ -207,20 +191,16 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       const option = activeQuestion.options[optionIndex];
       if (!option) return;
       event.preventDefault();
-      handleOptionSelection(activeQuestion.id, option.value ?? option.label, optionIndex);
+      selectOptionFromShortcut(activeQuestion.id, option.value ?? option.label, optionIndex);
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-    // handleOptionSelection is a dependency now that it is a useCallback: its
-    // identity changes with the active question, and the listener must close
-    // over the current one (upstream #6646).
-  }, [activeQuestion, handleOptionSelection, responseDisabled]);
+  }, [activeQuestion, responseDisabled]);
 
   if (!activeQuestion) {
     return null;
   }
 
-  const customAnswerActive = progress.customAnswer.trim().length > 0;
   const visibility = describePendingOptionsVisibility({
     optionCount: activeQuestion.options.length,
     isCollapsed,
@@ -242,7 +222,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             render={
               <button
                 type="button"
-                onClick={() => setIsCollapsed((collapsed) => !collapsed)}
+                onClick={() => setIsCollapsed(!isCollapsed)}
                 aria-expanded={!isCollapsed}
                 aria-controls={optionsListId}
                 aria-label={visibility.toggleLabel}
@@ -316,9 +296,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           const isOptimisticallySelected =
             optimisticSingleSelect?.questionId === activeQuestion.id &&
             optimisticSingleSelect.optionValue === optionValue;
-          const isSelected =
-            isOptimisticallySelected ||
-            (!customAnswerActive && progress.selectedOptionValues.includes(optionValue));
+          const isSelected = isOptimisticallySelected || draftSelectedOptions?.[index] === true;
           const shortcutKey = index < 9 ? index + 1 : null;
           const className = cn(
             "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25",

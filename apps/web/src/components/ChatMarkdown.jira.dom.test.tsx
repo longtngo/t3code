@@ -6,9 +6,26 @@ import { renderDom } from "../testing/renderDom";
 
 // Only the server-config atom for ENVIRONMENT carries Jira settings, so an
 // unscoped render (no environment) reads the same empty config production does.
-const atomReader = vi.hoisted(() => ({ read: (_atom: unknown): unknown => null }));
+const atomReader = vi.hoisted(() => ({
+  read: (_atom: unknown): unknown => null,
+  initialValues: (): Array<readonly [never, unknown]> => [],
+}));
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: (atom: unknown) => atomReader.read(atom) }));
+vi.mock("@effect/atom-react", async () => {
+  const { AtomRegistry } = await import("effect/reactivity");
+  let registry: ReturnType<typeof AtomRegistry.make> | null = null;
+  // ChatMarkdown derives its server-config fields in an atom of its own; evaluate that one for
+  // real (seeded with this file's config) and keep every other read on the stub.
+  const isConfigFields = (atom: unknown) =>
+    (atom as { label?: readonly [string, string] }).label?.[0] === "markdown-server-config-fields";
+  return {
+    useAtomValue: (atom: never) => {
+      if (!isConfigFields(atom)) return atomReader.read(atom);
+      registry ??= AtomRegistry.make({ initialValues: atomReader.initialValues() });
+      return registry.get(atom);
+    },
+  };
+});
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../hooks/useSettings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../hooks/useSettings")>();
@@ -81,6 +98,7 @@ atomReader.read = (atom) =>
         availableEditors: [],
       }
     : null;
+atomReader.initialValues = () => [[CONFIG_ATOM as never, atomReader.read(CONFIG_ATOM)]];
 
 const TICKET = 'a[href="https://acme.atlassian.net/browse/OPS-12"]';
 

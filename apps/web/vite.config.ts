@@ -1,14 +1,15 @@
 import * as NodeZlib from "node:zlib";
 
-import react, { reactCompilerPreset } from "@vitejs/plugin-react";
-import babel from "@rolldown/plugin-babel";
+import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import compression from "compression";
+import { playwright } from "vite-plus/test/browser-playwright";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
 import { visualizer } from "rollup-plugin-visualizer";
 import { VitePWA } from "vite-plugin-pwa";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
+import * as Hash from "effect/Hash";
 import pkg from "./package.json" with { type: "json" };
 
 import {
@@ -23,13 +24,10 @@ import { tailwindPlugins } from "./vite/tailwind";
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
-// Single-origin dev is signalled positively, because it cannot be inferred
-// from the absence of VITE_HTTP_URL/VITE_WS_URL: the runner deletes those keys
-// but `loadRepoEnv` merges `.env`/`.env.local` *underneath* the process env, so
-// a developer with either URL in their `.env` gets it back here. Baking it then
-// pins the client to localhost and breaks every non-localhost origin — the
-// exact failure single-origin mode exists to prevent, and an invisible one
-// since the page still loads.
+// Single-origin dev is signalled positively, because it cannot be inferred from
+// the absence of VITE_HTTP_URL/VITE_WS_URL: the runner deletes those keys but
+// `loadRepoEnv` merges `.env`/`.env.local` *underneath* the process env, so a
+// developer with either URL in their `.env` gets it back here.
 const isSingleOriginDev = process.env.T3CODE_SINGLE_ORIGIN_DEV === "1";
 
 const port = Number(process.env.PORT ?? 5733);
@@ -46,6 +44,10 @@ const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.tr
 const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";
 const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
 const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
+const configuredDesktopUpdateRepository =
+  process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ||
+  process.env.GITHUB_REPOSITORY?.trim() ||
+  "";
 const configuredHostedAppUrl = (() => {
   const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
   if (explicitHostedAppUrl) {
@@ -61,11 +63,6 @@ const configuredHostedAppUrl = (() => {
 })();
 const sourcemapEnv = process.env.T3CODE_WEB_SOURCEMAP?.trim().toLowerCase();
 
-// Vite 8.1's experimental bundled dev mode: serves rolldown-bundled chunks in
-// dev for much faster startup/reload on large module graphs, with HMR served
-// as hot patches. Opt-in while experimental: T3CODE_BUNDLED_DEV=1 pnpm dev:web
-// The dev runner defaults this on for --share runs (remote browsers pay a
-// round trip per import level in unbundled dev); T3CODE_BUNDLED_DEV=0 opts out.
 const bundledDevEnv = process.env.T3CODE_BUNDLED_DEV?.trim().toLowerCase();
 const bundledDev = bundledDevEnv === "1" || bundledDevEnv === "true";
 
@@ -95,9 +92,10 @@ const unitTestProject = {
   extends: true,
   test: {
     name: "unit",
-    // `*.dom.test.tsx` belongs to the `dom` project above; without this exclusion both projects
-    // claim it and the DOM tests also run under `node`, where they cannot pass.
-    exclude: ["src/**/*.dom.test.tsx"],
+    // `*.dom.test.tsx` belongs to the `dom` project above and `*.browser.test.{ts,tsx}` to the
+    // `browser` project below; without these exclusions both projects claim the file and it also
+    // runs under `node`, where it cannot pass.
+    exclude: ["src/**/*.dom.test.tsx", "src/**/*.browser.test.{ts,tsx}"],
     include: ["src/**/*.test.{ts,tsx}"],
     // Sized for the full monorepo run, not for this project alone. A handful of these tests do
     // real work - WASM highlighting through a worker thread, building and parsing a VSIX - and
@@ -115,13 +113,38 @@ const unitTestProject = {
   },
 } satisfies TestProjectInlineConfiguration;
 
+// Anything that renders React or touches the DOM is named *.browser.test.{ts,tsx} and runs
+// in headless Chromium through the same plugins as the app, so it exercises compiled code.
+// Vitest's fixed browser API port (63315) collides when two checkouts run
+// browser tests at once, and `server.strictPort` above is inherited, so the
+// second run fails instead of moving on. Hash the checkout path like
+// scripts/dev-runner.ts does, into 61000-64999 (above Linux's ephemeral range).
+const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
+
+const browserTestProject = {
+  extends: true,
+  // Pre-bundled so the first test importing userEvent does not trigger a mid-run reload.
+  optimizeDeps: { include: ["vite-plus/test/browser"] },
+  test: {
+    name: "browser",
+    include: ["src/**/*.browser.test.{ts,tsx}"],
+    hookTimeout: 15_000,
+    testTimeout: 15_000,
+    api: { port: browserTestApiPort, strictPort: false },
+    browser: {
+      enabled: true,
+      headless: true,
+      provider: playwright(),
+      instances: [{ browser: "chromium" }],
+      screenshotFailures: false,
+    },
+  },
+} satisfies TestProjectInlineConfiguration;
+
 function resolveDevProxyTarget(
   backendPort: string | undefined,
   wsUrl: string | undefined,
 ): string | undefined {
-  // Browser dev is single-origin: the backend port is proxied through this
-  // server so the app works from any origin (localhost, tailnet, LAN, phone).
-  // T3CODE_PORT is set by scripts/dev-runner.ts for every non-desktop mode.
   const port = Number(backendPort?.trim());
   if (Number.isInteger(port) && port > 0) {
     return `http://localhost:${port}/`;
@@ -151,10 +174,6 @@ function resolveDevProxyTarget(
 
 const devProxyTarget = resolveDevProxyTarget(process.env.T3CODE_PORT, configuredWsUrl);
 
-// Vite's dev server sends JS uncompressed. On localhost that is free; over a
-// shared origin (tailnet, LAN) it is the whole cold-start: bundled dev serves
-// one ~25 MB chunk, and a typical uplink moves that in about a minute while
-// both machines sit idle. Compressing turns it into a few seconds of CPU.
 // Brotli quality 5 keeps encode time in the hundreds of ms; the default
 // (quality 11) would trade the transfer stall for an equally long encode stall.
 function devCompressionPlugin(): Plugin {
@@ -162,8 +181,6 @@ function devCompressionPlugin(): Plugin {
     name: "t3code:dev-compression",
     apply: "serve",
     configureServer(server) {
-      // compression() is typed against Express's req/res, which extend the
-      // node http objects Connect actually passes — safe to narrow.
       server.middlewares.use(
         compression({
           brotli: { params: { [NodeZlib.constants.BROTLI_PARAM_QUALITY]: 5 } },
@@ -176,7 +193,6 @@ function devCompressionPlugin(): Plugin {
 // Vite rejects requests whose Host header isn't localhost, which blocks sharing
 // a dev server over Tailscale/LAN. Tailnet names are safe to allow wholesale:
 // the DNS is controlled by tailscale, so they can't be rebound by an attacker.
-// Anything else (ngrok, a LAN IP alias) goes through the env var.
 const configuredAllowedHosts = (process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
   .split(",")
   .map((entry) => entry.trim())
@@ -270,19 +286,8 @@ export default defineConfig(() => {
           { bundle: "desktop", path: new URL("../desktop/package.json", import.meta.url) },
         ],
       }),
-      // Route components load as split chunks so settings, pull-request, and
-      // usage code stay out of the cold-start payload; the router prefetches
-      // them on navigation intent (see getRouter's defaultPreload).
       tanstackRouter({ autoCodeSplitting: true }),
-      react(),
-      babel({
-        // We need to be explicit about the parser options after moving to @vitejs/plugin-react v6.0.0
-        // This is because the babel plugin only automatically parses typescript and jsx based on relative paths (e.g. "**/*.ts")
-        // whereas the previous version of the plugin parsed all files with a .ts extension.
-        // This is causing our packages/ directory to fail to parse, as they are not relative to the CWD.
-        parserOpts: { plugins: ["typescript", "jsx"] },
-        presets: [reactCompilerPreset()],
-      }),
+      react({ compiler: true }),
       tailwindPlugins(bundledDev),
       // Bundle analyzer — gated behind ANALYZE so it is zero-cost by default.
       // Run `ANALYZE=1 pnpm --filter @t3tools/web build` to emit dist/stats.html.
@@ -311,7 +316,6 @@ export default defineConfig(() => {
       ],
     },
     define: {
-      // In dev mode, tell the web app where the WebSocket server lives
       "import.meta.env.VITE_WS_URL": JSON.stringify(configuredWsUrl ?? ""),
       // Pinned explicitly rather than left to Vite's automatic VITE_ exposure:
       // under single-origin dev this must stay empty even when a `.env`
@@ -330,6 +334,9 @@ export default defineConfig(() => {
       "import.meta.env.VITE_RELAY_OTLP_TRACES_TOKEN": JSON.stringify(configuredRelayTracingToken),
       "import.meta.env.VITE_HOSTED_APP_URL": JSON.stringify(configuredHostedAppUrl ?? ""),
       "import.meta.env.VITE_HOSTED_APP_CHANNEL": JSON.stringify(configuredHostedAppChannel),
+      "import.meta.env.T3CODE_DESKTOP_UPDATE_REPOSITORY": JSON.stringify(
+        configuredDesktopUpdateRepository,
+      ),
       "import.meta.env.APP_VERSION": JSON.stringify(configuredAppVersion),
     },
     resolve: {
@@ -354,11 +361,7 @@ export default defineConfig(() => {
       ...(devProxyTarget
         ? {
             // One entry per shared prefix; the server's dev catch-all 404s the
-            // same list, so the two sides cannot drift. `/ws` is the app's own
-            // socket and `/api` carries the device hub's stream sockets —
-            // Vite's HMR socket is matched separately and exactly (path "/"
-            // plus a vite-hmr subprotocol), so the upgrade handlers don't
-            // collide.
+            // same list, so the two sides cannot drift.
             proxy: Object.fromEntries(
               DEV_PROXIED_PATH_PREFIXES.map((prefix) => [
                 prefix,
@@ -376,7 +379,6 @@ export default defineConfig(() => {
       // Everywhere else, leaving this unset lets the client derive it from the
       // page origin, which is what makes HMR work over Tailscale/LAN instead of
       // failing an attempt against the wrong machine's localhost first.
-      // (Vite 8 logs connection state via console.debug — enable "Verbose".)
       ...(explicitHost
         ? {
             hmr: {
@@ -399,7 +401,11 @@ export default defineConfig(() => {
       sourcemap: buildSourcemap,
     },
     test: {
-      projects: [defineProject(unitTestProject), defineProject(domTestProject)],
+      projects: [
+        defineProject(unitTestProject),
+        defineProject(domTestProject),
+        defineProject(browserTestProject),
+      ],
     },
   };
 });

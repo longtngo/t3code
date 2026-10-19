@@ -182,9 +182,7 @@ function subscription(endpoint: string): PushSubscriptionRecord {
   };
 }
 
-// ---------------------------------------------------------------------------
 // Pure classification
-// ---------------------------------------------------------------------------
 
 describe("classifyPushEdge", () => {
   it("raises a finished edge for each terminal run status", () => {
@@ -331,9 +329,7 @@ describe("filterEdgesByCategory", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Relay service
-// ---------------------------------------------------------------------------
 
 interface Harness {
   readonly sent: Array<string>;
@@ -742,9 +738,7 @@ describe("WebPushRelay", () => {
   );
 });
 
-// ---------------------------------------------------------------------------
 // Invariant 18: a relay that falls behind must not pin the event hub
-// ---------------------------------------------------------------------------
 
 const databaseLayer = SqlitePersistenceMemory;
 const storesLayer = Layer.mergeAll(
@@ -877,9 +871,7 @@ it.live("keeps draining the domain-event hub while every push send is stuck", ()
   );
 });
 
-// ---------------------------------------------------------------------------
 // A finish the thread already continued past is interim
-// ---------------------------------------------------------------------------
 
 describe("WebPushRelay interim finish by a newer run", () => {
   const noInterim = { notificationCategories: { finishedBackground: false } };

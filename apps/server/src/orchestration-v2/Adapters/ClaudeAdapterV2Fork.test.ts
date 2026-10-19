@@ -266,9 +266,7 @@ describe("Claude context windows (invariants 12, 22)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Adapter-level arms
-// ---------------------------------------------------------------------------
 
 function makeTurnInput(input: {
   readonly threadId: ThreadId;
