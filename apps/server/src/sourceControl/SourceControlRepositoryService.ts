@@ -219,6 +219,7 @@ export const make = Effect.gen(function* () {
       cwd: input.cwd ?? config.cwd,
       cwdIsServerDefault: input.cwd === undefined,
       repository: input.repository.trim(),
+      anyAccount: true,
     });
     return toRepositoryInfo(providerKind, urls);
   });

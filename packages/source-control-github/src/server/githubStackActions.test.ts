@@ -104,6 +104,7 @@ const runGitHubStackAction = (send: Send, input: Parameters<typeof runStackActio
                       fingerprint: "fp",
                     };
                   }),
+                others: () => Effect.succeed([]),
                 invalidate: () => Effect.void,
               }),
               GitHubQuota.layer,

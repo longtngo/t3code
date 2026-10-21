@@ -117,6 +117,7 @@ const mockApi = Layer.succeed(
     rest: (input) => mockedExecute({ kind: "rest", ...input }),
     credential: (host) =>
       Effect.map(mockedCredential(host), (held) => ({ ...held, source: "gh" as const })),
+    others: () => Effect.succeed([]),
     withDirectory: () => (effect) => effect,
   }),
 );
@@ -193,6 +194,7 @@ const layer = it.layer(
             host,
             source: "gh" as const,
           })),
+        others: () => Effect.succeed([]),
         invalidate: () => Effect.void,
       }),
     ),
@@ -676,6 +678,7 @@ it.effect(
               source: "gh" as const,
               fingerprint: `${host}:${activeToken.length}${activeToken.at(-1)}`,
             })),
+          others: () => Effect.succeed([]),
           invalidate: () => Effect.void,
         }),
       );
@@ -4126,6 +4129,7 @@ describe("per-folder account", () => {
                 fingerprint: `${host}:${token}`,
               });
         },
+        others: () => Effect.succeed([]),
         invalidate: () => Effect.void,
       }),
     );

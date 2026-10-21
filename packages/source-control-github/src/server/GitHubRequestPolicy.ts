@@ -232,6 +232,7 @@ export class GitHubRequestPolicy extends Context.Service<
       host: string,
       cwd: string | null,
     ) => Effect.Effect<Omit<GitHubCredentials.GitHubCredential, "host">, GitHubApiError>;
+    readonly others: GitHubCredentials.GitHubCredentials["Service"]["others"];
     /** Runs `effect` under the folder's credential so batched reads never mix accounts. */
     readonly withDirectory: (input: {
       readonly host: string;
@@ -379,7 +380,12 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, scope || fingerprint));
   });
 
-  return GitHubRequestPolicy.of({ request, credential, withDirectory });
+  return GitHubRequestPolicy.of({
+    request,
+    credential,
+    withDirectory,
+    others: credentials.others,
+  });
 });
 
 export const layer = Layer.effect(GitHubRequestPolicy, make);

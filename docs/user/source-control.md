@@ -36,6 +36,10 @@ same place and pick it; that turns per-folder selection off for the host. You ca
 host off there. A saved token or `GH_TOKEN` takes precedence over both; a host turned off
 stays off either way.
 
+Looking up a repository to clone also tries the other accounts `gh` is signed in to when the
+first one cannot see it, unless you picked an account or set a token. The clone itself then
+signs in through git's own credential setup for the destination folder.
+
 For GitHub Enterprise, sign in with `gh auth login --hostname YOUR_HOST`. T3 Code treats a
 custom server name as GitHub once it has a credential for that host.
 

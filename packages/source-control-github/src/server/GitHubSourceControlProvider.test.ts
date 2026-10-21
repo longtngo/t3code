@@ -1,4 +1,10 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  SourceControlProviderKind,
+  VcsProcessExitError,
+  VcsProcessTimeoutError,
+} from "@t3tools/contracts";
+import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -13,6 +19,7 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 import type * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
@@ -234,6 +241,7 @@ function harness(input: {
                 source: "gh" as const,
                 fingerprint: `${host}:token`,
               })),
+          others: () => Effect.succeed([]),
           invalidate: () => Effect.void,
         }),
         GitHubQuota.layer,
@@ -1427,6 +1435,381 @@ describe("per-folder account", () => {
         sent.map((request) => [request.url, request.authorization]),
         [["https://api.github.com/user/repos", "Bearer token-for-bob"]],
       );
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("clone lookups with any signed-in account", () => {
+  interface Scenario {
+    readonly active?: string;
+    /** host -> stored logins as `gh auth status` lists them, the active one included. */
+    readonly stored?: Record<
+      string,
+      ReadonlyArray<{ readonly login: string; readonly state?: string }>
+    >;
+    /** Logins `gh auth token --user` cannot hand over. */
+    readonly signedOut?: ReadonlyArray<string>;
+    /** Tokens that can see each repository path; everything else is a 404. */
+    readonly visible?: Record<string, ReadonlyArray<string>>;
+    readonly firstStatus?: number;
+    /** What each token gets for a repository read instead of the visibility answer. */
+    readonly statusByToken?: Record<string, number>;
+    readonly env?: Record<string, string>;
+    readonly hosts?: Record<string, { readonly account?: string }>;
+    readonly tokens?: Record<string, string>;
+    readonly folders?: Record<string, string>;
+    readonly statusExit?: number;
+    readonly statusFails?: boolean;
+    /** False makes the fake list every host's logins, as a gh that ignored `--hostname` would. */
+    readonly honourHostname?: boolean;
+  }
+
+  const stack = (scenario: Scenario) => {
+    const active = scenario.active ?? "bob";
+    const sent: Array<{ readonly url: string; readonly authorization: string | undefined }> = [];
+    const statusCalls: Array<ReadonlyArray<string>> = [];
+    const spans: Array<Tracer.NativeSpan> = [];
+    const http = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => {
+        sent.push({ url: request.url, authorization: request.headers.authorization });
+        const url = new URL(request.url);
+        const path = url.pathname.replace(/^\/api\/v3/, "");
+        const token = (request.headers.authorization ?? "").replace("Bearer ", "");
+        const status =
+          sent.length === 1 && scenario.firstStatus !== undefined
+            ? scenario.firstStatus
+            : path !== "/user" && scenario.statusByToken?.[token] !== undefined
+              ? scenario.statusByToken[token]
+              : path === "/user" || (scenario.visible?.[path] ?? []).includes(token)
+                ? 200
+                : 404;
+        const name = path.split("/").slice(2).join("/");
+        const body =
+          status !== 200
+            ? { message: "Not Found" }
+            : path === "/user"
+              ? { login: token.replace("token-for-", "") }
+              : {
+                  full_name: name,
+                  html_url: `https://${url.host}/${name}`,
+                  ssh_url: `git@${url.host}:${name}.git`,
+                };
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(encodeJson(body), {
+              status,
+              headers: {
+                "content-type": "application/json",
+                ...(status === 429 ? { "retry-after": "60" } : {}),
+              },
+            }),
+          ),
+        );
+      }),
+    );
+    const run: SourceControlHost.SourceControlHost["Service"]["process"]["run"] = (input) => {
+      if (input.command === "gh" && input.args[1] === "status") {
+        statusCalls.push(input.args);
+        if (scenario.statusFails === true) {
+          return Effect.fail(
+            new VcsProcessTimeoutError({
+              operation: input.operation,
+              command: input.command,
+              cwd: input.cwd,
+              timeoutMs: 10_000,
+            }),
+          );
+        }
+        const host = input.args[input.args.indexOf("--hostname") + 1];
+        const hosts = Object.fromEntries(
+          Object.entries(scenario.stored ?? {})
+            .filter(([entryHost]) => scenario.honourHostname === false || entryHost === host)
+            .map(([entryHost, logins]) => [
+              entryHost,
+              logins.map(({ login, state }) => ({
+                state: state ?? "success",
+                active: login === active,
+                host: entryHost,
+                login,
+                tokenSource: "keyring",
+                gitProtocol: "https",
+              })),
+            ]),
+        );
+        const exitCode = scenario.statusExit ?? 0;
+        // The real runner fails a non-zero exit unless the caller allows it.
+        return exitCode !== 0 && input.allowNonZeroExit !== true
+          ? Effect.fail(
+              new VcsProcessExitError({
+                operation: input.operation,
+                command: input.command,
+                cwd: input.cwd,
+                exitCode,
+                detail: "exit",
+              }),
+            )
+          : Effect.succeed(processOutput(encodeJson({ hosts }), exitCode));
+      }
+      if (input.command === "gh") {
+        const at = input.args.indexOf("--user");
+        const user = at === -1 ? active : input.args[at + 1];
+        return Effect.succeed(
+          processOutput(
+            user !== undefined && scenario.signedOut?.includes(user) ? "" : `token-for-${user}\n`,
+          ),
+        );
+      }
+      const login = scenario.folders?.[input.cwd];
+      return Effect.succeed(
+        login === undefined
+          ? processOutput("", 1)
+          : processOutput(`protocol=https\nhost=github.com\nusername=${login}\npassword=pw\n`),
+      );
+    };
+    const settings = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      sourceControlHosts: {
+        github: {
+          hosts: Object.fromEntries(
+            Object.entries(scenario.hosts ?? {}).map(([host, choice]) => [
+              host,
+              { enabled: true, ...choice },
+            ]),
+          ),
+          tokens: scenario.tokens ?? {},
+        },
+      },
+    });
+    const layer = GitHubRest.layerWithDependencies.pipe(
+      Layer.provideMerge(http),
+      Layer.provideMerge(TestSourceControlHost.layer({ settings, process: { run } })),
+      Layer.provideMerge(Layer.succeed(HostProcess.Environment, scenario.env ?? {})),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    return { layer, sent, statusCalls, spans, tracer };
+  };
+
+  const lookup = (repository: string, cwd: string | null = null, anyAccount = true) =>
+    GitHubSourceControlProvider.make.pipe(
+      Effect.flatMap((gh) =>
+        gh.getRepositoryCloneUrls(
+          cwd === null
+            ? { cwd: "/server", cwdIsServerDefault: true, repository, anyAccount }
+            : { cwd, repository, anyAccount },
+        ),
+      ),
+    );
+
+  const senders = (sent: ReadonlyArray<{ readonly authorization: string | undefined }>) =>
+    sent.map((request) => (request.authorization ?? "").replace("Bearer token-for-", ""));
+
+  const THREE = { "github.com": [{ login: "bob" }, { login: "alice" }, { login: "carol" }] };
+
+  it.effect("finds a repository only a non-active stored login can see", () => {
+    const { layer, sent } = stack({
+      stored: { "github.com": [{ login: "bob" }, { login: "alice" }] },
+      visible: { "/repos/acme/secret": ["token-for-alice"] },
+    });
+    return Effect.gen(function* () {
+      const urls = yield* lookup("acme/secret");
+      assert.strictEqual(urls.nameWithOwner, "acme/secret");
+      assert.deepStrictEqual(senders(sent), ["bob", "alice"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each([
+    { label: "a saved token", scenario: { tokens: { "github.com": "saved" } } },
+    { label: "an environment token", scenario: { env: { GH_TOKEN: "envtok" } } },
+    { label: "a Settings pin", scenario: { hosts: { "github.com": { account: "bob" } } } },
+    {
+      label: "a Settings pin that fell back to the active login",
+      scenario: { hosts: { "github.com": { account: "dave" } }, signedOut: ["dave"] },
+    },
+  ] satisfies ReadonlyArray<{ readonly label: string; readonly scenario: Scenario }>)(
+    "never retries under $label",
+    ({ scenario }) => {
+      const { layer, sent, statusCalls } = stack({
+        stored: THREE,
+        visible: { "/repos/acme/secret": ["token-for-alice"] },
+        ...scenario,
+      });
+      return Effect.gen(function* () {
+        yield* Effect.flip(lookup("acme/secret"));
+        assert.strictEqual(sent.length, 1);
+        assert.strictEqual(statusCalls.length, 0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("never retries a caller that already pinned a credential", () => {
+    const { layer, sent } = stack({ stored: THREE });
+    return Effect.gen(function* () {
+      yield* Effect.flip(
+        lookup("acme/secret").pipe(
+          Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, {
+            host: "github.com",
+            token: Redacted.make("token-for-bob"),
+            source: "folder",
+            credentialFingerprint: "pin",
+          }),
+        ),
+      );
+      assert.strictEqual(sent.length, 1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("stops at the first login that can see the repository", () => {
+    const { layer, sent } = stack({
+      stored: THREE,
+      visible: { "/repos/acme/secret": ["token-for-alice", "token-for-carol"] },
+    });
+    return Effect.gen(function* () {
+      yield* lookup("acme/secret");
+      assert.deepStrictEqual(senders(sent), ["bob", "alice"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("tries only the lookup host's logins, even when gh lists every host", () => {
+    const { layer, sent } = stack({
+      honourHostname: false,
+      stored: {
+        "github.com": [{ login: "alice" }],
+        "ghe.example.com": [{ login: "bob" }, { login: "erin" }],
+      },
+      visible: { "/repos/acme/secret": ["token-for-alice"] },
+    });
+    return Effect.gen(function* () {
+      yield* Effect.flip(lookup("ghe.example.com/acme/secret"));
+      assert.deepStrictEqual(senders(sent), ["bob", "erin"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each([401, 429, 500])("never retries a %s", (status) => {
+    const { layer, sent } = stack({ stored: THREE, firstStatus: status });
+    return Effect.gen(function* () {
+      yield* Effect.flip(lookup("acme/secret"));
+      assert.strictEqual(sent.length, 1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("returns the original not-found when no login can see it", () => {
+    const { layer, sent } = stack({ stored: THREE });
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(lookup("acme/typo"));
+      assert.include(error.message, "Repository not found");
+      assert.deepStrictEqual(senders(sent), ["bob", "alice", "carol"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each([401, 500])(
+    "reports the original not-found when the other login answers %s",
+    (status) => {
+      const { layer, sent } = stack({
+        stored: { "github.com": [{ login: "bob" }, { login: "alice" }] },
+        statusByToken: { "token-for-alice": status },
+      });
+      return Effect.gen(function* () {
+        const error = yield* Effect.flip(lookup("acme/secret"));
+        assert.include(error.message, "Repository not found");
+        assert.deepStrictEqual(senders(sent), ["bob", "alice"]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect.each([401, 500])("moves on to the next login after one answers %s", (status) => {
+    const { layer, sent } = stack({
+      stored: { "github.com": [{ login: "bob" }, { login: "alice" }, { login: "carol" }] },
+      statusByToken: { "token-for-alice": status },
+      visible: { "/repos/acme/secret": ["token-for-carol"] },
+    });
+    return Effect.gen(function* () {
+      yield* lookup("acme/secret");
+      assert.deepStrictEqual(senders(sent), ["bob", "alice", "carol"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("skips a signed-out login and names each retry's real sender", () => {
+    const { layer, sent, spans, tracer } = stack({
+      stored: { "github.com": [{ login: "carol" }, { login: "bob" }, { login: "alice" }] },
+      folders: { "/parent": "alice" },
+      signedOut: ["carol"],
+    });
+    return Effect.gen(function* () {
+      yield* Effect.flip(lookup("acme/secret", "/parent"));
+      assert.deepStrictEqual(senders(sent), ["alice", "bob"]);
+      assert.deepStrictEqual(
+        spans
+          .filter((span) => span.name === "GitHubRest.send")
+          .map((span) => span.attributes.get("github.credential.account") ?? null),
+        ["alice", "bob"],
+      );
+    }).pipe(Effect.provide(layer), Effect.withTracer(tracer));
+  });
+
+  it.effect("does not retry the login a signed-out folder account fell back to", () => {
+    const { layer, sent } = stack({
+      stored: { "github.com": [{ login: "bob" }, { login: "carol" }] },
+      folders: { "/parent": "alice" },
+      signedOut: ["alice"],
+    });
+    return Effect.gen(function* () {
+      yield* Effect.flip(lookup("acme/secret", "/parent"));
+      assert.deepStrictEqual(senders(sent), ["bob", "carol"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("still tries the good logins when gh status exits 1 for a broken one", () => {
+    const { layer, sent } = stack({
+      statusExit: 1,
+      stored: {
+        "github.com": [{ login: "bob" }, { login: "stale", state: "error" }, { login: "alice" }],
+      },
+      visible: { "/repos/acme/secret": ["token-for-alice"] },
+    });
+    return Effect.gen(function* () {
+      yield* lookup("acme/secret");
+      assert.deepStrictEqual(senders(sent), ["bob", "alice"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("tries no other login when gh status fails", () => {
+    const { layer, sent } = stack({ stored: THREE, statusFails: true });
+    return Effect.gen(function* () {
+      yield* Effect.flip(lookup("acme/secret"));
+      assert.deepStrictEqual(senders(sent), ["bob"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("never retries without anyAccount, as fork remotes ask", () => {
+    const { layer, sent, statusCalls } = stack({
+      stored: THREE,
+      visible: { "/repos/acme/secret": ["token-for-alice"] },
+    });
+    return Effect.gen(function* () {
+      yield* Effect.flip(lookup("acme/secret", "/project", false));
+      assert.strictEqual(sent.length, 1);
+      assert.strictEqual(statusCalls.length, 0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("never retries a bare name, the folder account's own repository", () => {
+    const { layer, sent, statusCalls } = stack({ stored: THREE });
+    return Effect.gen(function* () {
+      yield* Effect.flip(lookup("secret"));
+      assert.deepStrictEqual(
+        sent.map((request) => new URL(request.url).pathname),
+        ["/user", "/repos/bob/secret"],
+      );
+      assert.strictEqual(statusCalls.length, 0);
     }).pipe(Effect.provide(layer));
   });
 });

@@ -38,6 +38,7 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
             fingerprint: `${host}:${tokens[0]}`,
           };
         }),
+      others: () => Effect.succeed([]),
       invalidate: () =>
         Effect.sync(() => {
           invalidations++;
@@ -269,6 +270,7 @@ describe("GitHubRest", () => {
                   },
             );
           },
+          others: () => Effect.succeed([]),
           invalidate: () => Effect.void,
         }),
       );

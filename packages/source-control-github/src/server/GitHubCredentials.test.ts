@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "@effect/vitest"
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Redacted from "effect/Redacted";
 import { ChildProcessSpawner } from "effect/process";
 import * as TestClock from "effect/testing/TestClock";
@@ -38,6 +39,8 @@ function harness(
   signedOut: ReadonlyArray<string> = [],
   tokens: Record<string, string> = {},
   fills: Record<string, FillAnswer> = {},
+  /** `activeSignedOut`: gh holds no active login. `stored`: what `gh auth status` lists. */
+  options: { readonly activeSignedOut?: boolean; readonly stored?: ReadonlyArray<string> } = {},
 ) {
   const calls: Array<ReadonlyArray<string>> = [];
   const gitCalls: Array<SourceControlHost.SourceControlProcessInput> = [];
@@ -74,8 +77,28 @@ function harness(
     return Effect.sync(() => {
       calls.push(input.args);
       ghCalls.push(input);
+      if (input.args[1] === "status") {
+        const logins = (options.stored ?? []).map((login) => ({
+          state: "success",
+          active: false,
+          host: "github.com",
+          login,
+          tokenSource: "keyring",
+          gitProtocol: "https",
+        }));
+        return {
+          exitCode: ChildProcessSpawner.ExitCode(0),
+          stdout: JSON.stringify({ hosts: { "github.com": logins } }),
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        };
+      }
       const user = input.args[input.args.indexOf("--user") + 1];
-      if (input.args.includes("--user") && user !== undefined && signedOut.includes(user)) {
+      const missing = input.args.includes("--user")
+        ? user !== undefined && signedOut.includes(user)
+        : options.activeSignedOut === true;
+      if (missing) {
         return {
           exitCode: ChildProcessSpawner.ExitCode(0),
           stdout: "",
@@ -120,6 +143,15 @@ function harness(
 }
 
 const userCall = (user: string) => ["auth", "token", "--hostname", "github.com", "--user", user];
+
+/** Every log message a test's effect writes. */
+const capturingLogs = () => {
+  const messages: Array<string> = [];
+  const logger = Logger.make(({ message }) => {
+    messages.push(Array.isArray(message) ? message.join(" ") : String(message));
+  });
+  return { messages, layer: Logger.layer([logger]) };
+};
 
 describe("GitHubCredentials", () => {
   beforeEach(() => {
@@ -528,5 +560,33 @@ describe("GitHubCredentials", () => {
         expect(calls).toEqual([userCall("alice"), userCall("bob"), userCall("alice")]);
       }).pipe(Effect.provide(layer));
     });
+  });
+});
+
+describe("GitHubCredentials.others", () => {
+  beforeEach(() => {
+    for (const name of TOKEN_VARIABLES) vi.stubEnv(name, "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.effect("offers no other login when the credential already tried cannot be read again", () => {
+    const { layer } = harness({}, [], {}, {}, { activeSignedOut: true, stored: ["bob"] });
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      expect(yield* credentials.others("github.com", null)).toEqual([]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("logs a skipped login as signed out, never as falling back to the active one", () => {
+    const { layer } = harness({}, ["carol"], {}, {}, { stored: ["carol", "bob"] });
+    const logs = capturingLogs();
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      const others = yield* credentials.others("github.com", null);
+      expect(others.map((credential) => credential.account)).toEqual(["bob"]);
+      expect(logs.messages).toEqual(["GitHub account carol on github.com is not signed in to gh"]);
+    }).pipe(Effect.provide(Layer.merge(layer, logs.layer)));
   });
 });

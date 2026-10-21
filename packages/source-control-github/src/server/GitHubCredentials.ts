@@ -17,6 +17,7 @@ import * as SourceControlHost from "@t3tools/source-control-core/server/SourceCo
 import { readSourceControlHostSettings } from "@t3tools/source-control-core/client/definition";
 
 import * as GitHubClient from "../client/definition.ts";
+import { parseGitHubAuthStatus } from "./gitHubAuthStatus.ts";
 
 const TOKEN_TTL = Duration.minutes(5);
 const MISSING_TTL = Duration.seconds(10);
@@ -96,6 +97,11 @@ export class GitHubCredentials extends Context.Service<
     ) => Effect.Effect<GitHubCredential, GitHubCredentialUnavailableError>;
     /** Drops every held token for the host after GitHub refused one, so the next read asks again. */
     readonly invalidate: (host: string) => Effect.Effect<void>;
+    /** The other signed-in stored gh logins for `host`; [] when the account was an explicit choice. */
+    readonly others: (
+      host: string,
+      cwd: string | null,
+    ) => Effect.Effect<ReadonlyArray<GitHubCredential>>;
   }
 >()("@t3tools/source-control-github/server/GitHubCredentials") {}
 
@@ -280,9 +286,8 @@ export const make = Effect.gen(function* () {
     const token = yield* fromGh(host, account).pipe(
       Effect.tapError((error) =>
         account !== undefined && error._tag === "GitHubNotSignedInError"
-          ? Effect.logWarning(
-              `GitHub account ${account} on ${host} is not signed in to gh; using the active login`,
-            )
+          ? // Neutral: `named` falls back to the active login, but `others` just skips this one.
+            Effect.logWarning(`GitHub account ${account} on ${host} is not signed in to gh`)
           : Effect.void,
       ),
     );
@@ -326,8 +331,38 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  return GitHubCredentials.of({
-    get: Effect.fn("GitHubCredentials.get")(function* (rawHost, cwd) {
+  const ghLogins = (host: string) =>
+    process
+      .run({
+        operation: "GitHubCredentials.others",
+        command: "gh",
+        args: ["auth", "status", "--json", "hosts", "--hostname", host],
+        cwd: workingDirectory,
+        env: {
+          GH_DEBUG: "",
+          GH_PROMPT_DISABLED: "1",
+          GH_TOKEN: "",
+          GITHUB_TOKEN: "",
+          GH_ENTERPRISE_TOKEN: "",
+          GITHUB_ENTERPRISE_TOKEN: "",
+        },
+        // gh exits 1 when any stored login has failed; the JSON still lists the others.
+        allowNonZeroExit: true,
+        timeoutMs: 10_000,
+      })
+      .pipe(
+        Effect.map((output) =>
+          parseGitHubAuthStatus(output.stdout)
+            .accounts.filter(
+              (entry) =>
+                entry.host === host && entry.authenticated && entry.environmentVariable === null,
+            )
+            .map((entry) => entry.account),
+        ),
+      );
+
+  const get: GitHubCredentials["Service"]["get"] = Effect.fn("GitHubCredentials.get")(
+    function* (rawHost, cwd) {
       const host = normalizeHost(rawHost);
       const { choice, saved } = yield* hostSettings(host);
       if (choice?.enabled === false) {
@@ -361,6 +396,30 @@ export const make = Effect.gen(function* () {
         ? active(host)
         : named(host, folder.account, "folder");
       return { ...credential, folder: folder.outcome };
+    },
+  );
+
+  return GitHubCredentials.of({
+    get,
+    others: Effect.fn("GitHubCredentials.others")(function* (rawHost, cwd) {
+      const host = normalizeHost(rawHost);
+      // Only when T3 picked the account itself. Read from Settings rather than the credential's
+      // `source`: a pin and a signed-out folder account both come back as `gh`.
+      const { choice, saved } = yield* hostSettings(host);
+      if (choice?.enabled === false || saved !== null || choice?.account !== undefined) return [];
+      if (environmentToken(host, environment) !== null) return [];
+      const tried = yield* get(host, cwd).pipe(Effect.option);
+      if (Option.isNone(tried)) return [];
+      const logins = yield* ghLogins(host).pipe(Effect.orElseSucceed(() => []));
+      const found: Array<GitHubCredential> = [];
+      for (const login of logins) {
+        // Straight from the token cache, not `named`: a signed-out login is skipped rather than
+        // replaced by the active one, so no two entries share a token and each names its sender.
+        const held = yield* Cache.get(tokenCache, `${host}\u0000${login}`).pipe(Effect.option);
+        if (Option.isNone(held) || held.value.fingerprint === tried.value.fingerprint) continue;
+        found.push({ host, ...held.value, source: "gh", account: login });
+      }
+      return found;
     }),
     invalidate: (rawHost) => {
       const host = normalizeHost(rawHost);

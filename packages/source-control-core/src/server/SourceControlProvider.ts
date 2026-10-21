@@ -156,6 +156,8 @@ export class SourceControlProvider extends Context.Service<
       readonly cwd: string;
       /** True when the caller named no folder and `cwd` is the server's own, which must not pick an account. */
       readonly cwdIsServerDefault?: boolean;
+      /** A clone lookup: on not-found, try the other signed-in accounts for the host. */
+      readonly anyAccount?: boolean;
       readonly context?: SourceControlProviderContext;
       readonly repository: string;
     }) => Effect.Effect<SourceControlRepositoryCloneUrls, SourceControlProviderError>;

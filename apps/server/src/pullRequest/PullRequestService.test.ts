@@ -1139,6 +1139,7 @@ it.effect("keeps branch deletion on the credential that passed source repository
             source: "gh" as const,
             fingerprint: `${host}:${activeToken}`,
           })),
+        others: () => Effect.succeed([]),
         invalidate: () => Effect.void,
       }),
     );

@@ -337,6 +337,7 @@ const failure = (detail: string, cause?: unknown) => new GitHubFailure({ detail,
 
 const PULL_REQUEST_NOT_FOUND = "Pull request not found. Check the PR number or URL and try again.";
 const REPOSITORY_NOT_FOUND = "Repository not found. Check the owner and name and try again.";
+const isGitHubNotFound = Schema.is(GitHubRequestPolicy.GitHubApiNotFoundError);
 
 function fromGitHubApiError(
   error: GitHubRequestPolicy.GitHubApiError,
@@ -1015,7 +1016,31 @@ export const make = Effect.gen(function* () {
               }
             : null);
         if (locator === null) return yield* failure("Repositories are named owner/name.");
-        return repositoryCloneUrls(yield* readRepository(locator, cwd));
+        const first = yield* readRepository(locator, cwd).pipe(Effect.result);
+        if (Result.isSuccess(first)) return repositoryCloneUrls(first.success);
+        // A clone only needs the repository's URLs, and git authenticates the clone through its own
+        // config, so any login gh holds that can see the repository will do. A bare name is the
+        // folder account's own repository, and an existing pin is a choice this must not override.
+        if (
+          input.anyAccount !== true ||
+          parseGitHubRepositorySelector(input.repository, fallbackHost) === null ||
+          !isGitHubNotFound(first.failure.cause) ||
+          (yield* GitHubRequestPolicy.PinnedGitHubCredential) !== null
+        ) {
+          return yield* first.failure;
+        }
+        for (const other of yield* api.others(locator.host, cwd)) {
+          const { fingerprint, ...held } = other;
+          const retried = yield* readRepository(locator, cwd).pipe(
+            Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, {
+              ...held,
+              credentialFingerprint: fingerprint,
+            }),
+            Effect.result,
+          );
+          if (Result.isSuccess(retried)) return repositoryCloneUrls(retried.success);
+        }
+        return yield* first.failure;
       },
       (effect, input) =>
         effect.pipe(

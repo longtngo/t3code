@@ -707,11 +707,15 @@ function createGitHubProviderWithFakeGh(scenario: FakeGhScenario = {}): {
           ),
         ),
       getRepositoryCloneUrls: (input) =>
-        execute({
-          operation: "getRepositoryCloneUrls",
-          cwd: input.cwd,
-          args: ["repo", "view", input.repository, "--json", "nameWithOwner,url,sshUrl"],
-        }).pipe(Effect.map((result) => JSON.parse(result.stdout))),
+        // A fork remote is fetched as the folder's account, so its lookup must not find the fork
+        // as another one.
+        input.anyAccount === undefined
+          ? execute({
+              operation: "getRepositoryCloneUrls",
+              cwd: input.cwd,
+              args: ["repo", "view", input.repository, "--json", "nameWithOwner,url,sshUrl"],
+            }).pipe(Effect.map((result) => JSON.parse(result.stdout)))
+          : Effect.fail(fail(input.cwd, "A fork remote lookup asked for any account.")),
       createRepository: (input) =>
         Effect.fail(fail(input.cwd, `Unexpected repository create: ${input.repository}`)),
       checkoutChangeRequest: (input) =>
