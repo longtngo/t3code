@@ -53,6 +53,7 @@ import {
   resolveBaseFreshness,
   buildPullRequestTimeline,
   writePullRequestDetailSnapshot,
+  pullRequestNotFoundMessage,
 } from "./pullRequestDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
@@ -1443,4 +1444,15 @@ describe("single-PR merge compatibility during stack discovery", () => {
       ).toBe(allowed);
     },
   );
+});
+
+describe("not-found message", () => {
+  it("V6: names the account when known and keeps today's text when not", () => {
+    expect(pullRequestNotFoundMessage("alice")).toBe(
+      "It may be an issue rather than a pull request, or alice can't see it.",
+    );
+    expect(pullRequestNotFoundMessage(undefined)).toBe(
+      "It may be an issue rather than a pull request, or this account can't see it.",
+    );
+  });
 });

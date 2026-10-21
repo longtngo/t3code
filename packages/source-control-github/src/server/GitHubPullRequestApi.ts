@@ -931,6 +931,10 @@ export const make = Effect.gen(function* () {
       value: { accountId: string; viewer: string };
     }
   >();
+  // A credential GitHub refused is asked again only after 30 s: every folder routed to it would
+  // otherwise re-send `/user`, and each 401 empties the host's token cache. Other failures (an
+  // unreadable identity, the network) are retried at once.
+  const routingFailures = new Map<string, { at: number; error: unknown }>();
   const identityLocks = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
   const RoutingIdentity = Schema.Struct({
     id: PositiveInt,
@@ -958,6 +962,11 @@ export const make = Effect.gen(function* () {
               const cached = routingIdentities.get(key);
               if (cached !== undefined && now - cached.at < 10 * 60_000)
                 return { ...credential, ...cached.value };
+              const failed = routingFailures.get(key);
+              if (failed !== undefined && now - failed.at < 30_000) {
+                // The held value is one this same lookup failed with, so its type is already in the channel.
+                return yield* Effect.fail(failed.error as never);
+              }
               // Pin verification so an auth switch cannot poison its cache entry.
               const identity = yield* api
                 .rest({
@@ -994,7 +1003,16 @@ export const make = Effect.gen(function* () {
                   }),
                   Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, credential),
                   Effect.provideService(SourceControlRateLimit.CredentialScope, key),
+                  Effect.tapError((error) =>
+                    Effect.sync(() => {
+                      if (error._tag !== "GitHubApiAuthenticationError") return;
+                      if (routingFailures.size >= 128)
+                        routingFailures.delete(routingFailures.keys().next().value!);
+                      routingFailures.set(key, { at: now, error });
+                    }),
+                  ),
                 );
+              routingFailures.delete(key);
               const value = { accountId: String(identity.id), viewer: identity.login };
               if (routingIdentities.size >= 128)
                 routingIdentities.delete(routingIdentities.keys().next().value!);

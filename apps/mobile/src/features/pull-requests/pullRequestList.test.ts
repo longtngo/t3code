@@ -226,6 +226,19 @@ describe("all-environment PR list", () => {
 });
 
 describe("mobile PR scan and filters", () => {
+  it("resolves authored and author:me with a row's own account before the host's", () => {
+    const by = (login: string) => ({ login, name: null, avatarUrl: null });
+    const rows = [
+      entry(1, { author: by("alice"), viewer: "alice" }),
+      entry(2, { author: by("octocat"), viewer: "alice" }),
+      entry(3),
+    ];
+    const viewers = { "github.com": "octocat" };
+    const numbers = (controls: Parameters<typeof filterPullRequestList>[1], query = "") =>
+      filterPullRequestList(rows, controls, viewers, query, new Set()).map((row) => row.number);
+    expect(numbers({ ...DEFAULT_PR_LIST_CONTROLS, involvement: "authored" })).toEqual([3, 1]);
+    expect(numbers(DEFAULT_PR_LIST_CONTROLS, "author:@me")).toEqual([3, 1]);
+  });
   it("resolves authored and author:me per host rather than mixing account identities", () => {
     const rows = [entry(1), entry(2, { host: "enterprise.test" })];
     const viewers = { "github.com": "Octocat", "enterprise.test": "someone-else" };

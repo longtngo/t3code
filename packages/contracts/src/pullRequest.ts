@@ -341,6 +341,8 @@ export const PullRequestListEntry = Schema.Struct({
   updatedAt: IsoDateTime,
   observedAt: Schema.optional(Schema.Finite),
   viewerReviewRequested: Schema.Boolean,
+  /** The login this row was read as; absent from servers that resolve one viewer per host. */
+  viewer: Schema.optionalKey(TrimmedNonEmptyString),
   labels: Schema.Array(PullRequestLabel),
   reviewDecision: Schema.optional(PullRequestReviewDecision),
   checksState: Schema.optional(PullRequestChecksState),

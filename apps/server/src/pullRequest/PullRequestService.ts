@@ -1009,6 +1009,31 @@ export const make = Effect.gen(function* () {
     );
 
   /**
+   * The folder's own login where the provider routes by folder (GitHub follows each folder's git
+   * credential account); null when that lookup failed. Its identity is cached per credential, so
+   * asking per folder sends one `/user` per account, not per folder. `allowPaused` lets the lookup
+   * through a rate-limit pause, as the host lookup for files-viewed already is.
+   */
+  const folderViewer = (
+    project: SupportedProject,
+    options?: { readonly allowPaused: boolean },
+  ): Effect.Effect<string, PullRequestProviderError> | null => {
+    if (project.api.getRoutingIdentity === undefined) return null;
+    const registered = options?.allowPaused === true ? registry.get(project.api.kind) : null;
+    const api =
+      registered === null
+        ? project.api
+        : withRateLimitBackoff(registered, project.host, rateLimits, { viewerAllowsPause: true });
+    return api.getViewer({ cwd: project.project.workspaceRoot, host: project.host });
+  };
+
+  /** The folder's own login, else the host's: one unreadable folder must not sign the host out. */
+  const viewerOrHost = (project: SupportedProject, hostViewer: string) =>
+    (folderViewer(project) ?? Effect.succeed(hostViewer)).pipe(
+      Effect.orElseSucceed(() => hostViewer),
+    );
+
+  /**
    * `checks` is absent because no listed row carries its check state: that one filter is
    * the host's alone, and a row nobody narrowed stays rather than being guessed at.
    */
@@ -1069,6 +1094,7 @@ export const make = Effect.gen(function* () {
       viewerReviewRequested:
         input.item.author?.login.toLowerCase() !== viewer &&
         input.item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer),
+      ...(input.viewer.trim().length === 0 ? {} : { viewer: input.viewer }),
       labels: input.item.labels,
       ...(input.item.reviewDecision === undefined || input.item.reviewDecision === null
         ? {}
@@ -1160,13 +1186,30 @@ export const make = Effect.gen(function* () {
       };
     }
 
+    // A folder whose own lookup failed is searched alone (`root:`), never with another account's
+    // folder; it still filters with the host login until its lookup recovers.
+    const ownViewer = new Map(
+      yield* Effect.forEach(
+        readable,
+        (project) =>
+          Effect.map(
+            (folderViewer(project) ?? Effect.succeed(viewers[project.host]!)).pipe(Effect.option),
+            (viewer) => [project.project.workspaceRoot, Option.getOrNull(viewer)] as const,
+          ),
+        { concurrency: REPOSITORY_CONCURRENCY },
+      ),
+    );
+    const viewerFor = (project: SupportedProject) =>
+      ownViewer.get(project.project.workspaceRoot) ?? viewers[project.host]!;
+    const accountOf = (project: SupportedProject) =>
+      ownViewer.get(project.project.workspaceRoot) ?? `root:${project.project.workspaceRoot}`;
     const limit = input.limit ?? DEFAULT_REPOSITORY_LIST_LIMIT;
     const cursorOf = (project: SupportedProject): ListCursor | undefined =>
       continuation?.get(project.cursorKey);
 
     const readRepository = (project: SupportedProject): Effect.Effect<RepositoryBatch> => {
       {
-        const viewer = viewers[project.host]!;
+        const viewer = viewerFor(project);
         const key = project.cursorKey;
         const cursor = cursorOf(project);
         return project.api
@@ -1242,7 +1285,7 @@ export const make = Effect.gen(function* () {
       const separately = () =>
         Effect.forEach(chunk, readRepository, { concurrency: REPOSITORY_CONCURRENCY });
       if (readAcross === undefined) return separately();
-      const viewer = viewers[first.host]!;
+      const viewer = viewerFor(first);
       const cursor = cursorOf(first);
       return readAcross({
         cwd: first.project.workspaceRoot,
@@ -1346,7 +1389,7 @@ export const make = Effect.gen(function* () {
         separate.push(project);
         continue;
       }
-      const key = `${project.host}\n${cursorOf(project)?.updatedBefore ?? ""}`;
+      const key = `${project.host}\n${accountOf(project)}\n${cursorOf(project)?.updatedBefore ?? ""}`;
       const group = together.get(key);
       if (group === undefined) together.set(key, [project]);
       else group.push(project);
@@ -1384,7 +1427,11 @@ export const make = Effect.gen(function* () {
         credential !== null
           ? Effect.succeed(credential.viewer)
           : resolveViewers([project], new Map()).pipe(
-              Effect.map(([resolved]) => resolved?.viewer ?? null),
+              Effect.flatMap(([resolved]) =>
+                resolved?.viewer == null
+                  ? Effect.succeed(null)
+                  : viewerOrHost(project, resolved.viewer),
+              ),
             ),
       ),
     );
@@ -1774,9 +1821,12 @@ export const make = Effect.gen(function* () {
     resolveViewers([project], new Map(), { allowPaused: true }).pipe(
       Effect.flatMap(([resolved]) => {
         const error = resolved?.error ?? null;
-        return error === null
-          ? Effect.succeed(resolved?.viewer ?? null)
-          : Effect.fail(toPullRequestError(operation)(error));
+        if (error !== null) return Effect.fail(toPullRequestError(operation)(error));
+        if (resolved?.viewer == null) return Effect.succeed(null);
+        // No fallback to the host's login: these ticks belong to the folder's own account.
+        return (
+          folderViewer(project, { allowPaused: true }) ?? Effect.succeed(resolved.viewer)
+        ).pipe(Effect.mapError(toPullRequestError(operation)));
       }),
     );
 

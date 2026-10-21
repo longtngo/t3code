@@ -2,7 +2,7 @@ import { SourceControlProviderKind, VcsProcessExitError } from "@t3tools/contrac
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
-import { assert, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -17,6 +17,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type {
   OrchestrationProjectShell,
   ProjectId,
+  PullRequestListEntry,
   PullRequestReviewCapabilities,
   PullRequestReviewerCapabilities,
 } from "@t3tools/contracts";
@@ -3867,3 +3868,440 @@ it.effect("expands only files the change request changes, across every slice of 
     assert.deepStrictEqual(read, ["src/old.ts->src/new.ts", "gone.md->gone.md"]);
   }),
 );
+
+describe("each project's own account as the viewer", () => {
+  /** Which login each folder's git credential routes to. */
+  const ACCOUNTS: Record<string, string> = { "/u": "alice", "/u2": "alice", "/p": "bob" };
+  const routing: NonNullable<PullRequestProviderApi["getRoutingIdentity"]> = (input) =>
+    Effect.succeed({ accountId: "1", viewer: ACCOUNTS[input.cwd] ?? "nobody" });
+  const viewerOfFolder: PullRequestProviderApi["getViewer"] = (input) =>
+    Effect.succeed(ACCOUNTS[input.cwd] ?? "nobody");
+  const twoAccounts = () => [
+    project({ id: "pu", title: "uni", workspaceRoot: "/u", repository: "acme/uni" }),
+    project({ id: "pp", title: "personal", workspaceRoot: "/p", repository: "me/personal" }),
+  ];
+  const oneRow = () =>
+    Effect.succeed({
+      items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+      truncated: false,
+      continues: false,
+    });
+  const searchRecorder = () => {
+    const calls: Array<{ cwd: string; viewer: string; repositories: ReadonlyArray<string> }> = [];
+    const listChangeRequestsAcross: NonNullable<
+      PullRequestProviderApi["listChangeRequestsAcross"]
+    > = (input) => {
+      calls.push({ cwd: input.cwd, viewer: input.viewer, repositories: input.repositories });
+      return Effect.succeed({
+        items: input.repositories.map((repository) =>
+          batchedChangeRequest(1, repository, "2026-07-02T00:00:00Z"),
+        ),
+        truncated: false,
+      });
+    };
+    return { calls, listChangeRequestsAcross };
+  };
+  const rowViewers = (entries: ReadonlyArray<PullRequestListEntry>) =>
+    Object.fromEntries(entries.map((entry) => [entry.projectId, entry.viewer]));
+
+  it.effect("stamps each row with its own folder's account", () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: twoAccounts(),
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getRoutingIdentity: routing,
+            getViewer: viewerOfFolder,
+            listChangeRequests: oneRow,
+          }),
+        ],
+      });
+      const result = yield* service.list({ state: "open" });
+      assert.deepStrictEqual(rowViewers(result.entries), { pu: "alice", pp: "bob" });
+    }),
+  );
+
+  it.effect("never puts two accounts in one search, and sends each its own login", () =>
+    Effect.gen(function* () {
+      const { calls, listChangeRequestsAcross } = searchRecorder();
+      const service = yield* makeService({
+        projects: [
+          ...twoAccounts(),
+          project({ id: "pu2", title: "uni2", workspaceRoot: "/u2", repository: "acme/uni2" }),
+        ],
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getRoutingIdentity: routing,
+            getViewer: viewerOfFolder,
+            listChangeRequestsAcross,
+          }),
+        ],
+      });
+      yield* service.list({ state: "open", involvement: "reviewing" });
+      assert.deepStrictEqual(
+        calls.toSorted((a, b) => a.viewer.localeCompare(b.viewer)),
+        [
+          { cwd: "/u", viewer: "alice", repositories: ["acme/uni", "acme/uni2"] },
+          { cwd: "/p", viewer: "bob", repositories: ["me/personal"] },
+        ],
+      );
+    }),
+  );
+
+  it.effect("decides a review request against the row's own account", () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: twoAccounts(),
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getRoutingIdentity: routing,
+            getViewer: viewerOfFolder,
+            listChangeRequests: () =>
+              Effect.succeed({
+                items: [
+                  { ...changeRequest(1, "2026-07-02T00:00:00Z"), reviewRequestLogins: ["bob"] },
+                ],
+                truncated: false,
+                continues: false,
+              }),
+          }),
+        ],
+      });
+      const result = yield* service.list({ state: "open" });
+      assert.deepStrictEqual(
+        Object.fromEntries(
+          result.entries.map((entry) => [entry.projectId, entry.viewerReviewRequested]),
+        ),
+        { pu: false, pp: true },
+      );
+    }),
+  );
+
+  it.effect("reads a folder whose lookup failed as the host, searched on its own", () =>
+    Effect.gen(function* () {
+      const { calls, listChangeRequestsAcross } = searchRecorder();
+      const service = yield* makeService({
+        projects: [
+          project({ id: "pbad", title: "bad", workspaceRoot: "/bad", repository: "acme/bad" }),
+          ...twoAccounts(),
+        ],
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getRoutingIdentity: routing,
+            getViewer: (input) =>
+              input.cwd === "/bad" ? Effect.fail(requestFailed) : viewerOfFolder(input),
+            listChangeRequestsAcross,
+          }),
+        ],
+      });
+      const result = yield* service.list({ state: "open" });
+      assert.strictEqual(result.providers[0]?.configured, true);
+      assert.deepStrictEqual(result.errors, []);
+      const host = result.viewers["github.com"];
+      assert.deepStrictEqual(rowViewers(result.entries), { pbad: host, pu: "alice", pp: "bob" });
+      assert.deepStrictEqual(calls.find((call) => call.cwd === "/bad")?.repositories, ["acme/bad"]);
+      assert.strictEqual(calls.length, 3);
+    }),
+  );
+
+  it.effect("keeps one account's folders in one search", () =>
+    Effect.gen(function* () {
+      const { calls, listChangeRequestsAcross } = searchRecorder();
+      const service = yield* makeService({
+        projects: ["a", "b", "c"].map((name) =>
+          project({ id: name, title: name, workspaceRoot: `/${name}`, repository: `acme/${name}` }),
+        ),
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getRoutingIdentity: routing,
+            getViewer: () => Effect.succeed("alice"),
+            listChangeRequestsAcross,
+          }),
+        ],
+      });
+      const result = yield* service.list({ state: "open" });
+      assert.strictEqual(calls.length, 1);
+      assert.strictEqual(result.entries.length, 3);
+    }),
+  );
+
+  it.effect("asks a provider without per-folder accounts once per host", () =>
+    Effect.gen(function* () {
+      let lookups = 0;
+      const service = yield* makeService({
+        projects: ["a", "b", "c"].map((name) =>
+          project({ id: name, title: name, workspaceRoot: `/${name}`, repository: `acme/${name}` }),
+        ),
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getViewer: () => Effect.sync(() => (lookups += 1)).pipe(Effect.as("alice")),
+            listChangeRequests: () =>
+              Effect.succeed({ items: [], truncated: false, continues: true }),
+          }),
+        ],
+      });
+      yield* Effect.forEach(
+        ["all", "authored", "reviewing"] as const,
+        (involvement) => service.list({ state: "open", involvement }),
+        { concurrency: "unbounded" },
+      );
+      assert.strictEqual(lookups, 1);
+    }),
+  );
+
+  it.effect("gives the detail the folder's account, not the host's", () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: twoAccounts(),
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getRoutingIdentity: routing,
+            getViewer: viewerOfFolder,
+            listChangeRequests: oneRow,
+            getChangeRequest: () => Effect.succeed(hostedChangeRequest("body")),
+            getChangeRequestActivity: () => Effect.die("unused"),
+          }),
+        ],
+      });
+      // The list resolves bob for the host (the first folder to answer, by path).
+      assert.strictEqual((yield* service.list({ state: "open" })).viewers["github.com"], "bob");
+      const detail = yield* service.detail({
+        projectId: "pu" as ProjectId,
+        repository: "acme/uni",
+        number: 1,
+      });
+      assert.strictEqual(detail.viewer, "alice");
+    }),
+  );
+
+  it.effect("falls back to the host's account in the detail when the folder's lookup fails", () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: twoAccounts(),
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getRoutingIdentity: routing,
+            getViewer: (input) =>
+              input.cwd === "/u" ? Effect.fail(requestFailed) : viewerOfFolder(input),
+            listChangeRequests: oneRow,
+            getChangeRequest: () => Effect.succeed(hostedChangeRequest("body")),
+            getChangeRequestActivity: () => Effect.die("unused"),
+          }),
+        ],
+      });
+      const host = (yield* service.list({ state: "open" })).viewers["github.com"];
+      const detail = yield* service.detail({
+        projectId: "pu" as ProjectId,
+        repository: "acme/uni",
+        number: 1,
+      });
+      assert.strictEqual(host, "bob");
+      assert.strictEqual(detail.viewer, host);
+    }),
+  );
+
+  it.effect("gives the detail the verified account under a routing credential", () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: twoAccounts(),
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getRoutingIdentity: routing,
+            getViewer: viewerOfFolder,
+            withVerifiedCredential: (_, use) =>
+              Effect.suspend(() =>
+                use({ accountId: "101", viewer: "octocat", credentialFingerprint: "verified" }),
+              ),
+            getChangeRequest: () => Effect.succeed(hostedChangeRequest("body")),
+            getChangeRequestActivity: () => Effect.die("unused"),
+          }),
+        ],
+      });
+      const reference = {
+        projectId: "pu" as ProjectId,
+        repository: "acme/uni",
+        number: 1,
+        host: "github.com",
+        expectedAccountId: "101",
+      };
+      const detail = yield* service.withRoutingCredential(reference, service.detail(reference));
+      assert.strictEqual(detail.viewer, "octocat");
+    }),
+  );
+
+  it.effect("files viewed marks as the folder's account while the host is paused", () =>
+    Effect.gen(function* () {
+      const gitlab = environmentViewedProvider(new Map([["a.ts", "r1"]]), []);
+      const service = yield* makeService({
+        projects: twoAccounts(),
+        providers: [
+          {
+            ...gitlab,
+            kind: SourceControlProviderKind.make("github"),
+            getRoutingIdentity: routing,
+            getViewer: viewerOfFolder,
+            listChangeRequests: () =>
+              Effect.fail(
+                new PullRequestProviderError({
+                  provider: SourceControlProviderKind.make("github"),
+                  operation: "listChangeRequests",
+                  reason: "rate-limited",
+                  detail: "GitHub API rate limit exceeded.",
+                }),
+              ),
+          },
+        ],
+      });
+      assert.isNotEmpty((yield* service.list({ state: "open" })).errors);
+      const viewed = yield* service.filesViewed({
+        projectId: "pu" as ProjectId,
+        repository: "acme/uni",
+        number: 1,
+      });
+      assert.isDefined(viewed);
+    }),
+  );
+
+  it.effect("refuses to file viewed marks when the folder's own lookup fails", () =>
+    Effect.gen(function* () {
+      const revisions = new Map([["a.ts", "r1"]]);
+      const gitlab = environmentViewedProvider(revisions, []);
+      const service = yield* makeService({
+        projects: [
+          project({ id: "pbad", title: "bad", workspaceRoot: "/bad", repository: "acme/bad" }),
+          project({ id: "pp", title: "personal", workspaceRoot: "/p", repository: "me/personal" }),
+        ],
+        providers: [
+          {
+            ...gitlab,
+            kind: SourceControlProviderKind.make("github"),
+            getRoutingIdentity: routing,
+            getViewer: (input) =>
+              input.cwd === "/bad" ? Effect.fail(requestFailed) : viewerOfFolder(input),
+            listChangeRequests: oneRow,
+          },
+        ],
+      });
+      // The host resolves as bob from /p; /bad must not borrow it.
+      yield* service.list({ state: "open" });
+      const exit = yield* Effect.exit(
+        service.filesViewed({ projectId: "pbad" as ProjectId, repository: "acme/bad", number: 1 }),
+      );
+      assert.isTrue(Exit.isFailure(exit));
+    }),
+  );
+
+  /** The real GitHub provider over a fake HTTP; `/user` answers 401 for the `revoked` token. */
+  const realGitHubProvider = (tokenOf: Record<string, string>) =>
+    Effect.gen(function* () {
+      const userRequests: Array<string> = [];
+      const credentials = Layer.succeed(
+        GitHubCredentials.GitHubCredentials,
+        GitHubCredentials.GitHubCredentials.of({
+          get: (host, cwd) => {
+            const token = tokenOf[cwd ?? ""] ?? "alice";
+            return Effect.succeed({
+              host,
+              token: Redacted.make(token),
+              source: "gh" as const,
+              fingerprint: `${host}:${token}`,
+            });
+          },
+          others: () => Effect.succeed([]),
+          invalidate: () => Effect.void,
+        }),
+      );
+      const http = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.gen(function* () {
+            const isUser = request.url.endsWith("/user");
+            const token = (request.headers["authorization"] ?? "").replace("Bearer ", "");
+            if (isUser) userRequests.push(token);
+            yield* Effect.yieldNow;
+            if (isUser && token === "revoked") {
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 }),
+              );
+            }
+            const body = isUser
+              ? { id: token === "bob" ? 202 : 101, login: token }
+              : {
+                  data: { search: { issueCount: 0, nodes: [], pageInfo: { hasNextPage: false } } },
+                };
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify(body), {
+                headers: { "content-type": "application/json" },
+              }),
+            );
+          }),
+        ),
+      );
+      const provider = yield* GitHubPullRequestProvider.make.pipe(
+        Effect.provide(
+          GitHubPullRequestApi.layer.pipe(
+            Layer.provide(
+              GitHubRest.layer.pipe(
+                Layer.provideMerge(Layer.mergeAll(credentials, http)),
+                Layer.provideMerge(GitHubQuota.layer),
+                Layer.provideMerge(SourceControlRateLimit.layer),
+              ),
+            ),
+            Layer.provide(TestSourceControlHost.layer()),
+            Layer.provide(NodeServices.layer),
+          ),
+        ),
+      );
+      return { provider, userRequests };
+    });
+
+  it.effect("sends one /user per account when several lists start cold together", () =>
+    Effect.gen(function* () {
+      const { provider, userRequests } = yield* realGitHubProvider({
+        "/u": "alice",
+        "/u2": "alice",
+        "/p": "bob",
+      });
+      const service = yield* makeService({
+        projects: [
+          ...twoAccounts(),
+          project({ id: "pu2", title: "uni2", workspaceRoot: "/u2", repository: "acme/uni2" }),
+        ],
+        providers: [provider],
+      });
+      yield* Effect.forEach(
+        ["all", "authored", "reviewing"] as const,
+        (involvement) => service.list({ state: "open", involvement }),
+        { concurrency: "unbounded" },
+      );
+      assert.strictEqual(userRequests.length, 2);
+    }),
+  );
+
+  it.effect("asks a refused credential again only after 30 seconds", () =>
+    Effect.gen(function* () {
+      const { provider, userRequests } = yield* realGitHubProvider({
+        "/u": "revoked",
+        "/u2": "revoked",
+        "/p": "bob",
+      });
+      const service = yield* makeService({
+        projects: [
+          ...twoAccounts(),
+          project({ id: "pu2", title: "uni2", workspaceRoot: "/u2", repository: "acme/uni2" }),
+        ],
+        providers: [provider],
+      });
+      const refused = () => userRequests.filter((token) => token === "revoked").length;
+      yield* service.list({ state: "open" });
+      assert.strictEqual(refused(), 1);
+      yield* service.list({ state: "closed" });
+      assert.strictEqual(refused(), 1);
+      yield* TestClock.adjust("31 seconds");
+      yield* service.list({ state: "merged" });
+      assert.strictEqual(refused(), 2);
+    }),
+  );
+});

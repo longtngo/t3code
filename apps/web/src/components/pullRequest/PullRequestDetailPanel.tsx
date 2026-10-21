@@ -117,6 +117,7 @@ import {
   latestPullRequestReviewOutcomes,
   loadingPullRequestCheckoutCommand,
   isPullRequestNotFound,
+  pullRequestNotFoundMessage,
   isStackedPullRequestBase,
   pullRequestActionNeedsHostRefresh,
   pullRequestCheckoutCommand,
@@ -486,6 +487,12 @@ export function PullRequestDetailPanel({
         changeRequestRepositoryUrl(handoffSummary.url),
       )
     : loadingCheckoutCommand;
+  const notFound =
+    detailQuery.error !== null && !detail && isPullRequestNotFound(detailQuery.failure);
+  // The account the read went out as: the one that could not see it.
+  const notFoundAccount = useEnvironmentQuery(
+    notFound ? pullRequestEnvironment.routing({ environmentId, input: reference }) : null,
+  ).data?.viewer;
   const branchRefsQuery = useEnvironmentQuery(
     detail === null
       ? null
@@ -1686,11 +1693,10 @@ export function PullRequestDetailPanel({
       >
         {detailQuery.error && !detail ? (
           <PullRequestsUnavailableState
-            {...(isPullRequestNotFound(detailQuery.failure)
+            {...(notFound
               ? {
                   title: `Pull request #${reference.number} not found`,
-                  error:
-                    "It may be an issue rather than a pull request, or this account can't see it.",
+                  error: pullRequestNotFoundMessage(notFoundAccount),
                 }
               : { error: detailQuery.error })}
             refreshing={detailQuery.isPending}

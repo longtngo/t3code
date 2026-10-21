@@ -155,6 +155,29 @@ describe("pull request involvement filtering", () => {
   });
 });
 
+describe("per-row viewer", () => {
+  it("V5: a row's own viewer outranks the host's, and an old server's row falls back to it", () => {
+    const authoredBy = (login: string) => ({ login, name: null, avatarUrl: null });
+    const rows = [
+      entry({ number: 1, author: authoredBy("alice"), viewer: "alice" }),
+      entry({ number: 2, author: authoredBy("Bilal"), viewer: "alice" }),
+      entry({ number: 3, author: authoredBy("Bilal") }),
+    ];
+    expect(
+      filterPullRequestsByInvolvement(rows, VIEWERS, "authored").map((item) => item.number),
+    ).toEqual([1, 3]);
+    expect(
+      groupPullRequestsByInvolvement(rows, VIEWERS).map((group) => [
+        group.key,
+        group.entries.map((item) => item.number),
+      ]),
+    ).toEqual([
+      ["authored", [1, 3]],
+      ["others", [2]],
+    ]);
+  });
+});
+
 describe("ranking what a search found", () => {
   const row = (overrides: Partial<PullRequestListEntry> & { number?: number }) =>
     entry({ number: 1, ...overrides });

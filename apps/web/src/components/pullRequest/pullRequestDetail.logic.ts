@@ -1217,6 +1217,9 @@ export function buildAskAboutGuideStopHandoff(input: {
 
 const isPullRequestOperationError = Schema.is(PullRequestOperationError);
 
+export const pullRequestNotFoundMessage = (account: string | undefined) =>
+  `It may be an issue rather than a pull request, or ${account ?? "this account"} can't see it.`;
+
 export function isPullRequestNotFound(failure: unknown): boolean {
   return isPullRequestOperationError(failure) && failure.reason === "not-found";
 }
