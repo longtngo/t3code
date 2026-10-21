@@ -24,11 +24,12 @@ const REQUEST_HEADERS = { "x-github-api-version": "2022-11-28", "user-agent": "t
  * host, so a page cannot read one account's data with another's token mid-flight. Server-local:
  * never put its value in RPC payloads or cache keys.
  */
-export const PinnedGitHubCredential = Context.Reference<{
-  readonly host: string;
-  readonly token: Redacted.Redacted<string>;
-  readonly credentialFingerprint: string;
-} | null>("@t3tools/source-control-github/server/GitHubRequestPolicy/PinnedGitHubCredential", {
+export const PinnedGitHubCredential = Context.Reference<
+  | (Omit<GitHubCredentials.GitHubCredential, "fingerprint"> & {
+      readonly credentialFingerprint: string;
+    })
+  | null
+>("@t3tools/source-control-github/server/GitHubRequestPolicy/PinnedGitHubCredential", {
   defaultValue: () => null,
 });
 
@@ -200,6 +201,8 @@ export type GitHubAnswer<A> = {
 
 export interface GitHubRequest {
   readonly host: string;
+  /** The project folder the request is for, whose git config may name the account; null when none. */
+  readonly cwd: string | null;
   readonly operation: string;
   /** The quota the request spends: `core` for REST, `graphql` for GraphQL. */
   readonly resource: string;
@@ -224,13 +227,18 @@ export class GitHubRequestPolicy extends Context.Service<
       input: GitHubRequest,
       send: (headers: Readonly<Record<string, string>>) => Effect.Effect<GitHubAnswer<A>, E, R>,
     ) => Effect.Effect<A, E | GitHubApiError, R>;
-    /** The credential a request to `host` would carry right now. */
+    /** The credential a request to `host` for the folder `cwd` would carry right now. */
     readonly credential: (
       host: string,
-    ) => Effect.Effect<
-      { readonly token: Redacted.Redacted<string>; readonly fingerprint: string },
-      GitHubApiError
-    >;
+      cwd: string | null,
+    ) => Effect.Effect<Omit<GitHubCredentials.GitHubCredential, "host">, GitHubApiError>;
+    /** Runs `effect` under the folder's credential so batched reads never mix accounts. */
+    readonly withDirectory: (input: {
+      readonly host: string;
+      readonly cwd: string | null;
+    }) => <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | GitHubCredentials.GitHubCredentialUnavailableError, R>;
   }
 >()("@t3tools/source-control-github/server/GitHubRequestPolicy") {}
 
@@ -243,7 +251,7 @@ export const make = Effect.gen(function* () {
 
   const credential: GitHubRequestPolicy["Service"]["credential"] = Effect.fn(
     "GitHubRest.credential",
-  )(function* (host) {
+  )(function* (host, cwd) {
     const normalized = normalizeHost(host);
     const pinned = yield* PinnedGitHubCredential;
     if (pinned !== null) {
@@ -254,11 +262,25 @@ export const make = Effect.gen(function* () {
           operation: "credential",
         });
       }
-      return { token: pinned.token, fingerprint: pinned.credentialFingerprint };
+      const { credentialFingerprint, ...held } = pinned;
+      return { ...held, fingerprint: credentialFingerprint };
     }
-    const held = yield* credentials.get(normalized);
-    return { token: held.token, fingerprint: held.fingerprint };
+    return yield* credentials.get(normalized, cwd);
   });
+
+  const withDirectory: GitHubRequestPolicy["Service"]["withDirectory"] = (input) => (effect) =>
+    Effect.gen(function* () {
+      if ((yield* PinnedGitHubCredential) !== null) return yield* effect;
+      // A failure here is the request's own error; running unpinned would send as another account.
+      const { fingerprint, ...held } = yield* credentials.get(input.host, input.cwd);
+      return yield* effect.pipe(
+        Effect.provideService(PinnedGitHubCredential, {
+          ...held,
+          credentialFingerprint: fingerprint,
+        }),
+        Effect.provideService(SourceControlRateLimit.CredentialScope, fingerprint),
+      );
+    });
 
   // The REST/GraphQL transport span owns request and quota metadata.
   const request: GitHubRequestPolicy["Service"]["request"] = Effect.fnUntraced(function* <A, E, R>(
@@ -271,7 +293,17 @@ export const make = Effect.gen(function* () {
       "github.host": host,
       "github.operation": input.operation,
     });
-    const { token, fingerprint } = yield* credential(host);
+    const { token, fingerprint, source, account, fallback, requestedAccount, folder } =
+      yield* credential(host, input.cwd);
+    yield* Effect.annotateCurrentSpan({
+      "github.credential.source": source,
+      ...(account === undefined ? {} : { "github.credential.account": account }),
+      ...(fallback === undefined ? {} : { "github.credential.fallback": fallback }),
+      ...(requestedAccount === undefined
+        ? {}
+        : { "github.credential.requested_account": requestedAccount }),
+      ...(folder === undefined ? {} : { "github.credential.folder": folder }),
+    });
     const scope = yield* SourceControlRateLimit.CredentialScope;
     // A refusal pauses the whole host, whichever quota it spent: the key PullRequestService
     // records its own backoff under.
@@ -347,7 +379,7 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, scope || fingerprint));
   });
 
-  return GitHubRequestPolicy.of({ request, credential });
+  return GitHubRequestPolicy.of({ request, credential, withDirectory });
 });
 
 export const layer = Layer.effect(GitHubRequestPolicy, make);

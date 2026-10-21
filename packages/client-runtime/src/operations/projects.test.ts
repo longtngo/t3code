@@ -1,11 +1,14 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 
 import {
   findExistingAddProject,
   getCloneDirectoryName,
   getDefaultCloneUrl,
+  getNewProjectPublishTargets,
+  getNewProjectRepository,
   normalizePastedCloneUrl,
 } from "./projects.ts";
 import type { EnvironmentProject } from "../state/models.ts";
@@ -102,5 +105,31 @@ describe("add project shared logic", () => {
     expect(findExistingAddProject({ projects, environmentId: env, path: "/repo" })?.id).toBe(
       "project",
     );
+  });
+});
+
+describe("new project publish targets", () => {
+  it("leaves a GitHub owner blank so the server publishes under the folder's account", () => {
+    const [target] = getNewProjectPublishTargets({
+      versionControlSystems: [],
+      sourceControlProviders: [
+        {
+          kind: SourceControlProviderKind.make("github"),
+          label: "github",
+          status: "available",
+          installHint: "",
+          version: Option.none(),
+          detail: Option.none(),
+          auth: {
+            status: "authenticated",
+            account: Option.some("auth"),
+            host: Option.none(),
+            detail: Option.none(),
+          },
+        },
+      ],
+    });
+    expect(target?.owner).toBeNull();
+    expect(getNewProjectRepository(target!, "/work/my-app")).toBe("my-app");
   });
 });

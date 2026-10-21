@@ -228,6 +228,7 @@ describe("gitHubViewerPermissions", () => {
               host: "github.com",
               token: Redacted.make("credential"),
               credentialFingerprint: fingerprint,
+              source: "gh",
             }),
           );
         expect(scoped.mergeCapabilities.squash).toBe(fingerprint !== "restricted");

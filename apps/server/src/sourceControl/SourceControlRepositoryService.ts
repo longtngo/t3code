@@ -217,6 +217,7 @@ export const make = Effect.gen(function* () {
     const provider = yield* providers.get(providerKind);
     const urls = yield* provider.getRepositoryCloneUrls({
       cwd: input.cwd ?? config.cwd,
+      cwdIsServerDefault: input.cwd === undefined,
       repository: input.repository.trim(),
     });
     return toRepositoryInfo(providerKind, urls);

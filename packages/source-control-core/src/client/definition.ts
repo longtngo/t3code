@@ -43,6 +43,12 @@ export interface SourceControlClientDefinition {
   readonly publicHost: string | null;
   readonly publishDescription: string;
   readonly publishHost: (signedInHost: string | null) => string;
+  /**
+   * Who a new project's repository is published under, given the signed-in account: an owner to
+   * name, `null` owner to let the host place it (GitHub uses the account the project folder
+   * uses), or null when the host needs a choice an account cannot make, such as Azure DevOps'
+   * project.
+   */
   readonly newRepositoryOwner: (account: string | null) => { readonly owner: string | null } | null;
   readonly defaultCloneTransport: "https" | "ssh";
   readonly changeRequestUrl: (input: ChangeRequestUrlInput) => string | null;

@@ -50,9 +50,11 @@ const layerSourceControlProviderRegistryTest = (input: {
         Layer.mock(BitbucketPullRequestApi.BitbucketPullRequestApi)({}),
         ServerSettings.ServerSettingsService.layerTest(),
         Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({}),
-        Layer.mock(GitHubRest.GitHubRest)({}),
+        Layer.mock(GitHubRest.GitHubRest)({ withDirectory: () => (effect) => effect }),
         // The GitHub provider's GraphQL reads go through these; no test here makes one.
-        Layer.mock(GitHubRequestPolicy.GitHubRequestPolicy)({}),
+        Layer.mock(GitHubRequestPolicy.GitHubRequestPolicy)({
+          withDirectory: () => (effect) => effect,
+        }),
         Layer.succeed(
           HttpClient.HttpClient,
           HttpClient.make(() => Effect.die(new Error("Unexpected GitHub GraphQL read"))),

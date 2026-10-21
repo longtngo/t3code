@@ -3,7 +3,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
 
@@ -28,6 +27,8 @@ export interface GitHubRestResponse {
 
 export interface GitHubRestInput {
   readonly host: string;
+  /** The project folder the request is for, whose git config may name the account; null when none. */
+  readonly cwd: string | null;
   readonly operation: string;
   readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   /** Relative to the API root, e.g. `repos/acme/web/pulls/7`; query string included. */
@@ -48,13 +49,8 @@ export class GitHubRest extends Context.Service<
   GitHubRest,
   {
     readonly rest: (input: GitHubRestInput) => Effect.Effect<GitHubRestResponse, GitHubApiError>;
-    /** The credential a request to `host` would carry right now. */
-    readonly credential: (
-      host: string,
-    ) => Effect.Effect<
-      { readonly token: Redacted.Redacted<string>; readonly fingerprint: string },
-      GitHubApiError
-    >;
+    readonly credential: GitHubRequestPolicy.GitHubRequestPolicy["Service"]["credential"];
+    readonly withDirectory: GitHubRequestPolicy.GitHubRequestPolicy["Service"]["withDirectory"];
   }
 >()("@t3tools/source-control-github/server/GitHubRest") {}
 
@@ -127,6 +123,7 @@ export const make = Effect.gen(function* () {
    */
   const send = Effect.fn("GitHubRest.send")(function* (input: {
     readonly host: string;
+    readonly cwd: string | null;
     readonly operation: string;
     readonly request: HttpClientRequest.HttpClientRequest;
     readonly maxResponseBytes: number;
@@ -144,6 +141,7 @@ export const make = Effect.gen(function* () {
     return yield* policy.request(
       {
         host,
+        cwd: input.cwd,
         operation: input.operation,
         // Every REST path this reads today spends `core`; a `search/` read would need its own
         // resource here.
@@ -209,6 +207,7 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((interactive) =>
         send({
           host: input.host,
+          cwd: input.cwd,
           operation: input.operation,
           request,
           maxResponseBytes: input.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
@@ -220,7 +219,11 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  return GitHubRest.of({ rest, credential: policy.credential });
+  return GitHubRest.of({
+    rest,
+    credential: policy.credential,
+    withDirectory: policy.withDirectory,
+  });
 });
 
 /**

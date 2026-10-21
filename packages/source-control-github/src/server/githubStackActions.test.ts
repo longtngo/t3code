@@ -1,11 +1,13 @@
 import { expect, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as FileSystem from "effect/FileSystem";
 import * as Redacted from "effect/Redacted";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
+import * as TestClock from "effect/testing/TestClock";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
@@ -64,15 +66,19 @@ const graphQlHttp = (send: Send) =>
     }),
   );
 
-const runGitHubStackAction = (send: Send, input: Parameters<typeof runStackAction>[0]) =>
-  runStackAction(input).pipe(
+const runGitHubStackAction = (send: Send, input: Parameters<typeof runStackAction>[0]) => {
+  const folders: Array<string | null> = [];
+  return runStackAction(input).pipe(
     Effect.provide(
       Layer.mergeAll(
         fakeGit,
         Layer.mock(GitHubRest.GitHubRest)({
-          credential: () => Effect.succeed({ token: Redacted.make("token"), fingerprint: "fp" }),
-          rest: (request) =>
-            send(words(request.path, request.body), "rest").pipe(
+          credential: () =>
+            Effect.succeed({ token: Redacted.make("token"), fingerprint: "fp", source: "gh" }),
+          withDirectory: () => (effect) => effect,
+          rest: (request) => {
+            folders.push(request.cwd);
+            return send(words(request.path, request.body), "rest").pipe(
               Effect.map((body) => ({
                 status: 200,
                 headers: {},
@@ -80,18 +86,23 @@ const runGitHubStackAction = (send: Send, input: Parameters<typeof runStackActio
                 truncated: false,
                 invalidUtf8: false,
               })),
-            ),
+            );
+          },
         }),
         GitHubRequestPolicy.layer.pipe(
           Layer.provide(
             Layer.mergeAll(
               Layer.succeed(GitHubCredentials.GitHubCredentials, {
-                get: (host) =>
-                  Effect.succeed({
-                    host,
-                    token: Redacted.make("token"),
-                    source: "gh" as const,
-                    fingerprint: "fp",
+                // GraphQL resolves its credential here, so its folder is recorded too.
+                get: (host, cwd) =>
+                  Effect.sync(() => {
+                    folders.push(cwd);
+                    return {
+                      host,
+                      token: Redacted.make("token"),
+                      source: "gh" as const,
+                      fingerprint: "fp",
+                    };
                   }),
                 invalidate: () => Effect.void,
               }),
@@ -103,7 +114,15 @@ const runGitHubStackAction = (send: Send, input: Parameters<typeof runStackActio
         Layer.succeed(HttpClient.HttpClient, graphQlHttp(send)),
       ),
     ),
+    // Every request is made for the stack's own folder, whose account it must send as. Checked
+    // on failure too: tests that expect a refusal read the result, which would hide this check.
+    Effect.exit,
+    Effect.flatMap((exit) => {
+      expect(folders.filter((folder) => folder !== input.cwd)).toEqual([]);
+      return exit;
+    }),
   );
+};
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -196,6 +215,21 @@ it.effect("submits one atomic merge with the reviewed head and respects the merg
     expect(api.calls[1]).toContain("sha=ccc");
     expect(api.calls[1]).toContain("merge_action=default");
     expect(api.calls[1]).toContain("merge_method=squash");
+  }),
+);
+
+it.effect("polls a pending merge until GitHub answers", () =>
+  Effect.gen(function* () {
+    const api = fake([
+      stack,
+      { status: "pending", details: { uuid: "u1" } },
+      { status: "merged", details: {} },
+    ]);
+    const run = yield* Effect.forkChild(runGitHubStackAction(api.execute, input));
+    yield* TestClock.adjust("1 second");
+    yield* Fiber.join(run);
+    expect(api.calls).toHaveLength(3);
+    expect(api.calls[2]).toContain("repos/acme/web/pulls/3/merge-async/u1");
   }),
 );
 

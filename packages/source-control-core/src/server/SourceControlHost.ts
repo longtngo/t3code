@@ -11,6 +11,19 @@ import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
+/**
+ * Env for a git command that may reach a credential helper but must never prompt or block.
+ * Without it, git's HTTPS credential helper (e.g. git-credential-osxkeychain under launchd)
+ * can hang until the caller's timeout fires.
+ */
+export const GIT_REMOTE_PROMPT_ENV = Object.freeze({
+  GCM_INTERACTIVE: "never",
+  GIT_ASKPASS: "",
+  GIT_TERMINAL_PROMPT: "0",
+  SSH_ASKPASS: "",
+  SSH_ASKPASS_REQUIRE: "never",
+} satisfies NodeJS.ProcessEnv);
+
 export interface SourceControlProcessInput {
   readonly operation: string;
   readonly command: string;

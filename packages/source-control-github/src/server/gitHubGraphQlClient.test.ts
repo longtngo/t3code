@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -12,6 +13,7 @@ import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubGraphQlClient from "./gitHubGraphQlClient.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
+import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import { PullRequestBatchesGraphQLGroup } from "./pullRequestBatches.graphql.ts";
 
 const NOW = Date.parse("2026-10-05T12:00:00.000Z");
@@ -67,6 +69,7 @@ const readStats = (host: string, number = 7) =>
     ).pipe(
       Effect.provideService(GitHubGraphQlClient.GitHubGraphQlTarget, {
         host,
+        cwd: null,
         operation: "stats",
       }),
     );
@@ -92,6 +95,7 @@ describe("GitHubGraphQlAuth", () => {
           GraphQLResolver.request({ owner: "acme", name: "web", number: 7 }, resolver).pipe(
             Effect.provideService(GitHubGraphQlClient.GitHubGraphQlTarget, {
               host,
+              cwd: null,
               operation: "stats",
             }),
           );
@@ -123,7 +127,12 @@ describe("GitHubGraphQlAuth", () => {
       // The pause is the one REST reads respect too.
       const api = yield* GitHubRest.GitHubRest;
       const rest = yield* Effect.flip(
-        api.rest({ host: "github.com", operation: "stack", path: "repos/acme/web/stacks" }),
+        api.rest({
+          host: "github.com",
+          cwd: null,
+          operation: "stack",
+          path: "repos/acme/web/stacks",
+        }),
       );
       expect(rest).toMatchObject({ _tag: "SourceControlRateLimitPausedError" });
       expect(requests).toHaveLength(1);
@@ -224,7 +233,7 @@ describe("GitHubGraphQlAuth", () => {
       expect(requests).toHaveLength(1);
       // REST spends a quota of its own, which the GraphQL reserve does not hold back.
       const api = yield* GitHubRest.GitHubRest;
-      yield* api.rest({ host: "github.com", operation: "user", path: "user" });
+      yield* api.rest({ host: "github.com", cwd: null, operation: "user", path: "user" });
       expect(requests).toHaveLength(2);
     }).pipe(Effect.provide(layer));
   });
@@ -238,7 +247,9 @@ const callStats = (target: Partial<GitHubGraphQlClient.GitHubGraphQlTarget["Serv
     ).pipe(Effect.provide(GitHubGraphQlClient.layer));
     return yield* client
       .PullRequestStats({ owner: "acme", name: "web", number: 7 })
-      .pipe(GitHubGraphQlClient.call({ host: "github.com", operation: "stats", ...target }));
+      .pipe(
+        GitHubGraphQlClient.call({ host: "github.com", cwd: null, operation: "stats", ...target }),
+      );
   });
 
 describe("call", () => {
@@ -290,5 +301,29 @@ describe("call", () => {
       const error = yield* Effect.flip(callStats({ maxResponseBytes: 64 }));
       expect(error).toMatchObject({ _tag: "GitHubApiResponseError", status: 200 });
     }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("batchKey", () => {
+  const target = (cwd: string) =>
+    Context.make(GitHubGraphQlClient.GitHubGraphQlTarget, {
+      host: "github.com",
+      cwd,
+      operation: "read",
+    });
+  const pin = Context.add(GitHubRequestPolicy.PinnedGitHubCredential, {
+    host: "github.com",
+    token: Redacted.make("secret"),
+    source: "gh",
+    credentialFingerprint: "github.com:alice",
+  });
+
+  it("keeps unpinned lookups from different folders apart, and lets pinned ones share", () => {
+    expect(GitHubGraphQlClient.batchKey(target("/x"))).not.toBe(
+      GitHubGraphQlClient.batchKey(target("/y")),
+    );
+    expect(GitHubGraphQlClient.batchKey(pin(target("/x")))).toBe(
+      GitHubGraphQlClient.batchKey(pin(target("/y"))),
+    );
   });
 });

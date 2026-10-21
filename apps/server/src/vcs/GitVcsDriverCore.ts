@@ -31,6 +31,7 @@ import {
   type ReviewDiffPreviewSource,
   type VcsRef,
 } from "@t3tools/contracts";
+import { GIT_REMOTE_PROMPT_ENV } from "@t3tools/source-control-core/server/SourceControlHost";
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
@@ -124,16 +125,6 @@ const LIST_REFS_REFRESH_COALESCE_TTL = Duration.seconds(5);
 const LIST_REFS_REFRESH_FAILURE_COOLDOWN = Duration.seconds(30);
 const STATUS_DEFAULT_BRANCH_CACHE_TTL = Duration.minutes(5);
 const STATUS_ORIGIN_EXISTS_CACHE_TTL = Duration.minutes(5);
-const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
-  GCM_INTERACTIVE: "never",
-  GIT_ASKPASS: "",
-  // Never let a credential lookup block. Without this, git's HTTPS credential
-  // helper (e.g. git-credential-osxkeychain under launchd) can hang until the
-  // fetch timeout fires, burning a full subprocess on every doomed refresh.
-  GIT_TERMINAL_PROMPT: "0",
-  SSH_ASKPASS: "",
-  SSH_ASKPASS_REQUIRE: "never",
-} satisfies NodeJS.ProcessEnv);
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const GIT_LIST_BRANCHES_DEFAULT_LIMIT = 100;
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetails>({
@@ -1357,7 +1348,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         // healthy writer. A separate safety limit prevents a hung transport from
         // occupying its worker slot indefinitely.
         const started = yield* executeGit("GitVcsDriver.fetchRemoteForStatus", fetchCwd, args, {
-          env: STATUS_UPSTREAM_REFRESH_ENV,
+          env: GIT_REMOTE_PROMPT_ENV,
           fallbackErrorDetail: "Background Git fetch exited with a non-zero status.",
           timeoutMs: Duration.toMillis(STATUS_UPSTREAM_FETCH_TIMEOUT),
           forceKillAfterMs: 1_000,
@@ -2791,7 +2782,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const options = {
       // A server started from a terminal owns a controlling TTY, and without this a
       // credential prompt there blocks until the timeout instead of failing at once.
-      env: STATUS_UPSTREAM_REFRESH_ENV,
+      env: GIT_REMOTE_PROMPT_ENV,
       timeoutMs: 30_000,
       appendTruncationMarker: true,
       allowNonZeroExit: true,
@@ -4170,7 +4161,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fetchRemote = Effect.fn("fetchRemote")(function* (input: GitVcsDriver.GitFetchRemoteInput) {
     const args = ["fetch", "--quiet", "--", input.remoteName];
     const options = {
-      env: STATUS_UPSTREAM_REFRESH_ENV,
+      env: GIT_REMOTE_PROMPT_ENV,
       fallbackErrorDetail: `git fetch ${input.remoteName} failed`,
     };
     // Another fetch in the same repository, such as the background status

@@ -5,7 +5,10 @@ import type {
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import type { ChangeRequestTerminology } from "@t3tools/client-runtime/source-control-clients";
+import type {
+  ChangeRequestTerminology,
+  SourceControlClientDefinition,
+} from "@t3tools/client-runtime/source-control-clients";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
@@ -449,5 +452,30 @@ export function resolveLiveThreadBranchUpdate(input: {
 
   return {
     branch: input.gitStatus.refName,
+  };
+}
+
+/**
+ * The publish dialog's starting text, placeholder and check. A host that places a new repository
+ * itself (an owner-less placement, GitHub's) starts blank and takes a bare name; others start at
+ * `account/` and need an owner.
+ */
+export function resolvePublishRepositoryOwner(
+  definition: Pick<SourceControlClientDefinition, "newRepositoryOwner" | "repositoryPathHint">,
+  account: string | null,
+): {
+  readonly prefill: string;
+  readonly placeholder: string;
+  readonly isValid: (repository: string) => boolean;
+} {
+  const ownerOptional = account !== null && definition.newRepositoryOwner(account)?.owner === null;
+  return {
+    prefill: ownerOptional || !account ? "" : `${account}/`,
+    placeholder: ownerOptional ? "repository or org/repository" : definition.repositoryPathHint,
+    isValid: (repository) => {
+      const [owner = "", ...rest] = repository.trim().split("/");
+      if (rest.length === 0) return ownerOptional && owner.trim().length > 0;
+      return owner.trim().length > 0 && rest.join("/").trim().length > 0;
+    },
   };
 }

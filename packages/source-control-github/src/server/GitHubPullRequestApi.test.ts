@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { afterEach, assert, expect, it, vi } from "@effect/vitest";
+import { afterEach, assert, describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -10,7 +10,9 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Redacted from "effect/Redacted";
 
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import type * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 
 import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
@@ -101,7 +103,7 @@ type ApiCall =
 type ApiAnswer = Effect.Effect<GitHubRest.GitHubRestResponse, GitHubRequestPolicy.GitHubApiError>;
 
 const mockedExecute = vi.fn<(call: ApiCall) => ApiAnswer>();
-const defaultCredential = (host: string) =>
+const defaultCredential = (host: string, _cwd?: string | null) =>
   Effect.succeed({ token: Redacted.make("token"), fingerprint: `${host}:token` });
 const mockedCredential = vi.fn(defaultCredential);
 const mockedStackMemberships = vi.fn<(call: ApiCall) => ApiAnswer>(() =>
@@ -113,7 +115,9 @@ const mockApi = Layer.succeed(
   GitHubRest.GitHubRest,
   GitHubRest.GitHubRest.of({
     rest: (input) => mockedExecute({ kind: "rest", ...input }),
-    credential: (host) => mockedCredential(host),
+    credential: (host) =>
+      Effect.map(mockedCredential(host), (held) => ({ ...held, source: "gh" as const })),
+    withDirectory: () => (effect) => effect,
   }),
 );
 
@@ -183,8 +187,12 @@ const layer = it.layer(
     Layer.provideMerge(mockHttp),
     Layer.provideMerge(
       Layer.succeed(GitHubCredentials.GitHubCredentials, {
-        get: (host) =>
-          Effect.map(mockedCredential(host), (held) => ({ ...held, host, source: "gh" as const })),
+        get: (host, cwd) =>
+          Effect.map(mockedCredential(host, cwd), (held) => ({
+            ...held,
+            host,
+            source: "gh" as const,
+          })),
         invalidate: () => Effect.void,
       }),
     ),
@@ -509,6 +517,22 @@ function variablesOf(needle: string): ReadonlyArray<Readonly<Record<string, unkn
   return mockedExecute.mock.calls.flatMap(([call]) =>
     call.kind === "graphql" && matches(call, needle) ? [call.variables ?? {}] : [],
   );
+}
+
+interface PullRequestTarget {
+  readonly cwd: string;
+  readonly repository: string;
+  readonly host: string;
+  readonly number: number;
+}
+
+/** The folders every REST request was made for, each once. */
+function restFolders(): ReadonlyArray<string | null> {
+  return [
+    ...new Set(
+      mockedExecute.mock.calls.flatMap(([call]) => (call.kind === "rest" ? [call.cwd] : [])),
+    ),
+  ];
 }
 
 /** Every REST request whose path contains `needle`, in order. */
@@ -1400,6 +1424,31 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("reads stack memberships as the folder's account", () =>
+    Effect.gen(function* () {
+      mockedCredential.mockImplementation((host, cwd) =>
+        Effect.succeed({ token: Redacted.make(`token-for-${cwd}`), fingerprint: `${host}:${cwd}` }),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(emptySearch()));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(listedPullRequests(2, 1))));
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      yield* cli.listPullRequests({
+        cwd: "/y",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 2,
+      });
+      expect(
+        mockedStackMemberships.mock.calls.map(([call]) =>
+          call.kind === "graphql" ? call.authorization : undefined,
+        ),
+      ).toEqual(["Bearer token-for-/y"]);
+    }),
+  );
+
   it.effect("batches membership reads and keeps successful rows when one chunk fails", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(27, 1))));
@@ -2223,6 +2272,80 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect.each([
+    {
+      call: "getPullRequestDiff",
+      reaches: "pulls/7",
+      run: (cli: GitHubPullRequestApi.GitHubPullRequestApi["Service"], target: PullRequestTarget) =>
+        cli.getPullRequestDiff(target),
+    },
+    {
+      call: "getPullRequestDiff of one commit",
+      reaches: "commits/a1b2c3d",
+      run: (cli: GitHubPullRequestApi.GitHubPullRequestApi["Service"], target: PullRequestTarget) =>
+        cli.getPullRequestDiff({ ...target, commit: "a1b2c3d" }),
+    },
+    {
+      call: "getPullRequestDiffFileContents",
+      reaches: "/contents/",
+      run: (cli: GitHubPullRequestApi.GitHubPullRequestApi["Service"], target: PullRequestTarget) =>
+        cli.getPullRequestDiffFileContents({
+          ...target,
+          changeType: "change",
+          oldPath: "a.ts",
+          newPath: "a.ts",
+        }),
+    },
+    {
+      call: "setReviewerRequest",
+      reaches: "/requested_reviewers",
+      run: (cli: GitHubPullRequestApi.GitHubPullRequestApi["Service"], target: PullRequestTarget) =>
+        cli.setReviewerRequest({
+          ...target,
+          reviewers: [{ id: "octocat", kind: "user" }],
+          requested: true,
+        }),
+    },
+    {
+      call: "setLabels applied",
+      reaches: "/labels",
+      run: (cli: GitHubPullRequestApi.GitHubPullRequestApi["Service"], target: PullRequestTarget) =>
+        cli.setLabels({ ...target, labels: ["bug"], applied: true }),
+    },
+    {
+      call: "setLabels removed",
+      reaches: "/labels/bug",
+      run: (cli: GitHubPullRequestApi.GitHubPullRequestApi["Service"], target: PullRequestTarget) =>
+        cli.setLabels({ ...target, labels: ["bug"], applied: false }),
+    },
+    {
+      call: "submitReview",
+      reaches: "/reviews",
+      run: (cli: GitHubPullRequestApi.GitHubPullRequestApi["Service"], target: PullRequestTarget) =>
+        cli.submitReview({ ...target, verdict: "comment", body: "Looks good", comments: [] }),
+    },
+  ])("$call sends as the folder it is for", ({ reaches, run }) =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((call) =>
+        Effect.succeed(
+          output(
+            call.kind === "rest" && call.path.endsWith("pulls/7")
+              ? pullRequestRefs
+              : call.kind === "rest" && call.path.includes("/contents/")
+                ? "contents\n"
+                : "{}",
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      yield* Effect.exit(
+        run(cli, { cwd: "/folder", repository: "acme/web", host: "github.com", number: 7 }),
+      );
+      assert.isAbove(restCallsTo(reaches).length, 0);
+      expect(restFolders()).toEqual(["/folder"]);
+    }),
+  );
+
   it.effect("finds and approves every workflow waiting on a maintainer", () =>
     Effect.gen(function* () {
       workflowApprovalRoutes(() => crossRepositoryDetail(), heads([7]), workflowRuns([10, 11]));
@@ -2251,6 +2374,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
         ["POST", "repos/acme/web/actions/runs/11/approve"],
       ]);
       assert.strictEqual(restCallsTo("actions/runs?").length, 3);
+      expect(restFolders()).toEqual(["/w"]);
     }),
   );
 
@@ -3786,4 +3910,368 @@ layer("GitHubPullRequestApi.layer", (it) => {
       assert.strictEqual(lookupsOf.get(HOT), 1);
     }),
   );
+});
+
+describe("per-folder account", () => {
+  /** Which login git's config names per folder; gh hands `token-for-<login>` for each. */
+  const FOLDERS: Record<string, string> = { "/x": "alice", "/x2": "alice", "/y": "bob" };
+
+  /** One request as GitHub received it: the credential it carried and the body it sent. */
+  interface Sent {
+    readonly url: string;
+    readonly authorization: string | undefined;
+    readonly ifNoneMatch: string | undefined;
+    readonly query: string;
+    readonly variables: Readonly<Record<string, unknown>>;
+  }
+
+  const bodyOf = (request: HttpClientRequest.HttpClientRequest) =>
+    request.body._tag === "Uint8Array"
+      ? (JSON.parse(new TextDecoder().decode(request.body.body)) as {
+          readonly query?: string;
+          readonly variables?: Readonly<Record<string, unknown>>;
+        })
+      : {};
+
+  /** Every alias a batched document asked for, as `[alias, number]`. */
+  const aliasNumbers = (variables: Readonly<Record<string, unknown>>) =>
+    Object.entries(variables).flatMap(([key, value]) => {
+      const alias = /^(_\d+)_number$/u.exec(key)?.[1];
+      return alias === undefined ? [] : [[alias, value as number] as const];
+    });
+
+  const summaryNode = (number: number) => ({
+    number,
+    title: `Pull request ${number}`,
+    url: `https://github.com/acme/web/pull/${number}`,
+    author: null,
+    baseRefName: "main",
+    headRefName: `feat/${number}`,
+    state: "OPEN",
+    isDraft: false,
+    mergeable: "MERGEABLE",
+    reviewDecision: null,
+    latestReviews: { nodes: [] },
+    additions: 1,
+    deletions: 1,
+    changedFiles: 1,
+    updatedAt: "2026-08-24T12:34:56.000Z",
+    mergedAt: null,
+    closedAt: null,
+    commits: { nodes: [] },
+    stack: null,
+    stackEntry: null,
+  });
+  const watchNode = {
+    state: "OPEN",
+    mergeable: "MERGEABLE",
+    headRefOid: "abc123",
+    comments: { totalCount: 0, nodes: [] },
+    reviews: { totalCount: 0, nodes: [] },
+    reviewThreads: { totalCount: 0 },
+    commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
+  };
+
+  /** The real API over a fake HTTP, with credentials from `credentials` or the real resolver. */
+  const stack = (
+    options: {
+      readonly credentials?: Layer.Layer<GitHubCredentials.GitHubCredentials>;
+      readonly run?: SourceControlHost.SourceControlHost["Service"]["process"]["run"];
+      /** Credentials GitHub refuses with a 401. */
+      readonly refused?: ReadonlyArray<string>;
+    } = {},
+  ) => {
+    const { credentials } = options;
+    const sent: Array<Sent> = [];
+    const http = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => {
+        const { query = "", variables = {} } = bodyOf(request);
+        sent.push({
+          url: request.url,
+          authorization: request.headers.authorization,
+          ifNoneMatch: request.headers["if-none-match"],
+          query,
+          variables,
+        });
+        if (options.refused?.includes(request.headers.authorization ?? "")) {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(encodeJson({ message: "Bad credentials" }), { status: 401 }),
+            ),
+          );
+        }
+        // A summary selects the title; a watch fingerprint does not.
+        const summary = /\btitle\b/u.test(query);
+        const data = Object.fromEntries(
+          aliasNumbers(variables).map(([alias, number]) => [
+            `${alias}_repository`,
+            { pullRequest: summary ? summaryNode(number) : watchNode },
+          ]),
+        );
+        if (request.url.includes("/stacks?")) {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response("[]", { headers: { "content-type": "application/json", etag: '"e1"' } }),
+            ),
+          );
+        }
+        const body = request.url.endsWith("/user")
+          ? { id: 1, login: "alice" }
+          : query.startsWith("mutation")
+            ? { data: { addComment: { clientMutationId: null } } }
+            : /\bPullRequestNodeId\b/u.test(query)
+              ? { data: { repository: { pullRequest: { id: "PR_1" } } } }
+              : { data };
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(encodeJson(body), { headers: { "content-type": "application/json" } }),
+          ),
+        );
+      }),
+    );
+    const run: SourceControlHost.SourceControlHost["Service"]["process"]["run"] =
+      options.run ??
+      ((input) =>
+        Effect.succeed(
+          input.command === "git"
+            ? TestSourceControlHost.processOutput(
+                FOLDERS[input.cwd] === undefined
+                  ? ""
+                  : `protocol=https\nhost=github.com\nusername=${FOLDERS[input.cwd]}\npassword=pw\n`,
+              )
+            : TestSourceControlHost.processOutput(
+                `token-for-${input.args[input.args.indexOf("--user") + 1]}\n`,
+              ),
+        ));
+    const transport = (
+      credentials === undefined
+        ? GitHubRest.layerWithDependencies
+        : GitHubRest.layer.pipe(
+            Layer.provide(credentials),
+            Layer.provideMerge(GitHubQuota.layer),
+            Layer.provideMerge(SourceControlRateLimit.layer),
+          )
+    ).pipe(Layer.provideMerge(http));
+    const layer = GitHubPullRequestApi.layer.pipe(
+      Layer.provideMerge(transport),
+      Layer.provide(TestSourceControlHost.layer({ process: { run } })),
+      Layer.provide(Layer.succeed(HostProcess.Environment, {})),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provide(NodeServices.layer),
+    );
+    return { layer, sent };
+  };
+
+  /** Requests by the account that sent them, each with the pull request numbers it asked for. */
+  const byAccount = (sent: ReadonlyArray<Sent>) =>
+    sent
+      .map((request) => ({
+        authorization: request.authorization,
+        numbers: aliasNumbers(request.variables)
+          .map(([, number]) => number)
+          .toSorted(),
+      }))
+      .toSorted((a, b) => (a.authorization ?? "").localeCompare(b.authorization ?? ""));
+
+  it.effect.each(["getPullRequestSummary", "getPullRequestWatchFingerprint"] as const)(
+    "%s never puts two accounts in one batch",
+    (read) => {
+      const { layer, sent } = stack();
+      return Effect.gen(function* () {
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const reads = yield* Effect.forEach(
+          [
+            ["/x", 1],
+            ["/y", 2],
+            ["/x2", 3],
+          ] as const,
+          ([cwd, number]) => {
+            const input = { cwd, repository: "acme/web", host: "github.com", number };
+            return read === "getPullRequestSummary"
+              ? Effect.asVoid(cli.getPullRequestSummary(input))
+              : Effect.asVoid(cli.getPullRequestWatchFingerprint(input));
+          },
+          { concurrency: "unbounded" },
+        ).pipe(Effect.forkChild);
+        yield* TestClock.adjust("10 millis");
+        yield* Fiber.join(reads);
+        expect(byAccount(sent)).toEqual([
+          { authorization: "Bearer token-for-alice", numbers: [1, 3] },
+          { authorization: "Bearer token-for-bob", numbers: [2] },
+        ]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("a folder whose credential cannot resolve fails its read and sends nothing", () => {
+    // Each folder's first lookup fails; a read that ran unpinned would look again and succeed.
+    const attempts = new Map<string | null, number>();
+    const credentials = Layer.succeed(
+      GitHubCredentials.GitHubCredentials,
+      GitHubCredentials.GitHubCredentials.of({
+        get: (host, cwd) => {
+          const attempt = (attempts.get(cwd) ?? 0) + 1;
+          attempts.set(cwd, attempt);
+          const token = cwd === "/p" ? "token-A" : "token-B";
+          return attempt === 1
+            ? Effect.fail(new GitHubCredentials.GitHubCliFailedError({ host, cause: "locked" }))
+            : Effect.succeed({
+                host,
+                token: Redacted.make(token),
+                source: "folder" as const,
+                fingerprint: `${host}:${token}`,
+              });
+        },
+        invalidate: () => Effect.void,
+      }),
+    );
+    const { layer, sent } = stack({ credentials });
+    return Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const reads = yield* Effect.forEach(
+        [
+          ["/p", 1],
+          ["/q", 2],
+        ] as const,
+        ([cwd, number]) =>
+          Effect.flip(
+            cli.getPullRequestSummary({ cwd, repository: "acme/web", host: "github.com", number }),
+          ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      const errors = yield* Fiber.join(reads);
+      expect(errors.map((error) => error._tag)).toEqual([
+        "GitHubCliFailedError",
+        "GitHubCliFailedError",
+      ]);
+      expect(sent).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a refused credential fails its whole batch and the next read asks gh again", () => {
+    // gh hands out token-v1 until GitHub refuses it, then token-v2.
+    let handedOut = 0;
+    const run: SourceControlHost.SourceControlHost["Service"]["process"]["run"] = (input) =>
+      Effect.sync(() =>
+        TestSourceControlHost.processOutput(
+          input.command === "git" ? "" : `token-v${++handedOut === 1 ? 1 : 2}\n`,
+        ),
+      );
+    const { layer, sent } = stack({ run, refused: ["Bearer token-v1"] });
+    return Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const read = (number: number) =>
+        cli.getPullRequestSummary({
+          cwd: "/a",
+          repository: "acme/web",
+          host: "github.com",
+          number,
+        });
+      const reads = yield* Effect.forEach([1, 2, 3], (number) => Effect.flip(read(number)), {
+        concurrency: "unbounded",
+      }).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      const errors = yield* Fiber.join(reads);
+      expect(errors.map((error) => error._tag)).toEqual([
+        "GitHubApiAuthenticationError",
+        "GitHubApiAuthenticationError",
+        "GitHubApiAuthenticationError",
+      ]);
+      expect(sent.map((request) => request.authorization)).toEqual(["Bearer token-v1"]);
+
+      const next = yield* read(4).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      expect((yield* Fiber.join(next)).number).toBe(4);
+      expect(sent.map((request) => request.authorization)).toEqual([
+        "Bearer token-v1",
+        "Bearer token-v2",
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("revalidates a polled read as each folder's account, never with another's tag", () => {
+    const { layer, sent } = stack();
+    return Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      for (const cwd of ["/x", "/y", "/x2"]) {
+        yield* cli.getPullRequestStack({
+          cwd,
+          repository: "acme/web",
+          host: "github.com",
+          number: 1,
+          includeDetails: false,
+        });
+      }
+      expect(sent.map((request) => [request.authorization, request.ifNoneMatch])).toEqual([
+        ["Bearer token-for-alice", undefined],
+        ["Bearer token-for-bob", undefined],
+        ["Bearer token-for-alice", '"e1"'],
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each([
+    {
+      call: "getPullRequestDetail",
+      run: (cli: GitHubPullRequestApi.GitHubPullRequestApi["Service"]) =>
+        cli.getPullRequestDetail({
+          cwd: "/y",
+          repository: "acme/web",
+          host: "github.com",
+          number: 1,
+        }),
+    },
+    {
+      call: "listPullRequestStats",
+      run: (cli: GitHubPullRequestApi.GitHubPullRequestApi["Service"]) =>
+        cli.listPullRequestStats({
+          cwd: "/y",
+          host: "github.com",
+          changeRequests: [{ repository: "acme/web", number: 1 }],
+        }),
+    },
+    {
+      call: "commentOnPullRequest",
+      run: (cli: GitHubPullRequestApi.GitHubPullRequestApi["Service"]) =>
+        cli.commentOnPullRequest({
+          cwd: "/y",
+          repository: "acme/web",
+          host: "github.com",
+          number: 1,
+          body: "Thanks",
+        }),
+    },
+  ])("$call sends GraphQL as the folder's account", ({ call, run }) => {
+    const { layer, sent } = stack();
+    return Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      // Batched reads wait out their window; a decode failure after sending is not the point.
+      const fiber = yield* Effect.forkChild(Effect.exit(run(cli)));
+      yield* TestClock.adjust("10 millis");
+      yield* Fiber.join(fiber);
+      expect(sent.length).toBeGreaterThan(0);
+      if (call === "commentOnPullRequest") {
+        expect(sent.some((request) => request.query.startsWith("mutation"))).toBe(true);
+      }
+      expect([...new Set(sent.map((request) => request.authorization))]).toEqual([
+        "Bearer token-for-bob",
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("verifies a folder's routing identity as that folder's account", () => {
+    const { layer, sent } = stack();
+    return Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      yield* cli.getRoutingIdentity({ cwd: "/x", host: "github.com" });
+      expect(sent.map((request) => [request.url, request.authorization])).toEqual([
+        ["https://api.github.com/user", "Bearer token-for-alice"],
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
 });

@@ -97,6 +97,30 @@ function layer(input: {
     : layerService.pipe(Layer.provideMerge(NodeServices.layer));
 }
 
+it.effect("tells the provider when a lookup named no folder of its own", () => {
+  const calls: Array<{ cwd: string; cwdIsServerDefault: boolean }> = [];
+  const provider = makeProvider({
+    getRepositoryCloneUrls: (input) =>
+      Effect.sync(() => {
+        calls.push({ cwd: input.cwd, cwdIsServerDefault: input.cwdIsServerDefault ?? false });
+        return CLONE_URLS;
+      }),
+  });
+
+  return Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const github = SourceControlProviderKind.make("github");
+    yield* service.lookupRepository({ provider: github, repository: "octocat/t3code", cwd: "/w" });
+    yield* service.lookupRepository({ provider: github, repository: "octocat/t3code" });
+
+    assert.deepStrictEqual(calls, [
+      { cwd: "/w", cwdIsServerDefault: false },
+      // The server's own folder still runs the provider's CLI but must not pick an account.
+      { cwd: process.cwd(), cwdIsServerDefault: true },
+    ]);
+  }).pipe(Effect.provide(layer({ provider })));
+});
+
 it.effect("clones a looked-up repository after creating missing parent directories", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

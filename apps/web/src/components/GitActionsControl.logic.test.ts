@@ -1,10 +1,13 @@
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import type { VcsStatusResult } from "@t3tools/contracts";
 import { resolveAutoFeatureBranchName } from "@t3tools/shared/git";
 import { assert, describe, it } from "vite-plus/test";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import {
   buildMenuItems,
   requiresDefaultBranchConfirmation,
   resolveLiveThreadBranchUpdate,
+  resolvePublishRepositoryOwner,
   resolveQuickAction,
 } from "./GitActionsControl.logic";
 
@@ -184,5 +187,37 @@ describe("resolveAutoFeatureBranchName", () => {
   it("treats existing ref names as case-insensitive for collision checks", () => {
     const ref = resolveAutoFeatureBranchName(["Feature/Ticket-1"], "feature/ticket-1");
     assert.equal(ref, "feature/ticket-1-2");
+  });
+});
+
+describe("resolvePublishRepositoryOwner", () => {
+  const client = (kind: string) => sourceControlClients.get(SourceControlProviderKind.make(kind));
+
+  it("leaves a GitHub owner blank and optional so the folder's account is used", () => {
+    const github = resolvePublishRepositoryOwner(client("github"), "auth");
+    assert.equal(github.prefill, "");
+    assert.equal(github.placeholder, "repository or org/repository");
+    assert.isTrue(github.isValid("my-app"));
+    assert.isTrue(github.isValid("some-org/my-app"));
+    assert.isFalse(github.isValid(" "));
+    assert.isFalse(github.isValid("some-org/"));
+  });
+
+  it("keeps the account prefill and required owner for other hosts", () => {
+    const gitlab = resolvePublishRepositoryOwner(client("gitlab"), "group");
+    assert.equal(gitlab.prefill, "group/");
+    assert.equal(gitlab.placeholder, client("gitlab").repositoryPathHint);
+    assert.isFalse(gitlab.isValid("my-app"));
+    assert.isTrue(gitlab.isValid("group/my-app"));
+    const azure = resolvePublishRepositoryOwner(client("azure-devops"), "me");
+    assert.equal(azure.prefill, "me/");
+    assert.isFalse(azure.isValid("my-app"));
+  });
+
+  it("requires an owner when no account is signed in", () => {
+    const github = resolvePublishRepositoryOwner(client("github"), null);
+    assert.equal(github.prefill, "");
+    assert.equal(github.placeholder, client("github").repositoryPathHint);
+    assert.isFalse(github.isValid("my-app"));
   });
 });

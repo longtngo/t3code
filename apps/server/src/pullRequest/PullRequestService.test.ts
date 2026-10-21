@@ -1966,6 +1966,48 @@ it.effect("shares one cold viewer lookup across distinct concurrent lists", () =
   }),
 );
 
+it.effect("a repository another account's search could not see is still read on its own", () =>
+  Effect.gen(function* () {
+    // Each folder searches as its own account and sees only its own repository. Bob's project
+    // is listed first, so the grouped search of both runs in Bob's folder.
+    const visible: Record<string, string> = { "/a": "acme/alice", "/b": "acme/bob" };
+    const service = yield* makeService({
+      projects: [
+        project({ id: "pb", title: "bob", workspaceRoot: "/b", repository: "acme/bob" }),
+        project({ id: "pa", title: "alice", workspaceRoot: "/a", repository: "acme/alice" }),
+      ],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequestsAcross: (input) =>
+            Effect.succeed({
+              items: input.repositories
+                .filter((repository) => repository === visible[input.cwd])
+                .map((repository) => batchedChangeRequest(1, repository, "2026-07-02T00:00:00Z")),
+              truncated: false,
+            }),
+          listChangeRequests: (input) =>
+            Effect.succeed({
+              items:
+                input.repository === visible[input.cwd]
+                  ? [changeRequest(1, "2026-07-02T00:00:00Z")]
+                  : [],
+              truncated: false,
+              continues: false,
+            }),
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open", projectIds: ["pa" as ProjectId] });
+    const both = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(both.entries.map((entry) => entry.repository).toSorted(), [
+      "acme/alice",
+      "acme/bob",
+    ]);
+  }),
+);
+
 it.effect("a listing narrowed to some projects is its own cache entry", () =>
   Effect.gen(function* () {
     const asked: ReadonlyArray<string>[] = [];

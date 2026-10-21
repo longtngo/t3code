@@ -1,6 +1,7 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -242,7 +243,7 @@ function harness(input: {
   );
   const layer = Layer.mergeAll(
     host,
-    Layer.mock(GitHubRest.GitHubRest)(input.api ?? {}),
+    Layer.mock(GitHubRest.GitHubRest)({ withDirectory: () => (effect) => effect, ...input.api }),
     policy,
     Layer.succeed(HttpClient.HttpClient, graphQlHttp(graphql, graphqlCalls)),
     NodeServices.layer,
@@ -460,6 +461,74 @@ describe("GitHubSourceControlProvider writes", () => {
       });
       assert.deepStrictEqual(requests, ["GET user", "POST orgs/acme/repos"]);
     }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each([
+    {
+      repository: "someone/new",
+      sent: ["user", "orgs/someone/repos"],
+      detail:
+        "This folder publishes as me, who cannot create repositories in someone. Enter a bare name, or an organization me can create in.",
+    },
+    {
+      repository: "Me/new",
+      sent: ["user", "user/repos"],
+      detail: "This folder's account me could not create the repository.",
+    },
+    {
+      // A bare name never reads the viewer.
+      repository: "new",
+      sent: ["user/repos"],
+      detail: "This folder's account could not create the repository.",
+    },
+  ])(
+    "names the folder's account when it cannot create $repository",
+    ({ repository, sent, detail }) => {
+      const requests: Array<string> = [];
+      const { layer } = harness({
+        remotes: "",
+        api: {
+          rest: (input) => {
+            requests.push(input.path);
+            return input.path === "user"
+              ? Effect.succeed(restResponse({ login: "me" }))
+              : Effect.fail(
+                  new GitHubRequestPolicy.GitHubApiNotFoundError({
+                    host: input.host,
+                    operation: input.operation,
+                  }),
+                );
+          },
+        },
+      });
+      return Effect.gen(function* () {
+        const gh = yield* GitHubSourceControlProvider.make;
+        const error = yield* Effect.flip(
+          gh.createRepository({ cwd: "/repo", repository, visibility: "private" }),
+        );
+        assert.deepStrictEqual(requests, sent);
+        assert.strictEqual(error.detail, detail);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("publishes a bare name without a trailing .git", () => {
+    const bodies: Array<unknown> = [];
+    return Effect.gen(function* () {
+      const gh = yield* makeProvider({
+        rest: (input) =>
+          Effect.sync(() => {
+            if (input.method === "POST") bodies.push(input.body);
+            return restResponse({
+              full_name: "me/notes",
+              html_url: "https://github.com/me/notes",
+              ssh_url: "git@github.com:me/notes.git",
+            });
+          }),
+      });
+      yield* gh.createRepository({ cwd: "/repo", repository: " notes.git ", visibility: "public" });
+      assert.deepStrictEqual(bodies, [{ name: "notes", private: false }]);
+    });
   });
 
   it.effect("looks up a bare repository name under the signed-in account on that host", () => {
@@ -864,6 +933,7 @@ it("names the environment token that overrides the Settings choice", () => {
       },
     ]),
     { hosts: { "github.com": { account: "work", enabled: true } }, tokens: {} },
+    { GH_TOKEN: "env-token" },
   );
   assert.deepStrictEqual(auth.account, Option.some("bot"));
   assert.deepStrictEqual(
@@ -873,6 +943,78 @@ it("names the environment token that overrides the Settings choice", () => {
     ),
   );
   assert.strictEqual(auth.accounts?.[2]?.environmentVariable, "GH_TOKEN");
+});
+
+it("names an enterprise token only for the host GH_HOST names", () => {
+  // gh lists the env-token login and the stored login together, and names GH_ENTERPRISE_TOKEN
+  // for the former whichever host GH_HOST names.
+  const status = processResult(
+    JSON.stringify({
+      hosts: {
+        "ghe.corp.example": [
+          {
+            state: "success",
+            active: true,
+            host: "ghe.corp.example",
+            login: "jm",
+            tokenSource: "GH_ENTERPRISE_TOKEN",
+          },
+          {
+            state: "success",
+            active: false,
+            host: "ghe.corp.example",
+            login: "bob",
+            tokenSource: "keyring",
+          },
+        ],
+      },
+    }),
+  );
+  const settings = { hosts: {}, tokens: {} };
+  const unset = GitHubSourceControlProvider.parseGitHubAuth(status, settings, {
+    GH_ENTERPRISE_TOKEN: "enterprise-token",
+  });
+  assert.deepStrictEqual(unset.accounts, [
+    { host: "ghe.corp.example", account: "bob", active: false, authenticated: true },
+  ]);
+  assert.deepStrictEqual(unset.account, Option.some("bob"));
+  assert.deepStrictEqual(unset.detail, Option.none());
+  const named = GitHubSourceControlProvider.parseGitHubAuth(status, settings, {
+    GH_ENTERPRISE_TOKEN: "enterprise-token",
+    GH_HOST: "ghe.corp.example",
+  });
+  assert.strictEqual(named.accounts?.length, 2);
+  assert.strictEqual(named.accounts?.[0]?.environmentVariable, "GH_ENTERPRISE_TOKEN");
+});
+
+it("says how to use an enterprise token when it is the host's only login", () => {
+  const status = processResult(
+    JSON.stringify({
+      hosts: {
+        "ghe.corp.example": [
+          {
+            state: "success",
+            active: true,
+            host: "ghe.corp.example",
+            login: "jm",
+            tokenSource: "GH_ENTERPRISE_TOKEN",
+          },
+        ],
+      },
+    }),
+  );
+  const auth = GitHubSourceControlProvider.parseGitHubAuth(
+    status,
+    { hosts: {}, tokens: {} },
+    { GH_ENTERPRISE_TOKEN: "x" },
+  );
+  assert.strictEqual(auth.status, "unauthenticated");
+  assert.deepStrictEqual(
+    auth.detail,
+    Option.some(
+      "GH_ENTERPRISE_TOKEN is used only for the host GH_HOST names. Set GH_HOST=ghe.corp.example or run `gh auth login --hostname ghe.corp.example`.",
+    ),
+  );
 });
 
 it.live.each([
@@ -1051,3 +1193,240 @@ it.effect.each([
     );
   },
 );
+
+describe("per-folder account", () => {
+  /** Each folder's remote, and the login git's config names there. */
+  const FOLDERS: Record<string, { readonly remote: string; readonly login: string }> = {
+    "/x": { remote: "git@github.com:acme/web.git", login: "alice" },
+    "/x2": { remote: "git@github.com:acme/web.git", login: "alice" },
+    "/y": { remote: "git@github.com:acme/api.git", login: "bob" },
+  };
+
+  /** One request as GitHub received it; an aliased GraphQL batch is split into its lookups. */
+  interface Sent {
+    readonly url: string;
+    readonly authorization: string | undefined;
+    readonly lookups: ReadonlyArray<Readonly<Record<string, unknown>>>;
+  }
+
+  const forkPullRequest = {
+    number: 1,
+    title: "Fork change",
+    url: "https://github.com/acme/api/pull/1",
+    baseRefName: "main",
+    headRefName: "feature",
+    headRefOid: "abc123",
+    state: "OPEN",
+    isDraft: false,
+    mergedAt: null,
+    closedAt: null,
+    updatedAt: "2026-10-21T00:00:00.000Z",
+    isCrossRepository: true,
+    headRepository: { name: "api", nameWithOwner: "carol/api" },
+    headRepositoryOwner: { __typename: "User", login: "carol" },
+  };
+
+  /** The provider over the real transport and credential resolver, with a fake git, gh and HTTP. */
+  const stack = () => {
+    const sent: Array<Sent> = [];
+    const http = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => {
+        const { variables = {} } =
+          request.body._tag === "Uint8Array"
+            ? (JSON.parse(new TextDecoder().decode(request.body.body)) as {
+                readonly variables?: Readonly<Record<string, unknown>>;
+              })
+            : {};
+        const prefixes = [
+          ...new Set(Object.keys(variables).flatMap((key) => /^_\d+_/.exec(key) ?? [])),
+        ];
+        const lookups = prefixes.map((prefix) =>
+          Object.fromEntries(
+            Object.entries(variables)
+              .filter(([key]) => key.startsWith(prefix))
+              .map(([key, value]) => [key.slice(prefix.length), value]),
+          ),
+        );
+        sent.push({ url: request.url, authorization: request.headers.authorization, lookups });
+        // A lookup by number is not batched, so it has no alias; answer a fork's pull request.
+        const answer = request.url.endsWith("/graphql")
+          ? prefixes.length === 0
+            ? { data: { repository: { pullRequest: forkPullRequest } } }
+            : {
+                data: Object.fromEntries(
+                  prefixes.map((prefix) => [
+                    `${prefix}repository`,
+                    { pullRequests: { nodes: [] } },
+                  ]),
+                ),
+              }
+          : {
+              number: 1,
+              login: "bob",
+              full_name: "bob/new",
+              html_url: "https://github.com/bob/new",
+              ssh_url: "git@github.com:bob/new.git",
+            };
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(encodeJson(answer), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+          ),
+        );
+      }),
+    );
+    const run: SourceControlHost.SourceControlHost["Service"]["process"]["run"] = (input) => {
+      const folder = FOLDERS[input.cwd];
+      if (input.command === "gh") {
+        return Effect.succeed(
+          processOutput(`token-for-${input.args[input.args.indexOf("--user") + 1]}\n`),
+        );
+      }
+      if (input.args.includes("credential")) {
+        return Effect.succeed(
+          processOutput(
+            `protocol=https\nhost=github.com\nusername=${folder?.login}\npassword=pw\n`,
+          ),
+        );
+      }
+      return Effect.succeed(
+        input.args[0] === "remote"
+          ? processOutput(remotesOutput(["origin", folder?.remote ?? ""]))
+          : processOutput("", 1),
+      );
+    };
+    const layer = GitHubRest.layerWithDependencies.pipe(
+      Layer.provideMerge(http),
+      Layer.provideMerge(TestSourceControlHost.layer({ process: { run } })),
+      Layer.provideMerge(Layer.succeed(HostProcess.Environment, {})),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    return { layer, sent };
+  };
+
+  it.effect("never puts two accounts in one head lookup", () => {
+    const { layer, sent } = stack();
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      const lookups = yield* Effect.forEach(
+        [
+          ["/x", "feature/x"],
+          ["/y", "feature/y"],
+          ["/x2", "feature/x2"],
+        ] as const,
+        ([cwd, headSelector]) =>
+          gh.listChangeRequests({ cwd, headSelector, state: "open", limit: 1 }),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(lookups);
+      assert.deepStrictEqual(
+        sent
+          .map((request) => ({
+            authorization: request.authorization,
+            lookups: request.lookups
+              .map((lookup) => `${lookup.owner}/${lookup.name}:${lookup.head}`)
+              .toSorted(),
+          }))
+          .toSorted((a, b) => (a.authorization ?? "").localeCompare(b.authorization ?? "")),
+        [
+          {
+            authorization: "Bearer token-for-alice",
+            lookups: ["acme/web:feature/x", "acme/web:feature/x2"],
+          },
+          { authorization: "Bearer token-for-bob", lookups: ["acme/api:feature/y"] },
+        ],
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("reads a pull request by number as the folder's account", () => {
+    const { layer, sent } = stack();
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      yield* gh.getChangeRequest({ cwd: "/y", reference: "#1" });
+      assert.deepStrictEqual(
+        sent.map((request) => [request.url, request.authorization]),
+        [["https://api.github.com/graphql", "Bearer token-for-bob"]],
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "checks out a fork's pull request reading its repositories as the folder's account",
+    () => {
+      const { layer, sent } = stack();
+      return Effect.gen(function* () {
+        const gh = yield* GitHubSourceControlProvider.make;
+        // The fake git cannot finish a checkout; every GitHub read before it is what is checked.
+        yield* Effect.exit(gh.checkoutChangeRequest({ cwd: "/y", reference: "#1" }));
+        const reads = sent.filter((request) => request.url.includes("/repos/"));
+        assert.isAbove(reads.length, 0);
+        assert.deepStrictEqual(
+          [...new Set(sent.map((request) => request.authorization))],
+          ["Bearer token-for-bob"],
+        );
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("opens a pull request as the folder's account", () => {
+    const { layer, sent } = stack();
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const bodyFile = yield* fs.makeTempFileScoped({ suffix: ".md" });
+      yield* fs.writeFileString(bodyFile, "Body");
+      const gh = yield* GitHubSourceControlProvider.make;
+      yield* gh.createChangeRequest({
+        cwd: "/x",
+        baseRefName: "main",
+        headSelector: "feature",
+        title: "Title",
+        bodyFile,
+      });
+      assert.deepStrictEqual(
+        sent.map((request) => [request.url, request.authorization]),
+        [["https://api.github.com/repos/acme/web/pulls", "Bearer token-for-alice"]],
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  });
+
+  it.effect("publishes and looks up a fork as the folder's account", () => {
+    const { layer, sent } = stack();
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      yield* gh.createRepository({ cwd: "/y", repository: "bob/new", visibility: "private" });
+      yield* gh.getRepositoryCloneUrls({ cwd: "/y", repository: "new" });
+      // A lookup that named no folder runs in the server's own, which must not pick the account.
+      yield* gh.getRepositoryCloneUrls({ cwd: "/y", cwdIsServerDefault: true, repository: "new" });
+      assert.deepStrictEqual(
+        sent.map((request) => [request.url, request.authorization]),
+        [
+          ["https://api.github.com/user", "Bearer token-for-bob"],
+          ["https://api.github.com/user/repos", "Bearer token-for-bob"],
+          ["https://api.github.com/user", "Bearer token-for-bob"],
+          ["https://api.github.com/repos/bob/new", "Bearer token-for-bob"],
+          ["https://api.github.com/user", "Bearer token-for-auth"],
+          ["https://api.github.com/repos/bob/new", "Bearer token-for-auth"],
+        ],
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("publishes an owner-less name under the folder's account, not the active login", () => {
+    const { layer, sent } = stack();
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      yield* gh.createRepository({ cwd: "/y", repository: "new", visibility: "private" });
+      assert.deepStrictEqual(
+        sent.map((request) => [request.url, request.authorization]),
+        [["https://api.github.com/user/repos", "Bearer token-for-bob"]],
+      );
+    }).pipe(Effect.provide(layer));
+  });
+});

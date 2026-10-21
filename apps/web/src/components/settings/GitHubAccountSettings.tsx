@@ -14,11 +14,15 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
-import { groupGitHubAccounts, nextGitHubHosts } from "./GitHubAccountSettings.logic";
+import {
+  groupGitHubAccounts,
+  nextGitHubHosts,
+  gitHubHostPickerState,
+} from "./GitHubAccountSettings.logic";
 import { readGitHubSettings } from "@t3tools/client-runtime/source-control-clients";
 import { redactedPlaceholder } from "./RedactedSensitiveText";
 
-/** Sentinel select value for "follow gh's active login"; logins never contain spaces. */
+/** Sentinel select value for "the folder's login, else gh's active one"; logins never contain spaces. */
 const ACTIVE_ACCOUNT = "active gh account";
 
 function RedactedLogin(props: {
@@ -38,6 +42,27 @@ function RedactedLogin(props: {
   );
 }
 
+// The "Per folder" choice names the account used when a folder has none of its own.
+function PerFolderLabel(props: {
+  readonly group: { readonly activeAccount?: string | null; readonly activeUsable: boolean };
+  readonly revealed: boolean;
+}) {
+  const { group, revealed } = props;
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      {group.activeAccount ? (
+        <>
+          Per folder, else
+          <RedactedLogin revealed={revealed} account={group.activeAccount} />
+          {group.activeUsable ? null : "(can't be used)"}
+        </>
+      ) : (
+        "Per folder"
+      )}
+    </span>
+  );
+}
+
 export function GitHubAccountSettings({
   environmentId,
   auth,
@@ -48,7 +73,7 @@ export function GitHubAccountSettings({
   readonly onSaved: () => void;
 }) {
   const github = useEnvironmentSettings(environmentId, readGitHubSettings);
-  const hosts = github.hosts;
+  const { hosts, tokens } = github;
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "save GitHub account settings",
   });
@@ -106,9 +131,15 @@ export function GitHubAccountSettings({
       {groups.map((group) => {
         const choice = hosts[group.host];
         const enabled = choice?.enabled ?? true;
-        const stalePin =
-          choice?.account !== undefined && !group.selectable.includes(choice.account);
-        const pinned = choice?.account !== undefined && !stalePin ? choice.account : ACTIVE_ACCOUNT;
+        const state = gitHubHostPickerState({
+          pin: choice?.account,
+          enabled,
+          // A saved token reads as its redaction marker, so non-empty means one is set.
+          savedToken: (tokens[group.host] ?? "").length > 0,
+          group,
+        });
+        const unusablePin = state.pinProblem === null ? null : (choice?.account ?? null);
+        const pinned = choice?.account ?? ACTIVE_ACCOUNT;
         return (
           <div key={group.host} className="grid gap-2">
             <div className="flex items-center justify-between gap-3">
@@ -148,19 +179,7 @@ export function GitHubAccountSettings({
                       <SelectValue>
                         {(value: string) =>
                           value === ACTIVE_ACCOUNT ? (
-                            <span className="flex min-w-0 items-center gap-1">
-                              Active gh account
-                              {group.activeAccount ? (
-                                <>
-                                  (
-                                  <RedactedLogin
-                                    revealed={revealed}
-                                    account={group.activeAccount}
-                                  />
-                                  )
-                                </>
-                              ) : null}
-                            </span>
+                            <PerFolderLabel group={group} revealed={revealed} />
                           ) : (
                             <RedactedLogin revealed={revealed} account={value} />
                           )
@@ -169,15 +188,16 @@ export function GitHubAccountSettings({
                     </SelectTrigger>
                     <SelectPopup align="end" alignItemWithTrigger={false}>
                       <SelectItem value={ACTIVE_ACCOUNT}>
-                        <span className="flex min-w-0 items-center gap-1">
-                          Active gh account
-                          {group.activeAccount ? (
-                            <>
-                              (<RedactedLogin revealed={revealed} account={group.activeAccount} />)
-                            </>
-                          ) : null}
-                        </span>
+                        <PerFolderLabel group={group} revealed={revealed} />
                       </SelectItem>
+                      {unusablePin !== null ? (
+                        <SelectItem value={unusablePin} disabled>
+                          <span className="flex min-w-0 items-center gap-1">
+                            <RedactedLogin revealed={revealed} account={unusablePin} />
+                            {state.pinProblem === "broken" ? "(can't be used)" : "(signed out)"}
+                          </span>
+                        </SelectItem>
+                      ) : null}
                       {group.selectable.map((account, index) => (
                         <SelectItem key={account} value={account}>
                           <RedactedLogin
@@ -192,18 +212,21 @@ export function GitHubAccountSettings({
                 </div>
               </div>
             ) : null}
-            {stalePin ? (
+            {state.warning !== null ? (
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs text-warning">
-                  The chosen login is no longer signed in, so the active gh login is used.
+                  {state.warning === "broken"
+                    ? "The chosen login can't be used, so requests on this host fail until you sign in to it again or pick another."
+                    : "The chosen login is no longer signed in, so the active gh login is used for every folder."}
                 </p>
                 <Button
                   size="xs"
                   variant="outline"
-                  disabled={saving}
+                  // FORK: disabled for a login without `settings:write`.
+                  disabled={saving || writeDenied}
                   onClick={() => void save(group.host, { account: null })}
                 >
-                  Use active login
+                  Use per folder
                 </Button>
               </div>
             ) : null}
@@ -216,7 +239,12 @@ export function GitHubAccountSettings({
                 <span>can't be used: {entry.error ?? "gh reports this login as invalid."}</span>
               </p>
             ))}
-            {group.environmentVariable ? (
+            {state.override === "savedToken" ? (
+              <p className="text-xs text-warning">
+                A token is saved for this host, so it overrides the account chosen here until it is
+                removed.
+              </p>
+            ) : state.override === "environment" ? (
               <p className="text-xs text-warning">
                 {group.environmentVariable} is set on the server, so it overrides the account chosen
                 here until it is unset.

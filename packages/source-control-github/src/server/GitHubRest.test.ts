@@ -15,6 +15,7 @@ import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import type * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 const NOW = Date.parse("2026-10-05T12:00:00.000Z");
@@ -106,6 +107,7 @@ describe("GitHubRest", () => {
       const api = yield* GitHubRest.GitHubRest;
       yield* api.rest({
         host: "github.com",
+        cwd: null,
         operation: "listWorkflowRuns",
         path: "repos/acme/web/actions/runs?head_sha=abc123&branch=feat%2Fx",
       });
@@ -144,12 +146,18 @@ describe("GitHubRest", () => {
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
       const api = yield* GitHubRest.GitHubRest;
-      const read = { host: "github.com", operation: "sweep", path: "repos/acme/web/pulls" };
+      const read = {
+        host: "github.com",
+        cwd: null,
+        operation: "sweep",
+        path: "repos/acme/web/pulls",
+      };
       yield* Effect.flip(api.rest(read));
       expect((yield* Effect.flip(api.rest(read)))._tag).toBe("SourceControlRateLimitPausedError");
       const merged = yield* api
         .rest({
           host: "github.com",
+          cwd: null,
           operation: "merge",
           method: "PUT",
           path: "repos/acme/web/pulls/7/merge",
@@ -178,13 +186,19 @@ describe("GitHubRest", () => {
       const api = yield* GitHubRest.GitHubRest;
       const notModified = yield* api.rest({
         host: "github.com",
+        cwd: null,
         operation: "checks",
         path: "repos/acme/web/pulls/7",
         ifNoneMatch: '"abc"',
       });
       expect(notModified.status).toBe(304);
       const error = yield* Effect.flip(
-        api.rest({ host: "github.com", operation: "checks", path: "repos/acme/web/pulls/7" }),
+        api.rest({
+          host: "github.com",
+          cwd: null,
+          operation: "checks",
+          path: "repos/acme/web/pulls/7",
+        }),
       );
       expect(error).toMatchObject({ _tag: "GitHubApiRateLimitError", retryAt: NOW + 60_000 });
     }).pipe(Effect.provide(layer));
@@ -199,11 +213,16 @@ describe("GitHubRest", () => {
     return Effect.gen(function* () {
       const api = yield* GitHubRest.GitHubRest;
       const refused = yield* Effect.flip(
-        api.rest({ host: "github.com", operation: "user", path: "user" }),
+        api.rest({ host: "github.com", cwd: null, operation: "user", path: "user" }),
       );
       expect(refused._tag).toBe("GitHubApiAuthenticationError");
       expect(invalidations()).toBe(1);
-      const answered = yield* api.rest({ host: "github.com", operation: "user", path: "user" });
+      const answered = yield* api.rest({
+        host: "github.com",
+        cwd: null,
+        operation: "user",
+        path: "user",
+      });
       expect(answered.status).toBe(200);
       expect(requests.map((request) => request.headers.authorization)).toEqual([
         "Bearer first",
@@ -212,17 +231,196 @@ describe("GitHubRest", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect(
+    "sends as the folder's account, pinned or not, and traces which credential it was",
+    () => {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      const asked: Array<string | null> = [];
+      const credentials = Layer.succeed(
+        GitHubCredentials.GitHubCredentials,
+        GitHubCredentials.GitHubCredentials.of({
+          get: (host, cwd) => {
+            asked.push(cwd);
+            if (cwd === "/gone")
+              return Effect.fail(new GitHubCredentials.GitHubNotSignedInError({ host }));
+            return Effect.succeed(
+              cwd === "/x"
+                ? {
+                    host,
+                    token: Redacted.make("token-A"),
+                    source: "folder" as const,
+                    fingerprint: "a",
+                    account: "alice",
+                  }
+                : {
+                    host,
+                    token: Redacted.make("token-active"),
+                    source: "gh" as const,
+                    fingerprint: "active",
+                    fallback: "not-signed-in" as const,
+                    requestedAccount: "bob",
+                  },
+            );
+          },
+          invalidate: () => Effect.void,
+        }),
+      );
+      const authorizations: Array<string | undefined> = [];
+      const http = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => {
+          authorizations.push(request.headers.authorization);
+          return Effect.succeed(HttpClientResponse.fromWeb(request, json({})));
+        }),
+      );
+      const layer = GitHubRest.layer.pipe(
+        Layer.provide(Layer.mergeAll(credentials, http)),
+        Layer.provideMerge(GitHubQuota.layer),
+        Layer.provideMerge(SourceControlRateLimit.layer),
+      );
+      return Effect.gen(function* () {
+        const api = yield* GitHubRest.GitHubRest;
+        const read = (cwd: string | null) =>
+          api.rest({ host: "github.com", cwd, operation: "user", path: "user" });
+        yield* read("/x");
+        yield* read("/y");
+        // Pinned to /x, a read naming no folder still sends as /x's account.
+        yield* api.withDirectory({ host: "github.com", cwd: "/x" })(read(null));
+        // A pinned fallback still traces that it fell back.
+        yield* api.withDirectory({ host: "github.com", cwd: "/y" })(read(null));
+        // A folder whose credential cannot resolve sends nothing.
+        const failed = yield* Effect.flip(
+          api.withDirectory({ host: "github.com", cwd: "/gone" })(read(null)),
+        );
+        expect(failed._tag).toBe("GitHubNotSignedInError");
+        expect(asked).toEqual(["/x", "/y", "/x", "/y", "/gone"]);
+        expect(authorizations).toEqual([
+          "Bearer token-A",
+          "Bearer token-active",
+          "Bearer token-A",
+          "Bearer token-active",
+        ]);
+        const sends = spans
+          .filter((span) => span.name === "GitHubRest.send")
+          .map((span) => Object.fromEntries(span.attributes));
+        expect(sends[0]).toMatchObject({
+          "github.credential.source": "folder",
+          "github.credential.account": "alice",
+        });
+        expect(sends[0]).not.toHaveProperty("github.credential.fallback");
+        expect(sends[1]).toMatchObject({
+          "github.credential.source": "gh",
+          "github.credential.fallback": "not-signed-in",
+          // Names the login to sign in to gh, which `account` cannot: gh never confirmed it.
+          "github.credential.requested_account": "bob",
+        });
+        expect(sends[1]).not.toHaveProperty("github.credential.account");
+        expect(sends[2]).toMatchObject({
+          "github.credential.source": "folder",
+          "github.credential.account": "alice",
+        });
+        expect(sends[3]).toMatchObject({
+          "github.credential.source": "gh",
+          "github.credential.fallback": "not-signed-in",
+          "github.credential.requested_account": "bob",
+        });
+        expect(sends[0]).not.toHaveProperty("github.credential.requested_account");
+        expect(JSON.stringify(sends)).not.toContain("/x");
+      }).pipe(Effect.provide(layer), Effect.withTracer(tracer));
+    },
+  );
+
+  it.effect("traces what the folder lookup answered, never what it printed", () => {
+    const spans: Array<Tracer.NativeSpan> = [];
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    const fills: Record<string, { readonly stdout: string; readonly exitCode: number }> = {
+      "/hit": { stdout: "username=alice\npassword=SECRET-1\n", exitCode: 0 },
+      "/exit": { stdout: "username=bob\npassword=SECRET-2\n", exitCode: 1 },
+    };
+    const run: SourceControlHost.SourceControlHost["Service"]["process"]["run"] = (input) => {
+      const fill = fills[input.cwd];
+      return Effect.succeed(
+        input.command === "git"
+          ? TestSourceControlHost.processOutput(fill?.stdout ?? "", {
+              exitCode: ChildProcessSpawner.ExitCode(fill?.exitCode ?? 0),
+            })
+          : TestSourceControlHost.processOutput(
+              input.args.includes("--user")
+                ? `token-for-${input.args[input.args.indexOf("--user") + 1]}\n`
+                : "active-token\n",
+            ),
+      );
+    };
+    const http = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, json({})))),
+    );
+    const layer = GitHubRest.layerWithDependencies.pipe(
+      Layer.provide(http),
+      Layer.provide(TestSourceControlHost.layer({ process: { run } })),
+      Layer.provide(Layer.succeed(HostProcess.Environment, {})),
+      Layer.provide(NodeCrypto.layer),
+    );
+    return Effect.gen(function* () {
+      const api = yield* GitHubRest.GitHubRest;
+      const read = (cwd: string | null) =>
+        api.rest({ host: "github.com", cwd, operation: "user", path: "user" });
+      yield* read("/hit");
+      yield* read("/exit");
+      // The answer rides through a pin, and a read naming no folder consulted none.
+      yield* api.withDirectory({ host: "github.com", cwd: "/exit" })(read(null));
+      yield* read(null);
+      const sends = spans
+        .filter((span) => span.name === "GitHubRest.send")
+        .map((span) => Object.fromEntries(span.attributes));
+      expect(sends[0]).toMatchObject({
+        "github.credential.source": "folder",
+        "github.credential.account": "alice",
+        "github.credential.folder": "hit",
+      });
+      expect(sends[1]).toMatchObject({
+        "github.credential.source": "gh",
+        "github.credential.folder": "exit",
+      });
+      expect(sends[1]).not.toHaveProperty("github.credential.account");
+      expect(sends[2]).toMatchObject({
+        "github.credential.source": "gh",
+        "github.credential.folder": "exit",
+      });
+      expect(sends[3]).toMatchObject({ "github.credential.source": "gh" });
+      expect(sends[3]).not.toHaveProperty("github.credential.folder");
+      const traced = JSON.stringify(spans.map((span) => Object.fromEntries(span.attributes)));
+      for (const printed of ["SECRET-1", "SECRET-2", "bob"]) {
+        expect(traced).not.toContain(printed);
+      }
+    }).pipe(Effect.withTracer(tracer), Effect.provide(layer));
+  });
+
   it.effect("refuses to send a pinned credential to another host", () => {
     const { layer, requests } = harness(() => json({}));
     return Effect.gen(function* () {
       const api = yield* GitHubRest.GitHubRest;
       const error = yield* Effect.flip(
-        api.rest({ host: "git.acme.internal", operation: "user", path: "user" }),
+        api.rest({ host: "git.acme.internal", cwd: null, operation: "user", path: "user" }),
       ).pipe(
         Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, {
           host: "github.com",
           token: Redacted.make("pinned"),
           credentialFingerprint: "github.com:pinned",
+          source: "gh",
         }),
       );
       expect(error._tag).toBe("GitHubApiAuthenticationError");
@@ -242,9 +440,9 @@ describe("GitHubCredentials", () => {
     let calls = 0;
     return Effect.gen(function* () {
       const credentials = yield* GitHubCredentials.GitHubCredentials;
-      const first = yield* Effect.flip(credentials.get("github.com"));
+      const first = yield* Effect.flip(credentials.get("github.com", null));
       expect(first._tag).toBe("GitHubCliFailedError");
-      expect((yield* credentials.get("github.com")).source).toBe("gh");
+      expect((yield* credentials.get("github.com", null)).source).toBe("gh");
       expect(calls).toBe(2);
     }).pipe(
       Effect.provide(
@@ -273,7 +471,7 @@ describe("GitHubCredentials", () => {
   it.effect("fails with GitHubNotSignedInError when gh prints no token", () =>
     Effect.gen(function* () {
       const credentials = yield* GitHubCredentials.GitHubCredentials;
-      const error = yield* Effect.flip(credentials.get("git.acme.internal"));
+      const error = yield* Effect.flip(credentials.get("git.acme.internal", null));
       expect(error._tag).toBe("GitHubNotSignedInError");
     }).pipe(
       Effect.provide(

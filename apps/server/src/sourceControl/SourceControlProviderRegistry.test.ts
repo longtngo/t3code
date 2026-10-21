@@ -137,7 +137,9 @@ function makeRegistry(input: {
           : ServerSettings.ServerSettingsService.layerTest(),
         Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({}),
         // The GitHub provider's GraphQL reads go through these; no test here makes one.
-        Layer.mock(GitHubRequestPolicy.GitHubRequestPolicy)({}),
+        Layer.mock(GitHubRequestPolicy.GitHubRequestPolicy)({
+          withDirectory: () => (effect) => effect,
+        }),
         Layer.succeed(
           HttpClient.HttpClient,
           HttpClient.make(() => Effect.die(new Error("Unexpected GitHub GraphQL read"))),
@@ -145,6 +147,7 @@ function makeRegistry(input: {
         Layer.mock(GitHubRest.GitHubRest)({
           // No GitHub credential unless a test supplies one, so custom hosts stay unclaimed.
           credential: (host) => Effect.fail(new GitHubCredentials.GitHubNotSignedInError({ host })),
+          withDirectory: () => (effect) => effect,
           ...input.githubApi,
         }),
         Layer.mock(GitVcsDriver.GitVcsDriver)({}),
@@ -333,7 +336,11 @@ it.effect.each([
         credential: (host) => {
           hosts.push(host);
           return scenario.credential === "found"
-            ? Effect.succeed({ token: Redacted.make("token"), fingerprint: `${host}:fingerprint` })
+            ? Effect.succeed({
+                token: Redacted.make("token"),
+                fingerprint: `${host}:fingerprint`,
+                source: "gh",
+              })
             : scenario.credential === "disabled"
               ? Effect.fail(new GitHubCredentials.GitHubHostDisabledError({ host }))
               : Effect.fail(new GitHubCredentials.GitHubNotSignedInError({ host }));
@@ -360,6 +367,7 @@ it.effect("skips GitHub discovery for the identity resolver's empty base URL", (
           return Effect.succeed({
             token: Redacted.make("token"),
             fingerprint: `${host}:fingerprint`,
+            source: "gh",
           });
         },
       },
@@ -511,7 +519,11 @@ it.effect("asks again once Settings change", () =>
       githubApi: {
         credential: (host) =>
           signedIn
-            ? Effect.succeed({ token: Redacted.make("token"), fingerprint: `${host}:fingerprint` })
+            ? Effect.succeed({
+                token: Redacted.make("token"),
+                fingerprint: `${host}:fingerprint`,
+                source: "gh",
+              })
             : Effect.fail(new GitHubCredentials.GitHubNotSignedInError({ host })),
       },
     });

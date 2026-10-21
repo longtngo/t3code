@@ -28,6 +28,7 @@ import { isSshRemoteUrl } from "@t3tools/shared/sourceControl";
 
 import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
+import { environmentToken } from "./GitHubCredentials.ts";
 import * as GitHubChangeRequestTemplate from "./gitHubChangeRequestTemplate.ts";
 import * as GitHubGraphQlClient from "./gitHubGraphQlClient.ts";
 import {
@@ -111,12 +112,25 @@ function authAccounts(accounts: ReadonlyArray<GitHubAuthStatusAccount>) {
   }));
 }
 
+/**
+ * The headline account is the host's default. A request can still use another account, the one
+ * git names for its project's folder when nothing is pinned.
+ */
 export function parseGitHubAuth(
   input: SourceControlAuthProbeInput,
   settings: GitHubClient.GitHubSettings = readSourceControlHostSettings(GitHubClient.settings, {}),
+  environment: Readonly<Record<string, string | undefined>> = {},
 ) {
   const output = combinedAuthOutput(input);
-  const authStatus = parseGitHubAuthStatus(input.stdout);
+  const parsed = parseGitHubAuthStatus(input.stdout);
+  // gh lists the env-token login for any enterprise host, but requests only send the token to
+  // GH_HOST's. Elsewhere that entry is not usable, so drop it and leave the stored logins.
+  const unusable = (entry: (typeof parsed.accounts)[number]) =>
+    entry.environmentVariable !== null && environmentToken(entry.host, environment) === null;
+  const authStatus = { ...parsed, accounts: parsed.accounts.filter((entry) => !unusable(entry)) };
+  const stranded = parsed.accounts.find(
+    (entry) => unusable(entry) && !authStatus.accounts.some((kept) => kept.host === entry.host),
+  );
   const hosts = [...new Set(authStatus.accounts.map((entry) => entry.host))];
   const fallback = findAuthenticatedGitHubAccount(authStatus.accounts);
   const orderedHosts = fallback
@@ -158,10 +172,11 @@ export function parseGitHubAuth(
     return {
       ...providerAuth({
         status: "unauthenticated",
-        host: failedAccount?.host,
-        detail:
-          failedAccount?.error ??
-          "Run `gh auth login` to authenticate GitHub CLI with an active account.",
+        host: stranded?.host ?? failedAccount?.host,
+        detail: stranded
+          ? `${stranded.environmentVariable} is used only for the host GH_HOST names. Set GH_HOST=${stranded.host} or run \`gh auth login --hostname ${stranded.host}\`.`
+          : (failedAccount?.error ??
+            "Run `gh auth login` to authenticate GitHub CLI with an active account."),
       }),
       ...accounts,
     };
@@ -236,14 +251,18 @@ export const makeDiscovery = Effect.gen(function* () {
       const cli = yield* probeSourceControlProvider({
         cwd,
         process,
-        spec: { ...discovery, parseAuth: (input) => parseGitHubAuth(input, settings) },
+        spec: {
+          ...discovery,
+          parseAuth: (input) => parseGitHubAuth(input, settings, environment),
+        },
       });
       const savedToken = (settings.tokens["github.com"] ?? "").trim() !== "";
       const variable = environmentTokenVariable(environment);
       const tokenSource = savedToken ? "the token saved in Settings" : variable;
       if (tokenSource === null || settings.hosts["github.com"]?.enabled === false) return cli;
       const viewer = yield* api
-        .rest({ host: "github.com", operation: "discovery", path: "user" })
+        // Settings shows one account per host, not a project's.
+        .rest({ host: "github.com", cwd: null, operation: "discovery", path: "user" })
         .pipe(Effect.result);
       const login = Result.isSuccess(viewer)
         ? Option.getOrUndefined(decodeViewer(viewer.success.body))?.login
@@ -287,7 +306,8 @@ export const makeDiscovery = Effect.gen(function* () {
       const url = URL.parse(context.provider.baseUrl);
       if (!url?.host) return Effect.succeed(null);
       // A timeout or keyring failure propagates: the registry does not keep that answer.
-      return api.credential(url.host).pipe(
+      // Any signed-in account answers "is this host GitHub", so no folder is asked.
+      return api.credential(url.host, null).pipe(
         Effect.as(true),
         Effect.catchTags({
           GitHubCliMissingError: () => Effect.succeed(false),
@@ -565,6 +585,7 @@ export const make = Effect.gen(function* () {
     const result = yield* graphqlRead(
       {
         host: locator.host,
+        cwd: input.cwd,
         operation: "listPullRequestsByHead",
         allowReserve: input.allowReserve,
         // Up to 50 heads of 100 rows each. A default branch such as `main` can match a hundred
@@ -581,6 +602,12 @@ export const make = Effect.gen(function* () {
           first: ownerMatch ? OWNER_HEAD_SCAN_LIMIT : limit,
         },
         input.allowReserve ? interactiveHeadResolver : backgroundHeadResolver,
+      ),
+    ).pipe(
+      // The batch key follows the pinned credential, so two accounts never share a document.
+      api.withDirectory({ host: locator.host, cwd: input.cwd }),
+      Effect.mapError((error) =>
+        error._tag === "GitHubFailure" ? error : fromGitHubApiError(error),
       ),
     );
     if (result.repository === null) return yield* notFound("The repository could not be read.");
@@ -624,7 +651,7 @@ export const make = Effect.gen(function* () {
       const locator = parsed.kind === "url" ? parsed.locator : yield* resolveRepository(input);
       const decodeDetail = "GitHub returned an invalid pull request.";
       const result = yield* graphqlRead(
-        { host: locator.host, operation: "getPullRequest", allowReserve: true },
+        { host: locator.host, cwd: input.cwd, operation: "getPullRequest", allowReserve: true },
         decodeDetail,
         client.PullRequestByNumber({
           owner: locator.owner,
@@ -643,10 +670,12 @@ export const make = Effect.gen(function* () {
 
   const readRepository = Effect.fn("GitHubSourceControlProvider.readRepository")(function* (
     locator: GitHubRepositoryLocator,
+    cwd: string | null,
   ) {
     const response = yield* rest(
       {
         host: locator.host,
+        cwd,
         operation: "getRepository",
         path: `repos/${encodeURIComponent(locator.owner)}/${encodeURIComponent(locator.name)}`,
         allowReserve: true,
@@ -662,9 +691,11 @@ export const make = Effect.gen(function* () {
 
   const readViewerLogin = Effect.fn("GitHubSourceControlProvider.readViewerLogin")(function* (
     host: string,
+    cwd: string | null,
   ) {
     const response = yield* rest({
       host,
+      cwd,
       operation: "getViewer",
       path: "user",
       allowReserve: true,
@@ -729,7 +760,7 @@ export const make = Effect.gen(function* () {
       // prefix. Without the default branch that collision cannot be ruled out, and the checkout
       // would reset the local default branch to the fork's commit, so it fails instead.
       const defaultBranch = isCrossRepository
-        ? yield* readRepository(base).pipe(
+        ? yield* readRepository(base, input.cwd).pipe(
             Effect.map((repository) => repository.default_branch ?? null),
           )
         : null;
@@ -746,7 +777,10 @@ export const make = Effect.gen(function* () {
         const known = remoteFor(headNameWithOwner);
         if (known !== null) return known;
         const [owner, name] = headNameWithOwner.split("/");
-        const fork = yield* readRepository({ host: base.host, owner: owner!, name: name! });
+        const fork = yield* readRepository(
+          { host: base.host, owner: owner!, name: name! },
+          input.cwd,
+        );
         const originUrl = yield* git.readConfigValue(input.cwd, "remote.origin.url");
         return yield* git.ensureRemote({
           cwd: input.cwd,
@@ -848,6 +882,7 @@ export const make = Effect.gen(function* () {
     const result = yield* api
       .rest({
         host: input.url.host,
+        cwd: input.cwd,
         operation: "resolveLink",
         path: endpoint,
         maxResponseBytes: 1_000_000,
@@ -939,6 +974,7 @@ export const make = Effect.gen(function* () {
           );
         yield* rest({
           host: locator.host,
+          cwd: input.cwd,
           operation: "createPullRequest",
           method: "POST",
           allowReserve: true,
@@ -963,6 +999,7 @@ export const make = Effect.gen(function* () {
     ),
     getRepositoryCloneUrls: Effect.fn("GitHubSourceControlProvider.getRepositoryCloneUrls")(
       function* (input) {
+        const cwd = input.cwdIsServerDefault ? null : input.cwd;
         const fallbackHost = (yield* resolveRepository(input).pipe(
           Effect.map((locator) => locator.host),
           Effect.orElseSucceed(() => environment.GH_HOST ?? "github.com"),
@@ -971,10 +1008,14 @@ export const make = Effect.gen(function* () {
         const locator =
           parseGitHubRepositorySelector(input.repository, fallbackHost) ??
           (/^[^/\s]+$/.test(bareName)
-            ? { host: fallbackHost, owner: yield* readViewerLogin(fallbackHost), name: bareName }
+            ? {
+                host: fallbackHost,
+                owner: yield* readViewerLogin(fallbackHost, cwd),
+                name: bareName,
+              }
             : null);
         if (locator === null) return yield* failure("Repositories are named owner/name.");
-        return repositoryCloneUrls(yield* readRepository(locator));
+        return repositoryCloneUrls(yield* readRepository(locator, cwd));
       },
       (effect, input) =>
         effect.pipe(
@@ -989,23 +1030,29 @@ export const make = Effect.gen(function* () {
           input.repository,
           (environment.GH_HOST ?? "github.com").toLowerCase(),
         );
-        const viewer = locator === null ? null : yield* readViewerLogin(locator.host);
+        const viewer = locator === null ? null : yield* readViewerLogin(locator.host, input.cwd);
         const owner = locator?.owner ?? viewer;
-        const name = locator?.name ?? input.repository.trim();
+        // A bare name drops a trailing .git, as an owner/name selector does.
+        const name = locator?.name ?? input.repository.trim().replace(/\.git$/i, "");
         const host = locator?.host ?? (environment.GH_HOST?.trim().toLowerCase() || "github.com");
         const isViewer = viewer !== null && owner?.toLowerCase() === viewer.toLowerCase();
+        const underUser = isViewer || owner === null;
         const response = yield* rest(
           {
             host,
+            // Publishing runs in an existing folder, so git's folder rule applies there too.
+            cwd: input.cwd,
             operation: "createRepository",
             method: "POST",
             allowReserve: true,
-            path:
-              isViewer || owner === null ? "user/repos" : `orgs/${encodeURIComponent(owner)}/repos`,
+            path: underUser ? "user/repos" : `orgs/${encodeURIComponent(owner)}/repos`,
             body: { name, private: input.visibility === "private" },
           },
-          // GitHub answers 404 for an organization the account cannot create repositories in.
-          `No organization named ${owner ?? "that"} that this account can create repositories in.`,
+          // The account follows the folder, so name it: it may not be the one gh has active.
+          underUser
+            ? `This folder's account${viewer === null ? "" : ` ${viewer}`} could not create the repository.`
+            : // GitHub answers 404 for an organization the account cannot create repositories in.
+              `This folder publishes as ${viewer ?? "an account"}, who cannot create repositories in ${owner}. Enter a bare name, or an organization ${viewer ?? "it"} can create in.`,
         );
         const decoded = decodeRawRepository(response.body);
         if (Result.isFailure(decoded)) {
@@ -1027,7 +1074,7 @@ export const make = Effect.gen(function* () {
           host: contextHost(input.context),
           context: input.context,
         });
-        const repository = yield* readRepository(locator);
+        const repository = yield* readRepository(locator, input.cwd);
         const branch = repository.default_branch?.trim() ?? "";
         return branch.length > 0 ? branch : null;
       },

@@ -79,6 +79,7 @@ export function findAuthenticatedGitHubAccount(
   );
 }
 
+/** The host's default login. Per-folder routing, which asks git for each folder's account, is not modelled here. */
 export function effectiveGitHubAccount(
   host: string,
   accounts: ReadonlyArray<GitHubAuthStatusAccount>,

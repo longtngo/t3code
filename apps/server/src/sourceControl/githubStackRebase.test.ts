@@ -16,7 +16,9 @@ import * as ServerSourceControlHost from "./ServerSourceControlHost.ts";
 
 const layer = Layer.mergeAll(
   Layer.mock(GitHubRest.GitHubRest)({
-    credential: () => Effect.succeed({ token: Redacted.make("token"), fingerprint: "fp" }),
+    credential: () =>
+      Effect.succeed({ token: Redacted.make("token"), fingerprint: "fp", source: "gh" }),
+    withDirectory: () => (effect) => effect,
   }),
   ServerSourceControlHost.layer.pipe(
     Layer.provide(ServerSettings.layerTest()),
@@ -80,14 +82,32 @@ it.layer(layer)("cascadeRebaseStack", (it) => {
   it.effect("moves each layer's own commits onto the rebased layer below it", () =>
     Effect.gen(function* () {
       const repo = yield* setup;
+      const folders: Array<string | null> = [];
       const completed = yield* cascadeRebaseStack({
         host: "github.com",
+        cwd: "/repo",
         repository: "acme/web",
         base: "main",
         layers: repo.layers,
         remote: repo.remote,
-      });
+      }).pipe(
+        Effect.provide(
+          Layer.mock(GitHubRest.GitHubRest)({
+            credential: (_host, cwd) => {
+              folders.push(cwd);
+              return Effect.succeed({
+                token: Redacted.make("token"),
+                fingerprint: "fp",
+                source: "gh",
+              });
+            },
+            withDirectory: () => (effect) => effect,
+          }),
+        ),
+      );
       assert.strictEqual(completed, 2);
+      // The push authenticates as the account the stack's own folder names.
+      expect(folders).toEqual(["/repo"]);
 
       const main = yield* repo.head("main");
       const bottom = yield* repo.head("feat/answer-42");
@@ -107,6 +127,7 @@ it.layer(layer)("cascadeRebaseStack", (it) => {
       const error = yield* Effect.flip(
         cascadeRebaseStack({
           host: "github.com",
+          cwd: "/repo",
           repository: "acme/web",
           base: "main",
           layers: stale,
@@ -145,6 +166,7 @@ it.layer(layer)("cascadeRebaseStack", (it) => {
       const error = yield* Effect.flip(
         cascadeRebaseStack({
           host: "github.com",
+          cwd: "/repo",
           repository: "acme/web",
           base: "main",
           layers: repo.layers,

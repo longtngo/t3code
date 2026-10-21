@@ -15,21 +15,31 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import { readSourceControlHostSettings } from "@t3tools/source-control-core/client/definition";
-import type { ServerSettings } from "@t3tools/contracts";
 
 import * as GitHubClient from "../client/definition.ts";
 
 const TOKEN_TTL = Duration.minutes(5);
 const MISSING_TTL = Duration.seconds(10);
 
-export const GitHubCredentialSource = Schema.Literals(["settings", "env", "gh"]);
+export const GitHubCredentialSource = Schema.Literals(["settings", "env", "gh", "folder"]);
 export type GitHubCredentialSource = typeof GitHubCredentialSource.Type;
+
+/** What git answered when asked which login a folder uses; never anything it printed. */
+export type GitHubFolderOutcome = "hit" | "empty" | "exit" | "timeout" | "invalid";
 
 export interface GitHubCredential {
   readonly host: string;
   readonly token: Redacted.Redacted<string>;
   readonly source: GitHubCredentialSource;
   readonly fingerprint: string;
+  /** The login gh confirmed this token belongs to, when the request named one. */
+  readonly account?: string;
+  /** The named login is not signed in to gh, so this is gh's active login instead. */
+  readonly fallback?: "not-signed-in";
+  /** The login that was asked for when `fallback` replaced it; names which login to sign in. */
+  readonly requestedAccount?: string;
+  /** What the folder lookup answered, when one was consulted. */
+  readonly folder?: GitHubFolderOutcome;
 }
 
 export class GitHubCliMissingError extends Schema.TaggedError<GitHubCliMissingError>()(
@@ -79,9 +89,12 @@ export type GitHubCredentialUnavailableError =
 export class GitHubCredentials extends Context.Service<
   GitHubCredentials,
   {
+    /** `cwd` is the project folder whose git config may name the account; null when none. */
     readonly get: (
       host: string,
+      cwd: string | null,
     ) => Effect.Effect<GitHubCredential, GitHubCredentialUnavailableError>;
+    /** Drops every held token for the host after GitHub refused one, so the next read asks again. */
     readonly invalidate: (host: string) => Effect.Effect<void>;
   }
 >()("@t3tools/source-control-github/server/GitHubCredentials") {}
@@ -116,6 +129,19 @@ export function environmentToken(
   return null;
 }
 
+const USERNAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,38}$/u;
+
+/** The `username=` git's credential helpers named, or null. Reads nothing else from the output. */
+export function parseFillUsername(stdout: string): string | null {
+  for (const line of stdout.split("\n")) {
+    if (line.startsWith("username=")) {
+      const name = line.slice("username=".length).trim();
+      return USERNAME.test(name) ? name : null;
+    }
+  }
+  return null;
+}
+
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
@@ -143,8 +169,17 @@ export const make = Effect.gen(function* () {
           ...(account === undefined ? [] : ["--user", account]),
         ],
         cwd: workingDirectory,
-        // Never let gh print the token into a debug log.
-        env: { GH_DEBUG: "", GH_PROMPT_DISABLED: "1" },
+        // Never let gh print the token into a debug log. Blank the token variables too: gh hands
+        // GH_ENTERPRISE_TOKEN to any --hostname, and environmentToken already picked the hosts
+        // an environment token may go to, so here gh answers only from its own logins.
+        env: {
+          GH_DEBUG: "",
+          GH_PROMPT_DISABLED: "1",
+          GH_TOKEN: "",
+          GITHUB_TOKEN: "",
+          GH_ENTERPRISE_TOKEN: "",
+          GITHUB_ENTERPRISE_TOKEN: "",
+        },
         timeoutMs: 10_000,
       })
       .pipe(
@@ -165,66 +200,141 @@ export const make = Effect.gen(function* () {
         ),
       );
 
-  const readSettings = (settings: ServerSettings) =>
-    readSourceControlHostSettings(
-      GitHubClient.settings,
-      settings.sourceControlHosts[GitHubClient.definition.kind],
-    );
-
-  const hostChoice = (host: string) =>
+  /**
+   * The Settings choice and saved token for a host, read fresh so a change applies at once.
+   * Unreadable settings fall back to gh's own choice and no saved token.
+   */
+  const hostSettings = (host: string) =>
     sourceControlHost.settings.get.pipe(
-      Effect.map((settings) => readSettings(settings).hosts[host]),
-      Effect.orElseSucceed(() => undefined),
+      Effect.map((settings) => {
+        const github = readSourceControlHostSettings(
+          GitHubClient.settings,
+          settings.sourceControlHosts[GitHubClient.definition.kind],
+        );
+        return { choice: github.hosts[host], saved: github.tokens[host]?.trim() || null };
+      }),
+      Effect.orElseSucceed(() => ({ choice: undefined, saved: null })),
     );
 
-  const savedToken = (host: string) =>
-    sourceControlHost.settings.get.pipe(
-      Effect.map((settings) => readSettings(settings).tokens[host]?.trim() || null),
-      Effect.orElseSucceed(() => null),
-    );
-
-  const cacheKey = (host: string, account: string | undefined) =>
-    account === undefined ? host : `${host}\u0000${account}`;
-
-  const lookup = Effect.fn("GitHubCredentials.lookup")(function* (key: string) {
-    const [host = key, choice] = key.split("\u0000");
-    const fromEnv = environmentToken(host, environment);
-    const token =
-      fromEnv ??
-      (yield* fromGh(host, choice).pipe(
-        Effect.catchTags({
-          GitHubNotSignedInError: (error) =>
-            choice === undefined ? Effect.fail(error) : fromGh(host, undefined),
+  /** Which login git's own config picks for `host` in `cwd`; null when it has no answer. */
+  const lookupFolderAccount = Effect.fn("GitHubCredentials.folderAccount")(function* (
+    host: string,
+    cwd: string,
+  ) {
+    const outcome = (value: GitHubFolderOutcome, account: string | null = null) =>
+      Effect.annotateCurrentSpan("github.folder_account.outcome", value).pipe(
+        Effect.as({ account, outcome: value }),
+      );
+    if (host.includes("\n")) return yield* outcome("invalid");
+    return yield* process
+      .run({
+        operation: "GitHubCredentials.folderAccount",
+        command: "git",
+        args: ["-c", "credential.interactive=never", "-C", cwd, "credential", "fill"],
+        cwd,
+        stdin: `protocol=https\nhost=${host}\n\n`,
+        env: {
+          ...SourceControlHost.GIT_REMOTE_PROMPT_ENV,
+          GIT_DIR: undefined,
+          GIT_WORK_TREE: undefined,
+          GIT_COMMON_DIR: undefined,
+        },
+        allowNonZeroExit: true,
+        outputMode: "error",
+        maxOutputBytes: 65_536,
+        timeoutMs: 2_000,
+      })
+      .pipe(
+        // Only the username leaves here: the output also carries a password.
+        Effect.flatMap((output) => {
+          const account = output.exitCode === 0 ? parseFillUsername(output.stdout) : null;
+          return outcome(
+            output.exitCode !== 0
+              ? "exit"
+              : account !== null
+                ? "hit"
+                : output.stdout.includes("username=")
+                  ? "invalid"
+                  : "empty",
+            account,
+          );
         }),
-      ));
-    return {
-      host,
-      token: Redacted.make(token),
-      source: fromEnv !== null ? "env" : "gh",
-      fingerprint: yield* fingerprintOf(host, token),
-    } satisfies GitHubCredential;
+        Effect.catch((error) =>
+          outcome(error._tag === "VcsProcessTimeoutError" ? "timeout" : "exit"),
+        ),
+      );
   });
 
-  const cache = yield* Cache.makeWith(lookup, {
-    capacity: 32,
-    timeToLive: (exit) =>
-      Exit.isSuccess(exit)
-        ? TOKEN_TTL
-        : Exit.findErrorOption(exit).pipe(
-              Option.exists((error) => error._tag === "GitHubCliFailedError"),
+  /** Keyed `host\0cwd`; every answer, none included, is kept as long as a token. */
+  const folderCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [host = key, cwd = ""] = key.split("\u0000");
+      return lookupFolderAccount(host, cwd);
+    },
+    { capacity: 256, timeToLive: () => TOKEN_TTL },
+  );
+
+  /** Keyed `host` for gh's active login or `host\0account` for a named one. */
+  const lookup = Effect.fn("GitHubCredentials.lookup")(function* (key: string) {
+    const [host = key, account] = key.split("\u0000");
+    const token = yield* fromGh(host, account).pipe(
+      Effect.tapError((error) =>
+        account !== undefined && error._tag === "GitHubNotSignedInError"
+          ? Effect.logWarning(
+              `GitHub account ${account} on ${host} is not signed in to gh; using the active login`,
             )
-          ? Duration.zero
-          : MISSING_TTL,
+          : Effect.void,
+      ),
+    );
+    return { token: Redacted.make(token), fingerprint: yield* fingerprintOf(host, token) };
   });
+
+  const tokenCache = yield* Cache.makeWith(lookup, {
+    capacity: 32,
+    // A transient gh failure (a timeout, a locked keyring) is asked again on the next read; a
+    // named login gh lacks is remembered as long as a token, so its warning logs once per TTL.
+    timeToLive: (exit) => {
+      const error = Option.getOrUndefined(Exit.findErrorOption(exit));
+      return Exit.isSuccess(exit)
+        ? TOKEN_TTL
+        : error?._tag === "GitHubCliFailedError"
+          ? Duration.zero
+          : error?._tag === "GitHubNotSignedInError" && error.account !== undefined
+            ? TOKEN_TTL
+            : MISSING_TTL;
+    },
+  });
+
+  const active = (host: string) =>
+    Cache.get(tokenCache, host).pipe(
+      Effect.map((held): GitHubCredential => ({ host, ...held, source: "gh" })),
+    );
+
+  /** A named login's token; one gh no longer holds (logged out, expired) falls back to active. */
+  const named = (host: string, account: string, source: "gh" | "folder") =>
+    Cache.get(tokenCache, `${host}\u0000${account}`).pipe(
+      Effect.map((held): GitHubCredential => ({ host, ...held, source, account })),
+      Effect.catchTags({
+        GitHubNotSignedInError: () =>
+          active(host).pipe(
+            Effect.map((credential): GitHubCredential => ({
+              ...credential,
+              fallback: "not-signed-in",
+              requestedAccount: account,
+            })),
+          ),
+      }),
+    );
 
   return GitHubCredentials.of({
-    get: Effect.fn("GitHubCredentials.get")(function* (rawHost) {
+    get: Effect.fn("GitHubCredentials.get")(function* (rawHost, cwd) {
       const host = normalizeHost(rawHost);
-      const choice = yield* hostChoice(host);
+      const { choice, saved } = yield* hostSettings(host);
       if (choice?.enabled === false) {
         return yield* new GitHubHostDisabledError({ host });
       }
-      const saved = yield* savedToken(host);
+      // A token saved in Settings is the most deliberate choice, so it comes before the
+      // environment and gh. It is read from the secret store each time, so it needs no cache.
       if (saved !== null) {
         return {
           host,
@@ -233,12 +343,35 @@ export const make = Effect.gen(function* () {
           fingerprint: yield* fingerprintOf(host, saved),
         } satisfies GitHubCredential;
       }
-      return yield* Cache.get(cache, cacheKey(host, choice?.account));
+      // An environment token wins over any account, exactly as it does in gh.
+      const fromEnv = environmentToken(host, environment);
+      if (fromEnv !== null) {
+        return {
+          host,
+          token: Redacted.make(fromEnv),
+          source: "env",
+          fingerprint: yield* fingerprintOf(host, fromEnv),
+        } satisfies GitHubCredential;
+      }
+      // A pin outranks the folder: outside configured trees git answers with the active login.
+      if (choice?.account !== undefined) return yield* named(host, choice.account, "gh");
+      if (cwd === null) return yield* active(host);
+      const folder = yield* Cache.get(folderCache, `${host}\u0000${cwd}`);
+      const credential = yield* folder.account === null
+        ? active(host)
+        : named(host, folder.account, "folder");
+      return { ...credential, folder: folder.outcome };
     }),
     invalidate: (rawHost) => {
       const host = normalizeHost(rawHost);
-      return hostChoice(host).pipe(
-        Effect.flatMap((choice) => Cache.invalidate(cache, cacheKey(host, choice?.account))),
+      return Cache.keys(tokenCache).pipe(
+        Effect.flatMap((keys) =>
+          Effect.forEach(
+            Array.from(keys).filter((key) => key === host || key.startsWith(`${host}\u0000`)),
+            (key) => Cache.invalidate(tokenCache, key),
+            { discard: true },
+          ),
+        ),
       );
     },
   });

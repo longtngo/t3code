@@ -99,8 +99,12 @@ for (const mode of ["detail", "preview"] as const) {
         // Where the `graphql` quota stands before the first read. `rate_limit` is free.
         const api = yield* GitHubRest.GitHubRest;
         const limits = decodeRateLimit(
-          (yield* api.rest({ host: "github.com", operation: "rateLimit", path: "rate_limit" }))
-            .body,
+          (yield* api.rest({
+            host: "github.com",
+            cwd: process.cwd(),
+            operation: "rateLimit",
+            path: "rate_limit",
+          })).body,
         ).resources.graphql;
         graphqlUsed = { used: limits.used, reset: String(limits.reset) };
         return yield* Effect.forEach(numbers.map(Number), (number) =>

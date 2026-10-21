@@ -1080,8 +1080,10 @@ export const make = Effect.gen(function* () {
   // authored/reviewing searches for that same repository are therefore real empty answers, not
   // a reason to issue the two-command per-repository fallback again.
   const searchVisibleAt = new Map<string, number>();
-  const searchVisibilityKey = (host: string, repository: string) =>
-    `${host}\n${repository.trim().toLowerCase()}`;
+  // Per search folder: a different folder may search as a different account, which cannot see the
+  // same repositories.
+  const searchVisibilityKey = (host: string, cwd: string, repository: string) =>
+    `${host}\n${cwd}\n${repository.trim().toLowerCase()}`;
 
   const listUncached: PullRequestService["Service"]["list"] = Effect.fn(
     "PullRequestService.listUncached",
@@ -1270,7 +1272,10 @@ export const make = Effect.gen(function* () {
               const held = rows.get(key);
               if (held === undefined) rows.set(key, [item]);
               else held.push(item);
-              searchVisibleAt.set(searchVisibilityKey(first.host, item.repository), now);
+              searchVisibleAt.set(
+                searchVisibilityKey(first.host, first.project.workspaceRoot, item.repository),
+                now,
+              );
             }
             const boundary = page.items.reduce<string | null>(
               (oldest, item) =>
@@ -1287,7 +1292,11 @@ export const make = Effect.gen(function* () {
                 // believed. Only on its first slice: after that it has a boundary to carry on
                 // from, and silence past one means the rows are older rather than absent.
                 const lastVisible = searchVisibleAt.get(
-                  searchVisibilityKey(project.host, project.repository),
+                  searchVisibilityKey(
+                    project.host,
+                    first.project.workspaceRoot,
+                    project.repository,
+                  ),
                 );
                 const searchIsKnownVisible =
                   !page.truncated &&

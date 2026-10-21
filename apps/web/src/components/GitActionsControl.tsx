@@ -58,6 +58,7 @@ import {
   resolveGitActionProgressPresentation,
   resolveGitActionResultToastTiming,
   resolveLiveThreadBranchUpdate,
+  resolvePublishRepositoryOwner,
   resolveThreadBranchMetadataPatch,
   resolveQuickAction,
   resolveThreadBranchUpdate,
@@ -219,7 +220,6 @@ const PUBLISH_PROVIDER_OPTIONS = sourceControlClients.definitions.map((definitio
   value: definition.kind,
   label: definition.pickerLabel,
   description: definition.publishDescription,
-  pathPlaceholder: definition.repositoryPathHint,
   definition,
   Icon: sourceControlIcon(definition),
 }));
@@ -561,10 +561,13 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
         selectedPublishProvider ??
         sourceControlClients.get(undefined).kind);
   const selectedPublishProviderReadiness = publishProviderReadiness(publishProvider);
-  const publishAccount = publishAccountByProvider.get(publishProvider) ?? null;
-  const publishRepositoryPrefill = publishAccount ? `${publishAccount}/` : "";
-  const publishRepository = publishRepositoryOverride ?? publishRepositoryPrefill;
   const currentPublishProvider = publishProviderOption(publishProvider);
+  const publishAccount = publishAccountByProvider.get(publishProvider) ?? null;
+  const publishRepositoryOwner = resolvePublishRepositoryOwner(
+    currentPublishProvider.definition,
+    publishAccount,
+  );
+  const publishRepository = publishRepositoryOverride ?? publishRepositoryOwner.prefill;
   const publishHost = currentPublishProvider.definition.publishHost(
     Option.getOrNull(
       sourceControlDiscovery.data?.sourceControlProviders.find(
@@ -572,7 +575,6 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
       )?.auth.host ?? Option.none(),
     ),
   );
-  const publishPathPlaceholder = currentPublishProvider.pathPlaceholder;
   const publishProviderLabel = currentPublishProvider.label;
   const publishWizardSteps = ["Provider", "Repository", "Summary"] as const;
   const publishWizardStepSummaries = [
@@ -581,15 +583,11 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     null,
   ] as const;
 
-  const publishRepositoryParts = publishRepository.trim().split("/");
-  const publishRepositoryOwner = publishRepositoryParts[0]?.trim() ?? "";
-  const publishRepositoryName = publishRepositoryParts.slice(1).join("/").trim();
   const canSubmitPublishRepository =
     publishRepositoryAction.isAllowed &&
     selectedPublishProviderReadiness.ready &&
     !publishRepositoryAction.isPending &&
-    publishRepositoryOwner.length > 0 &&
-    publishRepositoryName.length > 0;
+    publishRepositoryOwner.isValid(publishRepository);
 
   const submitPublishRepository = () => {
     if (!canSubmitPublishRepository) {
@@ -764,7 +762,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                       submitPublishRepository();
                     }
                   }}
-                  placeholder={publishPathPlaceholder}
+                  placeholder={publishRepositoryOwner.placeholder}
                   disabled={publishRepositoryAction.isPending}
                   className="w-full bg-transparent px-3 py-2 font-mono text-sm placeholder:text-muted-foreground/60 focus:outline-none"
                 />

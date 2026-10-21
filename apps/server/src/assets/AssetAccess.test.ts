@@ -223,6 +223,47 @@ describe("AssetAccess", () => {
     );
   });
 
+  it.effect("fetches each asset with the account its signed folder names", () => {
+    const authorizations: Array<string | undefined> = [];
+    const accountByFolder: Record<string, string> = { "/x": "token-A", "/y": "token-B" };
+    return Effect.gen(function* () {
+      for (const cwd of ["/x", "/y"]) {
+        const asset = {
+          url: "https://raw.githubusercontent.com/owner/repo/main/shot.png",
+          cwd,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        };
+        expect((yield* githubMediaResponse(asset, {})).status).toBe(200);
+      }
+      expect(authorizations).toEqual(["Bearer token-A", "Bearer token-B"]);
+    }).pipe(
+      Effect.provide(
+        Layer.mock(GitHubCredentials.GitHubCredentials)({
+          get: (host, cwd) =>
+            Effect.succeed({
+              host,
+              token: Redacted.make(accountByFolder[cwd ?? ""] ?? "token-active"),
+              source: "folder" as const,
+              fingerprint: cwd ?? "active",
+            }),
+        }),
+      ),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => {
+          authorizations.push(request.headers.authorization);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(null, { status: 200, headers: { "content-type": "image/png" } }),
+            ),
+          );
+        }),
+      ),
+      Effect.scoped,
+    );
+  });
+
   it.effect("serves an image a tool returned inline from the stored item", () =>
     Effect.gen(function* () {
       const resource = {

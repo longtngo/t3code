@@ -27,9 +27,14 @@ order of precedence:
    server's environment.
 3. [GitHub CLI](https://cli.github.com/) 2.81.0 or newer, signed in with `gh auth login`.
 
-If `gh` is signed in to several accounts or hosts, expand **GitHub** in the same place to pick
-the account each host uses or turn a host off. A saved token or `GH_TOKEN` takes precedence
-over that choice; a host turned off stays off either way.
+If `gh` is signed in to several accounts, T3 Code asks git which account its credential
+configuration picks for each project's folder, so per-folder `includeIf` setups work. Setups
+that choose by repository path, by a username in the remote URL, or by SSH key fall back to
+the account git's host-wide credential setup names if `gh` is signed in to it, otherwise the
+`gh` active account. To use one account for a whole host instead, expand **GitHub** in the
+same place and pick it; that turns per-folder selection off for the host. You can also turn a
+host off there. A saved token or `GH_TOKEN` takes precedence over both; a host turned off
+stays off either way.
 
 For GitHub Enterprise, sign in with `gh auth login --hostname YOUR_HOST`. T3 Code treats a
 custom server name as GitHub once it has a credential for that host.
@@ -138,7 +143,8 @@ toast or from the banner above the composer.
 
 For a local Git repository without a remote, **Publish Repository** creates a hosted repository,
 adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
-make your first commit before pushing.
+make your first commit before pushing. On GitHub, a name with no owner goes to the account the
+project folder uses.
 
 ## Create a pull request
 

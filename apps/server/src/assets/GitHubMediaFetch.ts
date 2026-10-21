@@ -50,11 +50,12 @@ const SVG_CONTENT_TYPE = "image/svg+xml";
 // body cannot run script against this origin.
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
-const githubToken = GitHubCredentials.GitHubCredentials.pipe(
-  Effect.flatMap((credentials) => credentials.get("github.com")),
-  Effect.map((credential) => credential.token),
-  Effect.orElseSucceed(() => null),
-);
+const githubToken = (cwd: string) =>
+  GitHubCredentials.GitHubCredentials.pipe(
+    Effect.flatMap((credentials) => credentials.get("github.com", cwd)),
+    Effect.map((credential) => credential.token),
+    Effect.orElseSucceed(() => null),
+  );
 
 const fetchFollowingRedirects = Effect.fn("GitHubMediaFetch.fetchFollowingRedirects")(function* (
   url: string,
@@ -92,7 +93,7 @@ export const githubMediaResponse = Effect.fn("GitHubMediaFetch.githubMediaRespon
   requestHeaders: Record<string, string | undefined>,
 ) {
   // Both media hosts are served by github.com's account, which is the host `gh` stores it under.
-  const token = yield* githubToken;
+  const token = yield* githubToken(asset.cwd);
   const forwarded: Record<string, string> = {};
   for (const name of FORWARDED_REQUEST_HEADERS) {
     const value = requestHeaders[name];
