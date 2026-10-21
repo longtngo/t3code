@@ -471,7 +471,10 @@ describe("environment RPC", () => {
         Effect.forkChild,
       );
 
-      for (let tick = 0; tick < 60; tick += 1) {
+      // 30 s tells a reset backoff (~81 attempts) from one that never resets (7); one counter
+      // drives both the delay and the give-up limit, so the reset re-arms both. Longer runs
+      // made this CPU-bound loop overrun the test timeout on a busy host.
+      for (let tick = 0; tick < 3; tick += 1) {
         yield* TestClock.adjust("10 seconds");
         for (let pump = 0; pump < 40; pump += 1) {
           yield* Effect.yieldNow;
@@ -480,7 +483,7 @@ describe("environment RPC", () => {
       yield* Fiber.interrupt(subscriptionFiber);
 
       // Every other attempt emits, so the budget never runs out and the
-      // subscription keeps recovering well past the 13 a dead one gets.
+      // subscription keeps recovering well past the cap a dead one gets.
       expect(yield* Ref.get(subscriptionCount)).toBeGreaterThan(13);
     }),
   );
