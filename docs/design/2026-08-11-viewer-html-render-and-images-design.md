@@ -137,7 +137,7 @@ found defects that changed the approach; the sections above are the **revised** 
   `same-origin`/`none`, closing the same fail-open for the existing text kinds. (Superseded
   2026-09-06: the waiver was removed outright.)
 - SVG reuses the existing, stricter `SVG_CONTENT_SECURITY_POLICY` (`default-src 'none'; …;
-sandbox`) via `assetResponseHeaders`, not the weaker `sandbox allow-popups` I proposed — which
+  sandbox`) via `assetResponseHeaders`, not the weaker `sandbox allow-popups` I proposed — which
   would have permitted subresource beacons out of a crafted SVG.
 - `HttpServerResponse.file` **silently ignores its `contentType` option** (the platform derives
   the type from the path), so `Content-Type` is set explicitly in `headers` from a map mirroring

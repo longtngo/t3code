@@ -8,7 +8,7 @@ before server, server before client). Commit per task.
 - Add optional `providerMessageId: Schema.optional(TrimmedNonEmptyString)` to `OrchestrationMessage`.
 - Add optional `pendingForkResume: Schema.optional(Schema.Unknown)` to `OrchestrationThread`.
 - Add `ThreadForkCommand` (type `"thread.fork"`): `commandId, createdAt, sourceThreadId, newThreadId,
-forkBeforeMessageId, title`.
+  forkBeforeMessageId, title`.
 - Add `ThreadForkedEvent` (type `"thread.forked"`) payload: cloned config + `messages[]` +
   `forkResume` (unknown) + `forkContextApproximate: boolean`.
 - Add an internal `ThreadForkResumeConsumedEvent` (`"thread.fork-resume-consumed"`) to clear
@@ -25,7 +25,7 @@ forkBeforeMessageId, title`.
   rule revert uses (system messages always kept). Reject if the last in-slice message is `streaming`.
 - Build `forkResume` from the parent's `session.resumeCursor` + the precise anchor: the
   `providerMessageId` of the last assistant message in the slice (when present) → `{ ...cursor,
-fork: true, resumeSessionAt: anchor }`; set `forkContextApproximate = true` when no anchor /
+  fork: true, resumeSessionAt: anchor }`; set `forkContextApproximate = true` when no anchor /
   no parent cursor.
 - Emit `thread.forked` with cloned config (projectId, title, modelSelection, runtimeMode,
   interactionMode, branch, worktreePath), the slice, the directive, and the flag.

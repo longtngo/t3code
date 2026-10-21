@@ -52,20 +52,20 @@ over RPC. The SW gains `push` + `notificationclick` handlers.
 3. **Persistence — migration 034 `push_subscriptions`.** Follows the
    `PendingBackgroundTask` triplet (Migration + Service + Layer). Columns:
    `endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
-environment_id TEXT, created_at TEXT NOT NULL, last_success_at TEXT`. Repository:
+   environment_id TEXT, created_at TEXT NOT NULL, last_success_at TEXT`. Repository:
    `upsert(subscription)`, `list()`, `deleteByEndpoint(endpoint)`.
 
 4. **Contracts — RPC (mirror `WsGetResourceQueueRpc`).**
    - `push.getVapidPublicKey` → `{ publicKey: string }` (no-arg read).
    - `pushSubscriptions.register` → payload `{ endpoint, keys:{p256dh,auth},
-expirationTime? }`, success ack.
+     expirationTime? }`, success ack.
    - `pushSubscriptions.unregister` → payload `{ endpoint }`, success ack.
      Added to `WS_METHODS`, `Rpc.make` defs, the `RpcGroup.make` group, `EnvironmentApi`,
      and `createEnvironmentApi`.
 
 5. **`WebPushSender` service.** `setVapidDetails` once; `send(subscription, payload)`
    wraps `webpush.sendNotification(sub, JSON.stringify(payload), {TTL, urgency:'high',
-topic})`. On `statusCode` 404/410 → delete the subscription (it's gone). On 429 →
+   topic})`. On `statusCode` 404/410 → delete the subscription (it's gone). On 429 →
    log + skip (best-effort; no retry storm). Uses the VAPID secret.
 
 6. **`WebPushRelay` reactor.** Structural clone of `AgentAwarenessRelay`:
@@ -84,7 +84,7 @@ topic})`. On `statusCode` 404/410 → delete the subscription (it's gone). On 42
 7. **Service-worker handlers (`public/push-sw.js`, via `workbox.importScripts`).**
    Kept from the spike (generateSW mode preserved, load-bearing `/assets` CacheFirst
    rule untouched). `push` → `showNotification(title, {body, tag: threadId,
-data:{url}})`. `notificationclick` → focus an existing tab already on that thread,
+   data:{url}})`. `notificationclick` → focus an existing tab already on that thread,
    else focus any tab and `navigate`, else `openWindow(url)` — **fixed** to use the
    real thread URL and exact-origin matching (the spike's bug).
 
@@ -260,7 +260,7 @@ above where they differ. Exit: findings converged, no conflicts left unresolved.
 - **[MED] Hung FCM send wedges the single-fiber reactor + unbounded queue growth.**
   `web-push` has no default socket timeout. Fan out with
   `Effect.forEach(subs, (s) => send(s).pipe(Effect.timeout("10 seconds"),
-Effect.catchCause(log)), { concurrency: 8, discard: true })`, and pass web-push's own
+  Effect.catchCause(log)), { concurrency: 8, discard: true })`, and pass web-push's own
   `timeout` option too. Per-send isolation so one 4xx/5xx/410 never aborts the batch.
 - **[LOW] VAPID/getOrCreate.** Client base64url-decodes the public key to a
   `Uint8Array` for `applicationServerKey` (the spike already does this). Server
@@ -282,7 +282,7 @@ Effect.catchCause(log)), { concurrency: 8, discard: true })`, and pass web-push'
   tests). VAPID getOrCreate is a single exported fn (`getOrCreateVapidKeys(secrets)`),
   co-located, not a Service.
 - **Persistence columns → 4:** `endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL,
-auth TEXT NOT NULL, created_at TEXT NOT NULL`. Drop `environment_id` (no v1 filter
+  auth TEXT NOT NULL, created_at TEXT NOT NULL`. Drop `environment_id` (no v1 filter
   reads it) and `last_success_at` (no reader). Keep the Migration+Service+Layer triplet
   (hard repo convention).
 - **RPC surface → 1 method.** The non-secret VAPID **public** key rides on

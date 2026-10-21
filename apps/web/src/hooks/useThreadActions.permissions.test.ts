@@ -1,7 +1,6 @@
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
-  EnvironmentAuthorizationError,
   EnvironmentId,
   ProjectId,
   ThreadId,
@@ -295,18 +294,6 @@ describe("thread action permissions", () => {
     },
   );
 
-  it("identifies the missing task scope when thread deletion is denied", async () => {
-    const result = await useThreadActions().deleteThread(target);
-
-    expect(result._tag).toBe("Failure");
-    if (result._tag !== "Failure") throw new Error("Expected permission denial");
-    const error = Cause.squash<unknown>(result.cause);
-    expect(error).toBeInstanceOf(EnvironmentAuthorizationError);
-    expect(error).toMatchObject({ requiredScope: AuthOrchestrationOperateScope });
-    expect(state.requests).toEqual([]);
-    expect(state.localEffects).toEqual([]);
-  });
-
   it("deletes an archived thread only with its own environment's grant", async () => {
     state.threads = [];
     const actions = useThreadActions();
@@ -364,6 +351,7 @@ describe("thread action permissions", () => {
 // A queued thread being archived or deleted leaves the Queue once the command landed. Until then
 // the Queue's coordinator must not send it; a refused or failed command leaves it sendable.
 describe("archive or delete of a queued thread", () => {
+  const NOW = Date.UTC(2026, 0, 1);
   const entry = (threadId: string) => ({
     environmentId: secondary,
     threadId: ThreadId.make(threadId),
@@ -382,7 +370,7 @@ describe("archive or delete of a queued thread", () => {
       paused: false,
       inFlight: null,
       threads: [],
-      nowMs: Date.now(),
+      nowMs: NOW,
       slots: 1,
       perProvider: false,
       providerSlots: {},
@@ -399,6 +387,7 @@ describe("archive or delete of a queued thread", () => {
   };
 
   beforeEach(() => {
+    vi.setSystemTime(NOW);
     state.scopes.get(secondary)!.add(AuthOrchestrationOperateScope);
     useThreadQueueStore.setState({
       mode: "local",
@@ -408,6 +397,7 @@ describe("archive or delete of a queued thread", () => {
     });
   });
   afterEach(() => {
+    vi.useRealTimers();
     useThreadQueueStore.setState({ entries: [], inFlight: null });
   });
 

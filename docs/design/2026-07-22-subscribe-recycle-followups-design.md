@@ -28,7 +28,7 @@ Each code item ships on its own branch; the upstream bug report is external.
   leak on the streams where the recycle is the _only_ bound (host-metrics,
   llm-models, vcs-status, terminal, shell). **VERIFIED** against the installed
   patched effect source: `runForEachArray = dual(2, (self, f) =>
-Channel.runForEach(self.channel, f))` — it delegates to the trampolined channel
+  Channel.runForEach(self.channel, f))` — it delegates to the trampolined channel
   executor, no per-element continuation push. Corroborated empirically: the
   `batchWithinStackSafe` path (also `Channel`-executor / `fromPull`) held a
   **24 h 15 m flat heap** (median 254 MB) under real streaming load, and the busy

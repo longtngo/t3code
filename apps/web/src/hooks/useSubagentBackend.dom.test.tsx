@@ -50,11 +50,12 @@ vi.mock("../state/use-atom-command", () => ({
   },
 }));
 
-import { act, useLayoutEffect } from "react";
+import { useLayoutEffect } from "react";
+// oxlint-disable-next-line t3code/require-disposable-render -- this race needs React's real scheduler, which renderDom's act would flush synchronously
 import { createRoot } from "react-dom/client";
 import type { SubagentBackendState } from "@t3tools/contracts";
 import { useSubagentBackend } from "./useSubagentBackend";
-import { renderDom } from "../testing/renderDom";
+import { act, renderDom } from "../testing/renderDom";
 
 const granted = EnvironmentId.make("env-granted");
 const missing = EnvironmentId.make("env-missing-scope");
@@ -75,7 +76,6 @@ function renderProbe(environmentId: EnvironmentId) {
 }
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   fixture.queries = new Map();
   fixture.granted = new Map([
     [granted, Atom.make(true)],
@@ -343,7 +343,6 @@ describe("useSubagentBackend set answer racing an environment switch", () => {
   }
 
   it("drops an old environment's answer that lands before the switch's reset runs", async () => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
     const stored: SubagentBackendState = {
       backend: "cursor",
       instanceId: null,

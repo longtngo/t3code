@@ -57,9 +57,8 @@ it.layer(NodeServices.layer)("writeBackendFile", (it) => {
   );
 });
 
-// `it.layer`'s scoped `it` only exposes `.effect` (the virtual TestClock), not
-// `.live`. This test needs real wall-clock delays to observe overlap, so it runs
-// as a top-level `it.live` with the platform layer provided explicitly instead.
+// Top-level `it.live` with the platform layer provided explicitly: the writes go
+// through the real filesystem, whose async I/O is where unguarded writers overlap.
 it.live(
   "orders concurrent writes through backendWriteSemaphore rather than letting them overlap",
   () =>
@@ -81,7 +80,8 @@ it.live(
             inFlight++;
             maxInFlight = Math.max(maxInFlight, inFlight);
             events.push(`start:${file}`);
-            yield* Effect.sleep(10);
+            // Hand the scheduler to the other writers: without the semaphore they start here.
+            yield* Effect.yieldNow;
             const result = yield* fs.writeFileString(file, data);
             inFlight--;
             events.push(`end:${file}`);

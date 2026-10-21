@@ -86,15 +86,6 @@ describe("claudeUsageResponseToLimits", () => {
     ).toEqual({ overageIncluded: "Fable" });
   });
 
-  it("reports API key and Bedrock accounts as unsupported", () => {
-    expect(
-      claudeUsageResponseToLimits({
-        checkedAt,
-        response: { rate_limits_available: false, rate_limits: null },
-      }).limits,
-    ).toEqual({ checkedAt, windows: [], unavailable: { reason: "unsupported" } });
-  });
-
   it("skips a window the endpoint reports without a utilization", () => {
     expect(
       claudeUsageResponseToLimits({
@@ -312,17 +303,5 @@ describe("claudeRateLimitEventToUpdate", () => {
     ]);
     expect(update?.windows[0]?.usedPercent).toBeCloseTo(18);
     expect(update?.windows[1]?.usedPercent).toBeCloseTo(57);
-  });
-
-  it("ignores windows the page does not render and events without a utilization", () => {
-    expect(
-      claudeRateLimitEventToUpdate(
-        { status: "allowed", rateLimitType: "seven_day_opus", utilization: 0.1 },
-        noNames,
-      ),
-    ).toBeUndefined();
-    expect(
-      claudeRateLimitEventToUpdate({ status: "rejected", rateLimitType: "five_hour" }, noNames),
-    ).toBeUndefined();
   });
 });

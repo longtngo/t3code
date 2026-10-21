@@ -75,7 +75,7 @@ End-to-end boolean plumbing, mirroring the existing `hasPendingApprovals`:
      AS "hasPendingBackgroundTask"
    ```
    SQLite `EXISTS` yields `0`/`1`, so add `hasPendingBackgroundTask:
-NonNegativeInt` to `ProjectionThreadDbRowSchema` (matching
+   NonNegativeInt` to `ProjectionThreadDbRowSchema` (matching
    `hasActionableProposedPlan`) and map with `row.hasPendingBackgroundTask > 0`
    in **every** `OrchestrationThreadShell` builder in the file (there are three:
    `getShellSnapshot`, `getThreadShellById`, and the third builder ~line 1893 —

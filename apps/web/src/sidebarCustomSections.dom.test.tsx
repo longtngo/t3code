@@ -1,6 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import { type Atom, AtomRegistry } from "effect/reactivity";
-import { act, useEffect } from "react";
+import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Seams: the rename dialog, the primary environment, its server config atom, the session scope and
@@ -62,7 +62,7 @@ vi.mock("./state/use-atom-command", () => ({
 import { useSidebarSectionCommands } from "./sidebarCustomSections";
 import type { SidebarSectionView } from "./sidebarCustomSections.logic";
 import { primaryServerConfigAtom } from "./state/server";
-import { renderDom } from "./testing/renderDom";
+import { act, renderDom } from "./testing/renderDom";
 
 const configAtom = primaryServerConfigAtom as unknown as Atom.Writable<unknown>;
 const createdAt = "2026-10-07T00:00:00.000Z";

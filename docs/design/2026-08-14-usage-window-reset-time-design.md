@@ -14,7 +14,7 @@ The user recalls this from a previous version and is right, but it was not lost 
 facts from history:
 
 - Upstream once had `apps/web/src/components/usage/AccountLimits.tsx` + `apps/web/src/usage/
-limitsFormat.ts`, whose rows read `… 42% used   resets 8/15 13:34`. Commit `a3823306b`
+  limitsFormat.ts`, whose rows read `… 42% used   resets 8/15 13:34`. Commit `a3823306b`
   ("fix(web): limits reset text no longer wraps") is the last tuning of that text.
 - The fork's own `3345155ef` ("feat(web): combined Vitals gauge") replaced that hover card with
   the current gauge and states the tradeoff outright: _"5h/7d windows colored by PACE (projection

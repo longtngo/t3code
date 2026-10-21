@@ -36,7 +36,7 @@ Both clients then outrank it with a local pick:
 
 - **Web.** `resolveComposerProviderSelection` (`apps/web/src/components/ChatView.logic.ts:403`)
   takes the first candidate of `[draft.activeProvider, session.providerInstanceId,
-thread.modelSelection.instanceId, project default]`, and
+  thread.modelSelection.instanceId, project default]`, and
   `deriveEffectiveComposerModelState` (`apps/web/src/composerDraftStore.ts:1156`) reads the model
   from `draft.modelSelectionByProvider[instance]` before the thread's. A picker click writes
   both with `modelSelectionExplicit: true` (`ChatView.tsx:8559`); the traits picker writes the

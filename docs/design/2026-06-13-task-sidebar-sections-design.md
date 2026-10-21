@@ -37,8 +37,8 @@ Scope: the **active thread only** (matches how the task sidebar already works).
   (`components/ui/collapsible.tsx`, base-ui) is the disclosure primitive, with a
   chevron-rotate pattern already used in `ChatMarkdown`.
 - **Terminal sessions** (background): `useKnownTerminalSessions({environmentId,
-threadId})` → `KnownTerminalSession[]` (`{ target:{...,terminalId},
-state }`). `TerminalSessionState` carries `summary` (`label`, `cwd`, `status`,
+  threadId})` → `KnownTerminalSession[]` (`{ target:{...,terminalId},
+  state }`). `TerminalSessionState` carries `summary` (`label`, `cwd`, `status`,
   `exitCode`, `pid`), `status` (`running|idle|exited|closed|…`), and `buffer`
   (the terminal output = the log). `TerminalViewport` (exported from
   `ThreadTerminalDrawer.tsx`) renders the live xterm; the existing terminal
@@ -71,12 +71,12 @@ New module `apps/web/src/sidebarSections.ts`. The activity payload is
   otherwise delegates.)
 - `deriveAgentItems(activities): AgentSidebarItem[]` — fold `task.*` by `taskId`:
   `{ taskId, label (started.detail/description), status, startedAt,
-completedAt?, outputFile?, finalSummary?, log: { at, text, lastToolName? }[] }`.
+  completedAt?, outputFile?, finalSummary?, log: { at, text, lastToolName? }[] }`.
   `task.started` ⇒ running; `task.completed` ⇒ completed, or `failed` when
   `payload.status ∈ {failed, stopped}`. **Final summary = the completed
   activity's `payload.detail`** (the server maps `message.summary` → `detail`
   on completion); each progress log entry's text = `payload.summary ??
-payload.detail`. `completedAt` = the completed activity's `createdAt`.
+  payload.detail`. `completedAt` = the completed activity's `createdAt`.
   Agents are **Claude-only** today (only `ClaudeAdapter` emits `task.*`).
 - `deriveBackgroundItems(terminals): BackgroundSidebarItem[]` from
   `useKnownTerminalSessions`. Terminal status enum is

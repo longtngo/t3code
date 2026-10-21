@@ -127,12 +127,14 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 73 entries, ids 1-73, unique and monotonic. Upstream's v2 schema
+Current: 76 entries, ids 1-76, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
 `061_PullRequestReviewGuides` is **70**, `062_ThreadFailureLookupIndex` is **71**,
-`063_DropUnusedV1Projections` is **72** and `064_CanonicalizeThreadPullRequestLinks` is **73**.
+`063_DropUnusedV1Projections` is **72**, `064_CanonicalizeThreadPullRequestLinks` is **73**,
+`065_CodexUsageNativeTurnIndex` is **74**, `066_RepairClientSettlementTimestamps` is **75** and
+`067_WebhookDedupe` is **76**.
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
 upstream's `reconcileV2PreviewMigration` stays out.
@@ -151,7 +153,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `73 73 ok` and `1`.
+Expect `76 76 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -174,13 +176,15 @@ Upstream's Expo 58 upgrade (#12045) deleted its own `expo-modules-core@57.0.14` 
 `apps/mobile/scripts/permissions-service.test.ts` and `notification-center-manager.test.ts`. Upstream
 CI does not run them on macOS, so they went red only here. Measured at the 43rd reconcile:
 
-Since the 50th reconcile the entries are keyed `expo-modules-core@58.0.22` and
-`expo-notifications@58.1.5` and still point at the `@58.0.11.patch` files: the patched sources are
-byte-identical across those versions and both patches apply cleanly (checked with `git apply --check`).
-Both regression tests pass on the new versions (5 tests, 2026-10-19).
+The entries are keyed `expo-modules-core@58.0.22` and `expo-notifications@58.1.5`. Since the 51st
+reconcile upstream patches `expo-modules-core@58.0.22` itself (an Android `ExpoView.kt` fix, #22343),
+and pnpm takes one patch per version, so the fork's iOS hunk is the second half of
+`patches/expo-modules-core@58.0.22.patch`. A bump that replaces that file with upstream's drops the
+fork half with nothing failing except `permissions-service.test.ts`. The notifications entry still
+points at `patches/expo-notifications@58.0.11.patch`.
 
-- `expo-modules-core@58.0.11` still has the unsynchronized permissions registry (ThreadSanitizer
-  race). The old patch applies unchanged as `patches/expo-modules-core@58.0.11.patch`.
+- `expo-modules-core@58.0.22` still has the unsynchronized permissions registry (ThreadSanitizer
+  race) in `EXPermissionsService.m`.
 - `expo-notifications@58.0.11` added its own `Mutex` registry but still clears every pending
   response after a replay and records a response as pending only after no delegate handled it.
   Two of the four regression scenarios (`handoff`, `pending`) fail on it.
@@ -200,7 +204,7 @@ part of `pnpm verify`, so run it by hand on any effect bump.
 Upstream renamed the old `Sidebar.tsx` to `LegacySidebar.tsx` and promoted the v2 content into
 `Sidebar.tsx`, **swapping which one is the default**. Today `Sidebar.tsx` renders by default and
 `LegacySidebar.tsx` is opt-in behind the `legacySidebarEnabled` client setting
-(`useSettings.ts:380`). Before that merge it was the other way round.
+(`useSettings.ts`, `legacySidebarEnabled`). Before that merge it was the other way round.
 
 Git is rename-blind during a merge, so fork edits to both files were presented **inverted** —
 v1 edits pointed at v2 content, v2 edits stranded in a deleted file. Resolving the conflicts as
@@ -283,8 +287,9 @@ ordinary upstream additions by the 17th reconcile:
 only the first and folds the second into it. They are not the same: unavailable means the send is
 **queued** by the web offline outbox (`rpc/commandOutbox.ts`, replayed by
 `OutboxFlushCoordinator`) and Send stays live ("Queue message to send on reconnect"), while
-blocked (no provider, no project) is a hard stop. All three `ComposerPrimaryActions` sites in
-`ChatComposer.tsx` pass `isEnvironmentUnavailable={environmentUnavailable !== null}` plus
+blocked (no provider, no project) is a hard stop. Both `ComposerPrimaryActions` sites in
+`ChatComposer.tsx`, and the footer wrapper upstream moved to `ComposerFooterControls.tsx` at the
+51st reconcile, pass `isEnvironmentUnavailable={environmentUnavailable !== null}` plus
 `isSendBlocked`, and the collapsed phone button (`collapsedComposerPrimaryActionDisabled`) leaves
 the disconnect out too: on a phone it is the only submit path. In `ChatView.onSend` the early
 guard is `shouldAbortSendBeforeOfflineQueue`, which must never abort on a disconnect alone; the
@@ -387,7 +392,7 @@ unchanged.
   effect only while the provider turn is `running`; a Stop on a settled turn's background work
   is always hard.
 - `ProviderTurnControlService.interrupt` runs the cooperative rung as `interruptTurn({
-cooperative: true })` and then waits for the projected turn to leave `running`, both bounded by
+  cooperative: true })` and then waits for the projected turn to leave `running`, both bounded by
   `COOPERATIVE_INTERRUPT_GRACE` (8 s, measured: 491 of 572 Claude cooperative interrupts on the
   fork's V1 log settled within 5 s, 493 within 8 s, 4 more by 15 s). A rejected or late rung
   falls through to the hard call itself, so a provider that cannot cooperate is handled
@@ -625,7 +630,10 @@ The native right-click menu shows exactly `sharedFileMenuItems`; the in-DOM menu
 web-route items ("View in side panel", "Open in new tab") and then maps the same array. That
 sharing is the enforcement: a shared item cannot drift between the two menus, because there is only
 ever one of it. The reveal item's `onReveal && revealLabel` condition sits once, inside the array.
-Probe: `grep -c 'sharedFileMenuItems.map' apps/web/src/components/ChatMarkdown.tsx` is `2`; a
+The chip lives in `chat/MarkdownFileLink.tsx` since the 51st reconcile; its handlers stay stable
+(they take the link as an argument and resolve the host path when called), so a streaming message
+does not re-render its chips. Probe:
+`grep -c 'sharedFileMenuItems.map' apps/web/src/components/chat/MarkdownFileLink.tsx` is `2`; a
 hand-written menu drops it to 1.
 
 Do not extract that condition into a shared `boolean` predicate. `ContextMenuItem.label` is a
@@ -999,9 +1007,13 @@ here. They typecheck either way and only fail at run time, so check arriving tes
 open: `--passWithNoTests` means a run that matches nothing still exits 0. A gate that "passed"
 having never executed the dom project has happened twice; the only reliable signal is the **test
 count**, not the exit code.
+Upstream's `require-disposable-render` lint wants `act` and disposable mounts from
+`test/render.tsx`, which only runs in browser mode, so dom tests import `act` from
+`src/testing/renderDom` instead (same contract: the act flag is on only while act runs).
 
 The fork also renamed several upstream test files to `.dom.test.tsx` (`ChatMarkdown`,
-`ProviderStatusBanner`, `ComposerPrimaryActions`, `sidebarChromeFooter`). Git is rename-blind
+`ComposerPrimaryActions`, `sidebarChromeFooter`; `ProviderStatusBanner`'s went with upstream's
+test prune at the 51st reconcile). Git is rename-blind
 mid-merge, so upstream's edits to the old name arrive as a **new file** rather than a conflict.
 After a merge, check that no `<name>.test.tsx` sits beside the fork's `<name>.dom.test.tsx`, and
 port any tests upstream added to its copy. (`MessagesTimeline` went back to upstream's
@@ -1022,9 +1034,10 @@ After a merge that adds a hook call anywhere in a widely-rendered component, gre
 
 ### 37. `FORCE_KILL_AFTER` on the git spawn is fork-only, and every git timeout depends on it
 
-`apps/server/src/vcs/GitVcsDriverCore.ts` passes `forceKillAfter: FORCE_KILL_AFTER` (5s) as a
-spawn option on every git child. Upstream does not: zero occurrences of `forceKillAfter` in
-`origin/main`'s driver. It is consumed by the Node spawner's release finalizer — SIGTERM, await
+`apps/server/src/vcs/GitVcsDriverCore.ts` passes `forceKillAfter: input.forceKillAfterMs ?? FORCE_KILL_AFTER` (5s)
+as a spawn option on every git child. Upstream has only the per-call `forceKillAfterMs` (undefined
+by default), so its git children get no grace unless a caller asks; a resolution that takes
+upstream's `forceKillAfter: input.forceKillAfterMs` drops the fork's default. It is consumed by the Node spawner's release finalizer — SIGTERM, await
 exit, SIGKILL after the grace — which runs on _any_ scope close, so the driver's own command
 timeouts and any external interruption (the startup auto-pull bound, `serverRuntimeStartup.ts`)
 all go through it. Without it the finalizer waits on a git that ignores SIGTERM forever: measured
@@ -1279,9 +1292,10 @@ keybindings and theme watchers can miss an edit indefinitely. `watchRescanBackst
 each source every 30 s. It is forked in `serverRuntimeStartup.ts` beside the hub gauge, never inside
 a layer, for the TestClock reason under invariant 18. A reconcile must keep its three steps wired:
 `serverSettings.rescan`, `keybindings.rescan` and `environmentTheme.current`. No test asserts the
-wiring: the integration test that checked the startup line went with V1. Probe:
-`grep -cE '^ +(serverSettings|keybindings)\.rescan,|^ +environmentTheme\.current,' apps/server/src/serverRuntimeStartup.ts`
-is `3`.
+wiring: the integration test that checked the startup line went with V1. The formatter keeps the
+three steps on one line, so the probe strips whitespace first:
+`tr -d '\n ' < apps/server/src/serverRuntimeStartup.ts | grep -oE 'runWatchRescanBackstop\(\[serverSettings\.rescan,keybindings\.rescan,environmentTheme\.current,?\]' | wc -l`
+is `1`.
 
 ### 63. The subagent dispatch instruction is fixed per conversation
 
@@ -1306,8 +1320,7 @@ sees). Keep both when upstream rewrites `arrange`. Probes:
 ### 45. RETIRED with orchestrator v2: the manual-Effect-runner debt ceilings
 
 Upstream deleted its per-file `maxOccurrences` ledger with the V1 tests it listed. The fork's
-`vite.config.ts` still carries the block, but all 14 paths are dead (13 files no longer exist and
-`CursorProvider.test.ts` has no manual runner), so it guards nothing. What still applies: lint runs
+copy of the block is gone from `vite.config.ts` too (0 `maxOccurrences`). What still applies: lint runs
 before tests in `pnpm verify`, and one lint error cancels the whole test step, so run
 `pnpm run lint` right after the last merge edit.
 
@@ -1382,15 +1395,16 @@ that is upstream's and outside this rule for now.
 The `active/total` header counts are fork code over upstream's sidebar. `isSidebarThreadWoke`
 (`Sidebar.logic.ts`) is the one wake rule for both the row and the counts: port any upstream edit
 to the row's former inline `const isWoke` / `wokeAtDate` block into it. The counts use
-`resolveSidebarV2TopStatus`, so the row's upstream `topStatus` chain in `Sidebar.tsx` must keep the
+`resolveSidebarV2TopStatus`, so the row's upstream `topStatus` chain must keep the
 same statuses in the same order. The Working, Snoozed and Settled headers pass
 `count={sectionCounts.*}`; upstream builds those labels as `` `Name (${n})` ``, so a resolution
-taking upstream's side drops the count. Probe in `apps/web/src/components/Sidebar.tsx`, expect
-`>= 1`, `0` and `3`:
+taking upstream's side drops the count. Since the 51st reconcile the row lives in
+`apps/web/src/components/sidebar/SidebarThreadRow.tsx` and the headers stay in `Sidebar.tsx`.
+Expect `>= 1`, `0` and `3`:
 
 ```sh
-grep -c 'isSidebarThreadWoke({' apps/web/src/components/Sidebar.tsx
-grep -c 'const wokeAtDate' apps/web/src/components/Sidebar.tsx
+grep -c 'isSidebarThreadWoke({' apps/web/src/components/sidebar/SidebarThreadRow.tsx
+grep -c 'const wokeAtDate' apps/web/src/components/sidebar/SidebarThreadRow.tsx
 grep -c 'count={sectionCounts\.\(working\|snoozed\|settled\)}' apps/web/src/components/Sidebar.tsx
 ```
 
@@ -1414,6 +1428,24 @@ arbitrary path, so the guard also accepts any path inside a project's member. Te
 `KnownWorkspaces.test.ts`, seen red with the member loop removed. Probe:
 `grep -c 'resolveRoot(member.path)' apps/server/src/workspace/KnownWorkspaces.ts` is `1`.
 Upstream's review folder check from the same commit stays rejected (`ReviewService.ts`).
+
+### 70. Three upstream features from the 51st reconcile stay rejected
+
+Each competes with a fork feature that already covers it, and each lands mostly outside the
+markers, so a later merge can bring it back with nothing failing.
+
+- Draft model reconciliation (#20886, `subscribeComposerDraftModelReconciliation`, mounted in web
+  `AppRoot.tsx` and mobile `App.tsx`, helper `draftModelPickMatchesThread`). It clears a draft pick
+  once the thread matches it; the fork's `adoptThreadModelSelection` overwrites the pick instead,
+  because a cleared pick falls back to the session's previous instance for the whole switch.
+  Probe: `grep -rc subscribeComposerDraftModelReconciliation apps/web/src apps/mobile/src | grep -v ':0'`
+  prints nothing.
+- Claude's `monthly_spend` limit window (#19433). The fork's `spend` field carries the same percent
+  plus the money amounts, and Vitals already draws it; both would show spend twice. Probe:
+  `grep -c monthly_spend apps/server/src/provider/claudeUsageLimits.ts` is `0`.
+- Inline table expand (`data-expanded` CSS, #20878). The fork's tables open in a dialog
+  (`chat/MarkdownTable.tsx`) and never set the attribute. Probe:
+  `grep -c 'data-expanded' apps/web/src/index.css` is `0`.
 
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 

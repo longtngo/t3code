@@ -461,8 +461,8 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
 
   // Prunes the subscription on 404/410 (gone); logs and swallows everything else so
   // one bad or hung endpoint never aborts the fan-out to the others.
-  const sendToSubscription = (subscription: PushSubscriptionRecord, payload: string) =>
-    Effect.gen(function* () {
+  const sendToSubscription = Effect.fn("WebPushRelay.sendToSubscription")(
+    function* (subscription: PushSubscriptionRecord, payload: string) {
       const details = webpush.generateRequestDetails(
         {
           endpoint: subscription.endpoint,
@@ -506,14 +506,17 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
           statusCode: response.status,
         });
       }
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("web push send errored", {
-          endpoint: endpointOrigin(subscription.endpoint),
-          cause: Cause.pretty(cause),
-        }),
+    },
+    (effect, subscription) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("web push send errored", {
+            endpoint: endpointOrigin(subscription.endpoint),
+            cause: Cause.pretty(cause),
+          }),
+        ),
       ),
-    );
+  );
 
   // Fail OPEN: an unreadable settings file must not silence notifications.
   const readNotificationCategories = serverSettings.getRawSettings.pipe(
@@ -556,50 +559,49 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
    */
   const heldFinishes = new Map<ThreadId, Set<{ askedSince: boolean }>>();
 
-  const send = (
+  const send = Effect.fn("WebPushRelay.send")(function* (
     { threadId, key, runId, edge }: PushEdge,
     shell: OrchestrationV2ThreadShell,
     backgroundLiveness: "working" | "monitoring" | null,
-  ) =>
-    Effect.gen(function* () {
-      const categories = yield* readNotificationCategories;
-      const allowed = filterEdgesByCategory([edge], categories, backgroundLiveness);
-      if (allowed.length === 0) {
-        yield* Effect.logDebug("web push edge suppressed by notification categories", {
-          threadId,
-          edge: edge.kind,
-          backgroundLiveness,
-        });
-        return;
-      }
-      const subscriptions = yield* pushRepo.list();
-      if (subscriptions.length === 0) {
-        return;
-      }
-      const environmentId = yield* serverEnvironment.getEnvironmentId;
-      const payload = buildPushPayload({
-        edge,
-        title: shell.title,
-        url: `/${environmentId}/${threadId}`,
+  ) {
+    const categories = yield* readNotificationCategories;
+    const allowed = filterEdgesByCategory([edge], categories, backgroundLiveness);
+    if (allowed.length === 0) {
+      yield* Effect.logDebug("web push edge suppressed by notification categories", {
         threadId,
-      });
-      yield* Effect.forEach(
-        subscriptions,
-        (subscription) => sendToSubscription(subscription, payload),
-        { concurrency: 8, discard: true },
-      );
-      if (edge.kind === "asking") {
-        for (const hold of heldFinishes.get(threadId) ?? []) hold.askedSince = true;
-      }
-      // Counts pushes per category in the logs; nothing else records a send.
-      yield* Effect.logInfo("web push dispatched", {
-        threadId,
-        key,
-        runId,
-        category: categoryForEdge(edge, backgroundLiveness),
+        edge: edge.kind,
         backgroundLiveness,
       });
+      return;
+    }
+    const subscriptions = yield* pushRepo.list();
+    if (subscriptions.length === 0) {
+      return;
+    }
+    const environmentId = yield* serverEnvironment.getEnvironmentId;
+    const payload = buildPushPayload({
+      edge,
+      title: shell.title,
+      url: `/${environmentId}/${threadId}`,
+      threadId,
     });
+    yield* Effect.forEach(
+      subscriptions,
+      (subscription) => sendToSubscription(subscription, payload),
+      { concurrency: 8, discard: true },
+    );
+    if (edge.kind === "asking") {
+      for (const hold of heldFinishes.get(threadId) ?? []) hold.askedSince = true;
+    }
+    // Counts pushes per category in the logs; nothing else records a send.
+    yield* Effect.logInfo("web push dispatched", {
+      threadId,
+      key,
+      runId,
+      category: categoryForEdge(edge, backgroundLiveness),
+      backgroundLiveness,
+    });
+  });
 
   // Reads failed before anything was sent: forget the key so a later rewrite of the
   // same run or request can still push. Individual sends never fail here.
@@ -641,15 +643,15 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
    * on either path sends as first read too, unless a question on this thread was
    * pushed while the finish was held.
    */
-  const sendAfterGrace = (
-    pushEdge: PushEdge,
-    runId: RunId,
-    shell: OrchestrationV2ThreadShell,
-    backgroundLiveness: "working" | "monitoring" | null,
-    deadline: number,
-    hold: { readonly askedSince: boolean },
-  ) =>
-    Effect.gen(function* () {
+  const sendAfterGrace = Effect.fn("WebPushRelay.sendAfterGrace")(
+    function* (
+      pushEdge: PushEdge,
+      runId: RunId,
+      shell: OrchestrationV2ThreadShell,
+      backgroundLiveness: "working" | "monitoring" | null,
+      deadline: number,
+      hold: { readonly askedSince: boolean },
+    ) {
       const now = yield* Clock.currentTimeMillis;
       const cutShort = yield* Deferred.await(stopSignal).pipe(
         Effect.as(true),
@@ -687,7 +689,9 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
         return;
       }
       yield* send(pushEdge, reread.value, rereadLiveness);
-    }).pipe(forgetOnFailure(pushEdge));
+    },
+    (effect, pushEdge) => effect.pipe(forgetOnFailure(pushEdge)),
+  );
 
   /** Hold a final-looking finish for its grace in its own fiber, outside the worker. */
   const holdFinish = (
@@ -718,8 +722,8 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
       );
     });
 
-  const processEdge = ({ edge: pushEdge, takenAt }: TakenEdge) =>
-    Effect.gen(function* () {
+  const processEdge = Effect.fn("WebPushRelay.processEdge")(
+    function* ({ edge: pushEdge, takenAt }: TakenEdge) {
       const shell = yield* readShell(pushEdge.threadId);
       if (shell === null) return;
       const backgroundLiveness = livenessFor(shell, pushEdge);
@@ -732,7 +736,9 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
         return;
       }
       yield* send(pushEdge, shell, backgroundLiveness);
-    }).pipe(forgetOnFailure(pushEdge));
+    },
+    (effect, { edge: pushEdge }) => effect.pipe(forgetOnFailure(pushEdge)),
+  );
 
   const worker = yield* makeDrainableWorker(processEdge);
 

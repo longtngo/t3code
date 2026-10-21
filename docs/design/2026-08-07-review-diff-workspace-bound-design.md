@@ -12,7 +12,7 @@ and never show one repository's diff under another's name.
 Two observable defects, one cause:
 
 - Member repositories render `VCS repository detection failed in ReviewService.getDiffPreview:
-… Review diff preview cwd must stay within the configured workspace root.`
+  … Review diff preview cwd must stay within the configured workspace root.`
 - The primary repository renders **the t3code server repo's working tree** under the project's
   name, because the client silently retries the failed request at the server's own cwd.
 

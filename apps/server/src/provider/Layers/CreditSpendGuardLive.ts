@@ -66,136 +66,138 @@ export function needsFreshUsageRead(
   return limits.windows.some((window) => window.usedPercent >= NEAR_LIMIT_PERCENT);
 }
 
-export const makeCreditSpendGuard = (options?: { readonly freshReadTimeout?: Duration.Input }) =>
-  Effect.gen(function* () {
-    const providerRegistry = yield* ProviderRegistry;
-    const serverSettings = yield* ServerSettingsService;
-    const scope = yield* Effect.scope;
-    const freshReadTimeout = options?.freshReadTimeout ?? FRESH_READ_TIMEOUT;
+export const makeCreditSpendGuard = Effect.fn("CreditSpendGuard.make")(function* (options?: {
+  readonly freshReadTimeout?: Duration.Input;
+}) {
+  const providerRegistry = yield* ProviderRegistry;
+  const serverSettings = yield* ServerSettingsService;
+  const scope = yield* Effect.scope;
+  const freshReadTimeout = options?.freshReadTimeout ?? FRESH_READ_TIMEOUT;
 
-    // One fresh read per instance at a time: concurrent near-limit starts share it, and a
-    // caller that stops waiting leaves it running so its result still lands for the next.
-    // `None` means the read failed; the caller then keeps the reading it already had.
-    const inFlight = new Map<
-      ProviderInstanceId,
-      Deferred.Deferred<Option.Option<ReadonlyArray<ServerProvider>>>
-    >();
-    const sharedFreshRead = (instanceId: ProviderInstanceId) =>
-      Effect.gen(function* () {
-        const existing = inFlight.get(instanceId);
-        if (existing !== undefined) return existing;
-        const deferred = Deferred.makeUnsafe<Option.Option<ReadonlyArray<ServerProvider>>>();
-        inFlight.set(instanceId, deferred);
-        yield* providerRegistry.refreshInstance(instanceId, { fresh: true }).pipe(
-          Effect.exit,
-          Effect.flatMap((exit) =>
-            Exit.isSuccess(exit)
-              ? Effect.succeedSome(exit.value)
-              : Effect.logWarning("credit-spend-guard.fresh-read-failed", {
-                  instanceId,
-                  cause: Cause.pretty(exit.cause),
-                }).pipe(Effect.as(Option.none<ReadonlyArray<ServerProvider>>())),
-          ),
-          // Release the slot BEFORE waking the waiters: a caller that resumes and asks
-          // again must start a new read, not find this finished one still in the map.
-          Effect.ensuring(Effect.sync(() => inFlight.delete(instanceId))),
-          Effect.flatMap((result) => Deferred.succeed(deferred, result)),
-          Effect.onInterrupt(() =>
-            Effect.sync(() => inFlight.delete(instanceId)).pipe(
-              Effect.andThen(Deferred.succeed(deferred, Option.none())),
-            ),
-          ),
-          Effect.forkIn(scope),
-        );
-        return deferred;
-      });
-
-    const spendingAllowed = serverSettings.getSettings.pipe(
-      Effect.map((settings) => settings.allowSpendingCredits),
-      Effect.catch((cause) =>
-        Effect.logWarning("credit-spend-guard.gate-unavailable", {
-          stage: "settings",
-          cause,
-        }).pipe(Effect.as(true)),
+  // One fresh read per instance at a time: concurrent near-limit starts share it, and a
+  // caller that stops waiting leaves it running so its result still lands for the next.
+  // `None` means the read failed; the caller then keeps the reading it already had.
+  const inFlight = new Map<
+    ProviderInstanceId,
+    Deferred.Deferred<Option.Option<ReadonlyArray<ServerProvider>>>
+  >();
+  const sharedFreshRead = Effect.fn("CreditSpendGuard.sharedFreshRead")(function* (
+    instanceId: ProviderInstanceId,
+  ) {
+    const existing = inFlight.get(instanceId);
+    if (existing !== undefined) return existing;
+    const deferred = Deferred.makeUnsafe<Option.Option<ReadonlyArray<ServerProvider>>>();
+    inFlight.set(instanceId, deferred);
+    yield* providerRegistry.refreshInstance(instanceId, { fresh: true }).pipe(
+      Effect.exit,
+      Effect.flatMap((exit) =>
+        Exit.isSuccess(exit)
+          ? Effect.succeedSome(exit.value)
+          : Effect.logWarning("credit-spend-guard.fresh-read-failed", {
+              instanceId,
+              cause: Cause.pretty(exit.cause),
+            }).pipe(Effect.as(Option.none<ReadonlyArray<ServerProvider>>())),
       ),
+      // Release the slot BEFORE waking the waiters: a caller that resumes and asks
+      // again must start a new read, not find this finished one still in the map.
+      Effect.ensuring(Effect.sync(() => inFlight.delete(instanceId))),
+      Effect.flatMap((result) => Deferred.succeed(deferred, result)),
+      Effect.onInterrupt(() =>
+        Effect.sync(() => inFlight.delete(instanceId)).pipe(
+          Effect.andThen(Deferred.succeed(deferred, Option.none())),
+        ),
+      ),
+      Effect.forkIn(scope),
     );
-
-    const cachedRefusalFor = Effect.fn("CreditSpendGuard.cachedRefusalFor")(function* (
-      instanceId: ProviderInstanceId,
-    ) {
-      if (yield* spendingAllowed) return null;
-      return creditSpendBlockedReason({
-        allowSpendingCredits: false,
-        providers: yield* providerRegistry.getProviders,
-        instanceId,
-        nowMs: yield* Clock.currentTimeMillis,
-      });
-    });
-
-    /*
-     * The turn-start gate. Known limits, left as they are:
-     * - The shared fresh read has no bound of its own past each caller's timeout; it relies
-     *   on the provider probe's own 25 s timeout to end, and a caller never waits past
-     *   FRESH_READ_TIMEOUT for it.
-     * - A turn that passed this check just before the instance hit 100% still starts; the
-     *   interrupt sweeper then stops it.
-     * - A continuation after a server restart that this refuses fails visibly and is not
-     *   retried (limit auto-resume is: its worker asks `cachedRefusalFor` first).
-     * - A limit resume whose pre-send fresh read fails or times out waits for a later sweep,
-     *   but only 3 times; the 4th is sent on the stale reading and, if this then refuses
-     *   it, its recovery ends. Treating a credit refusal as retryable would close that, but
-     *   would also auto-resume user messages this guard refused.
-     * - A full window with no reset time stays blocked until a probe publishes a new
-     *   reading; nothing else can tell when it ends.
-     * - A shared read that hangs holds its slot until the probe's 25 s timeout ends it;
-     *   callers stop waiting at FRESH_READ_TIMEOUT and keep the reading they had.
-     * - A one-window runtime update with changed numbers stamps the whole reading's
-     *   checkedAt, so another window can look fresh and skip its re-read for up to 60 s; the
-     *   sweeper is the backstop. (checkedAt also orders runtime updates against probes, so
-     *   it cannot stamp less; the fix would be a per-window probe/runtime merge.)
-     */
-    const resumeCheck = Effect.fn("CreditSpendGuard.resumeCheck")(function* (
-      instanceId: ProviderInstanceId,
-    ) {
-      // First, so turning the switch back on takes effect without touching any provider.
-      if (yield* spendingAllowed) return { refusal: null, inconclusive: false };
-
-      let providers: ReadonlyArray<ServerProvider> = yield* providerRegistry.getProviders;
-      let inconclusive = false;
-      const limits = providers.find((entry) => entry.instanceId === instanceId)?.usageLimits;
-      if (needsFreshUsageRead(limits, yield* Clock.currentTimeMillis)) {
-        // Fail-open by choice: a read that fails or outlasts the timeout keeps the
-        // reading we already had, which still blocks if it says 100% for a window
-        // that has not reset yet.
-        const fresh = yield* Deferred.await(yield* sharedFreshRead(instanceId)).pipe(
-          Effect.timeoutOption(freshReadTimeout),
-          Effect.map(Option.flatten),
-        );
-        if (Option.isSome(fresh)) {
-          providers = fresh.value;
-        } else {
-          inconclusive = true;
-          yield* Effect.logWarning("credit-spend-guard.fresh-read-skipped", { instanceId });
-        }
-      }
-
-      const reason = creditSpendBlockedReason({
-        allowSpendingCredits: false,
-        providers,
-        instanceId,
-        nowMs: yield* Clock.currentTimeMillis,
-      });
-      if (reason !== null) {
-        yield* Effect.logInfo("credit-spend-guard.turn-refused", { instanceId, reason });
-      }
-      return { refusal: reason, inconclusive };
-    });
-
-    const refusalFor = (instanceId: ProviderInstanceId) =>
-      resumeCheck(instanceId).pipe(Effect.map((check) => check.refusal));
-
-    return CreditSpendGuard.of({ refusalFor, cachedRefusalFor, resumeCheck });
+    return deferred;
   });
+
+  const spendingAllowed = serverSettings.getSettings.pipe(
+    Effect.map((settings) => settings.allowSpendingCredits),
+    Effect.catch((cause) =>
+      Effect.logWarning("credit-spend-guard.gate-unavailable", {
+        stage: "settings",
+        cause,
+      }).pipe(Effect.as(true)),
+    ),
+  );
+
+  const cachedRefusalFor = Effect.fn("CreditSpendGuard.cachedRefusalFor")(function* (
+    instanceId: ProviderInstanceId,
+  ) {
+    if (yield* spendingAllowed) return null;
+    return creditSpendBlockedReason({
+      allowSpendingCredits: false,
+      providers: yield* providerRegistry.getProviders,
+      instanceId,
+      nowMs: yield* Clock.currentTimeMillis,
+    });
+  });
+
+  /*
+   * The turn-start gate. Known limits, left as they are:
+   * - The shared fresh read has no bound of its own past each caller's timeout; it relies
+   *   on the provider probe's own 25 s timeout to end, and a caller never waits past
+   *   FRESH_READ_TIMEOUT for it.
+   * - A turn that passed this check just before the instance hit 100% still starts; the
+   *   interrupt sweeper then stops it.
+   * - A continuation after a server restart that this refuses fails visibly and is not
+   *   retried (limit auto-resume is: its worker asks `cachedRefusalFor` first).
+   * - A limit resume whose pre-send fresh read fails or times out waits for a later sweep,
+   *   but only 3 times; the 4th is sent on the stale reading and, if this then refuses
+   *   it, its recovery ends. Treating a credit refusal as retryable would close that, but
+   *   would also auto-resume user messages this guard refused.
+   * - A full window with no reset time stays blocked until a probe publishes a new
+   *   reading; nothing else can tell when it ends.
+   * - A shared read that hangs holds its slot until the probe's 25 s timeout ends it;
+   *   callers stop waiting at FRESH_READ_TIMEOUT and keep the reading they had.
+   * - A one-window runtime update with changed numbers stamps the whole reading's
+   *   checkedAt, so another window can look fresh and skip its re-read for up to 60 s; the
+   *   sweeper is the backstop. (checkedAt also orders runtime updates against probes, so
+   *   it cannot stamp less; the fix would be a per-window probe/runtime merge.)
+   */
+  const resumeCheck = Effect.fn("CreditSpendGuard.resumeCheck")(function* (
+    instanceId: ProviderInstanceId,
+  ) {
+    // First, so turning the switch back on takes effect without touching any provider.
+    if (yield* spendingAllowed) return { refusal: null, inconclusive: false };
+
+    let providers: ReadonlyArray<ServerProvider> = yield* providerRegistry.getProviders;
+    let inconclusive = false;
+    const limits = providers.find((entry) => entry.instanceId === instanceId)?.usageLimits;
+    if (needsFreshUsageRead(limits, yield* Clock.currentTimeMillis)) {
+      // Fail-open by choice: a read that fails or outlasts the timeout keeps the
+      // reading we already had, which still blocks if it says 100% for a window
+      // that has not reset yet.
+      const fresh = yield* Deferred.await(yield* sharedFreshRead(instanceId)).pipe(
+        Effect.timeoutOption(freshReadTimeout),
+        Effect.map(Option.flatten),
+      );
+      if (Option.isSome(fresh)) {
+        providers = fresh.value;
+      } else {
+        inconclusive = true;
+        yield* Effect.logWarning("credit-spend-guard.fresh-read-skipped", { instanceId });
+      }
+    }
+
+    const reason = creditSpendBlockedReason({
+      allowSpendingCredits: false,
+      providers,
+      instanceId,
+      nowMs: yield* Clock.currentTimeMillis,
+    });
+    if (reason !== null) {
+      yield* Effect.logInfo("credit-spend-guard.turn-refused", { instanceId, reason });
+    }
+    return { refusal: reason, inconclusive };
+  });
+
+  const refusalFor = (instanceId: ProviderInstanceId) =>
+    resumeCheck(instanceId).pipe(Effect.map((check) => check.refusal));
+
+  return CreditSpendGuard.of({ refusalFor, cachedRefusalFor, resumeCheck });
+});
 
 export const layer = Layer.effect(CreditSpendGuard, makeCreditSpendGuard());
 

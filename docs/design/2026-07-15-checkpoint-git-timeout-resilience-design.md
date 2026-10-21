@@ -64,7 +64,7 @@ generic option threaded through the `execute` layer.
   **strictly serial single fiber** (`makeDrainableWorker` = `TxQueue.take → process → forever`,
   `packages/shared/src/DrainableWorker.ts:44-56`; one item at a time). A capture issues ~4-5
   `execute` calls, so per-command retry would cost up to `commands × attempts × timeout ≈
-4 × 3 × 30 s ≈ 360 s` of one capture holding the queue head and blocking every other thread's
+  4 × 3 × 30 s ≈ 360 s` of one capture holding the queue head and blocking every other thread's
   captures/baselines. Whole-op retry bounds it to `attempts × timeout` (~90 s worst) and gives a
   **fresh clean temp-index seed per attempt** (the seed copy happens inside the retried body,
   `GitVcsDriver.ts:755-762`), so no shared partial-index state across attempts.
@@ -76,7 +76,7 @@ generic option threaded through the `execute` layer.
   `VcsOutputDecodeError` / … (`packages/contracts/src/vcs.ts:89-145`) — **not** `GitCommandError`.
   So no new field is needed: the transient discriminant already exists as tags. The retry
   predicate is a plain boolean `isTransientVcsError(e) => e._tag === "VcsProcessTimeoutError" ||
-e._tag === "VcsProcessSpawnError"` (structural `_tag` match — no schema dependency, no
+  e._tag === "VcsProcessSpawnError"` (structural `_tag` match — no schema dependency, no
   substring-matching, and `VcsProcessExitError`/decode/detection are correctly excluded). The
   earlier `reason`-on-`GitCommandError` change was reverted.
 - **Policy (Effect v4.0.0-beta.78 verified):**

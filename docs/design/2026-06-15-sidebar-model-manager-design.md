@@ -82,15 +82,15 @@ check-then-spawn-then-register, closing the TOCTOU on both port and budget):
    `already_online`.
 3. Estimate RAM = sum of file sizes in the model dir (flat, capped entry count — no
    unbounded recursion). Enforce budget: `Σ(online RSS) + Σ(in-flight loading
-estimates) + estimate ≤ budget` (budget default = `os.totalmem() * 0.8` when unset)
+   estimates) + estimate ≤ budget` (budget default = `os.totalmem() * 0.8` when unset)
    → else `budget_exceeded`.
 4. Assign a free port from the fixed range **8765–8799**, skipping ports used by **any**
    process seen in `ps` and any registry entry → else `no_free_port`.
 5. Build args: `["--serve", ...defaultArgs, ...(perModel[modelId]?.args ?? []),
-"--host", "127.0.0.1", "--port", String(port), "--model", modelPath]` — `--model`
+   "--host", "127.0.0.1", "--port", String(port), "--model", modelPath]` — `--model`
    and its value pushed as an **atomic pair**, value never whitespace-split.
 6. Spawn into a **service-owned `Scope.make()`** (`Effect.provideService(Scope.Scope,
-…)`), so it outlives the RPC. The spawner detaches the child into its own process
+   …)`), so it outlives the RPC. The spawner detaches the child into its own process
    group by default on non-Windows (so the scope's release reaps the group); set
    `detached: true` explicitly for clarity. Register as `loading`; fork a supervisor on
    `child.exitCode` that marks `exited`/removes the entry. Returns `{ pid, port }`.
@@ -132,7 +132,7 @@ estimates) + estimate ≤ budget` (budget default = `os.totalmem() * 0.8` when u
     `Schema.Union([LlmServeError, EnvironmentAuthorizationError])`.
   - `WsLlmServeUnloadRpc` — payload `{ pid }`, success `{ ok: true }`, same error.
   - `LlmServeError` (tagged): `budget_exceeded | already_online | no_free_port |
-not_found | spawn_failed | not_mlx_process`, each with a message.
+    not_found | spawn_failed | not_mlx_process`, each with a message.
 
 ### Server wiring (`apps/server/src/ws.ts`)
 

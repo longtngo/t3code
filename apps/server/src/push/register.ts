@@ -24,31 +24,30 @@ export interface RegisterPushSubscriptionInput {
 
 export type RegisterPushSubscriptionOutcome = "registered" | "rejected" | "error";
 
-export const registerPushSubscription = (
+export const registerPushSubscription = Effect.fn("push.registerPushSubscription")(function* (
   input: RegisterPushSubscriptionInput,
-): Effect.Effect<RegisterPushSubscriptionOutcome, never, PushSubscriptionRepository> =>
-  Effect.gen(function* () {
-    if (!isAllowedPushEndpoint(input.endpoint)) {
-      yield* Effect.logWarning("rejected push subscription with disallowed endpoint", {
-        endpoint: input.endpoint,
-      });
-      return "rejected" as const;
-    }
-    const repo = yield* PushSubscriptionRepository;
-    const createdAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
-    return yield* repo
-      .upsert({
-        endpoint: input.endpoint,
-        p256dh: input.keys.p256dh,
-        auth: input.keys.auth,
-        createdAt,
-      })
-      .pipe(
-        Effect.as("registered" as const),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("push subscription register failed", {
-            cause: Cause.pretty(cause),
-          }).pipe(Effect.as("error" as const)),
-        ),
-      );
-  });
+): Effect.fn.Return<RegisterPushSubscriptionOutcome, never, PushSubscriptionRepository> {
+  if (!isAllowedPushEndpoint(input.endpoint)) {
+    yield* Effect.logWarning("rejected push subscription with disallowed endpoint", {
+      endpoint: input.endpoint,
+    });
+    return "rejected" as const;
+  }
+  const repo = yield* PushSubscriptionRepository;
+  const createdAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
+  return yield* repo
+    .upsert({
+      endpoint: input.endpoint,
+      p256dh: input.keys.p256dh,
+      auth: input.keys.auth,
+      createdAt,
+    })
+    .pipe(
+      Effect.as("registered" as const),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("push subscription register failed", {
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as("error" as const)),
+      ),
+    );
+});

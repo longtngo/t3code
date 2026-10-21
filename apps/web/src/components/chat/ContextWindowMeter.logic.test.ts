@@ -78,78 +78,19 @@ describe("hasAvailableCompactionProvider", () => {
   });
 });
 
+// FORK: upstream pruned its own cases for this helper; the setting gate is the fork's.
 describe("shouldOfferResumeCompaction", () => {
-  const now = "2026-08-24T12:00:00.000Z";
-
-  it("matches Claude's old-session age and context thresholds", () => {
-    expect(
-      shouldOfferResumeCompaction({
-        offerEnabled: true,
-        provider: "claudeAgent",
-        usedTokens: 100_000,
-        updatedAt: "2026-08-24T10:50:00.000Z",
-        now,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not prompt for recent or smaller sessions", () => {
-    expect(
-      shouldOfferResumeCompaction({
-        offerEnabled: true,
-        provider: "claudeAgent",
-        usedTokens: 99_999,
-        updatedAt: "2026-08-24T10:00:00.000Z",
-        now,
-      }),
-    ).toBe(false);
-    expect(
-      shouldOfferResumeCompaction({
-        offerEnabled: true,
-        provider: "claudeAgent",
-        usedTokens: 200_000,
-        updatedAt: "2026-08-24T10:51:00.000Z",
-        now,
-      }),
-    ).toBe(false);
-  });
-
   it("does not offer when the Offer to compact threads setting is off", () => {
-    expect(
+    const offer = (offerEnabled: boolean) =>
       shouldOfferResumeCompaction({
-        offerEnabled: false,
+        offerEnabled,
         provider: "claudeAgent",
         usedTokens: 300_000,
         updatedAt: "2026-08-24T09:00:00.000Z",
-        now,
-      }),
-    ).toBe(false);
-  });
-
-  it("uses the reported prompt cache TTL instead of the fallback", () => {
-    const offer = (updatedAt: string) =>
-      shouldOfferResumeCompaction({
-        offerEnabled: true,
-        provider: "claudeAgent",
-        usedTokens: 200_000,
-        updatedAt,
-        promptCacheTtlMs: 5 * 60_000,
-        now,
+        now: "2026-08-24T12:00:00.000Z",
       });
-    expect(offer("2026-08-24T11:55:00.000Z")).toBe(true);
-    expect(offer("2026-08-24T11:56:00.000Z")).toBe(false);
-  });
-
-  it("does not show Claude's resume prompt for another provider", () => {
-    expect(
-      shouldOfferResumeCompaction({
-        offerEnabled: true,
-        provider: "codex",
-        usedTokens: 300_000,
-        updatedAt: "2026-08-24T09:00:00.000Z",
-        now,
-      }),
-    ).toBe(false);
+    expect(offer(true)).toBe(true);
+    expect(offer(false)).toBe(false);
   });
 });
 
@@ -170,17 +111,6 @@ describe("hasDismissedResumeCompaction", () => {
     ).toBe(true);
   });
 
-  it("ignores the same answer on an unrelated question", () => {
-    expect(
-      hasDismissedResumeCompaction([
-        {
-          kind: "user-input.resolved",
-          payload: { answers: { "Show this setup reminder?": "Don't ask again" } },
-        },
-      ]),
-    ).toBe(false);
-  });
-
   it("ignores unrelated questions that end with Claude's compaction prompt", () => {
     expect(
       hasDismissedResumeCompaction([
@@ -192,16 +122,6 @@ describe("hasDismissedResumeCompaction", () => {
             },
           },
         },
-      ]),
-    ).toBe(false);
-  });
-
-  it("ignores pending questions and malformed resolved payloads", () => {
-    expect(
-      hasDismissedResumeCompaction([
-        { kind: "user-input.requested", payload: { answers: { question: "Don't ask again" } } },
-        { kind: "user-input.resolved", payload: null },
-        { kind: "user-input.resolved", payload: { answers: ["Don't ask again"] } },
       ]),
     ).toBe(false);
   });

@@ -6,7 +6,6 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const fixture = vi.hoisted(() => ({
@@ -60,7 +59,7 @@ vi.mock("../state/filesystem", async (importOriginal) => {
   };
 });
 
-import { renderDom } from "../testing/renderDom";
+import { act, renderDom } from "../testing/renderDom";
 import WorkspaceMemberEditor from "./WorkspaceMemberEditor";
 
 function session(permissions: readonly string[]) {

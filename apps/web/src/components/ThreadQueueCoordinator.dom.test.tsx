@@ -7,7 +7,6 @@ import type {
   ThreadQueueSetInput,
 } from "@t3tools/contracts";
 import { type Atom, AtomRegistry } from "effect/reactivity";
-import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const UPDATE_SETTINGS = "environment-data:server:update-settings";
@@ -144,7 +143,7 @@ vi.mock("../state/use-atom-command", () => {
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useQueueSlotSettingsStore } from "../queueSlotSettingsStore";
 import { primaryServerConfigAtom } from "../state/server";
-import { renderDom } from "../testing/renderDom";
+import { act, renderDom } from "../testing/renderDom";
 import { useThreadQueueLeavingStore, whileLeavingThreadQueue } from "../threadQueueLeaving";
 import { threadQueueEntryKey, type ThreadQueueEntry } from "../threadQueueRules";
 import {
@@ -215,8 +214,13 @@ const queuedOnServer = (id: string) => ({
   label: id,
 });
 
+// This device's clock, fixed so a claim's age does not move with the runner.
+const NOW = Date.UTC(2026, 0, 1);
+
 // A queue shown from the last document, but disconnected, sends nothing.
 describe("ThreadQueueCoordinator while the queue is pending", () => {
+  beforeEach(() => vi.setSystemTime(NOW));
+  afterEach(() => vi.useRealTimers());
   it("claims nothing", async () => {
     useComposerDraftStore
       .getState()
@@ -232,7 +236,7 @@ describe("ThreadQueueCoordinator while the queue is pending", () => {
         lastFailure: null,
         entries: [queuedOnServer("queued-b")],
       },
-      Date.now(),
+      NOW,
     );
     store.setConnection({ ...SERVER_CONNECTION, connected: false });
     expect(useThreadQueueStore.getState()).toMatchObject({
@@ -273,13 +277,15 @@ function countClaims(limit = 20) {
 }
 
 describe("ThreadQueueCoordinator on the server's queue", () => {
+  beforeEach(() => vi.setSystemTime(NOW));
+  afterEach(() => vi.useRealTimers());
   const writes: ThreadQueueSetInput[] = [];
   /** Each write's reply waits for this; a test holds it to keep a change unconfirmed. */
   let reply: Promise<void> = Promise.resolve();
   // This device's clock runs 10 minutes ahead of the server's.
   const enter = (document: Partial<ThreadQueueDocument>, connection = SERVER_CONNECTION) => {
     writes.length = 0;
-    const serverTime = Date.now() - 10 * 60_000;
+    const serverTime = NOW - 10 * 60_000;
     const store = useThreadQueueStore.getState();
     store.setWriter({
       write: async (input) => {
@@ -288,7 +294,7 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
         return {
           ok: true,
           document: { bootId: "boot-1", revision: input.expectedRevision + 1, ...input.state },
-          serverTime: Date.now() - 10 * 60_000,
+          serverTime: NOW - 10 * 60_000,
         };
       },
       reportFailure: vi.fn(),
@@ -320,7 +326,7 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
 
   // 4 minutes old by the server's clock is 14 by this device's.
   it("ages a claim on the server's clock, not this device's", async () => {
-    const serverTime = Date.now() - 10 * 60_000;
+    const serverTime = NOW - 10 * 60_000;
     enter({ inFlight: claimedAgo(serverTime, 4 * 60_000) });
     await renderDom(<ThreadQueueCoordinator />);
     expect(writes).toEqual([]);
@@ -328,7 +334,7 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
   });
 
   it("puts an unstarted claim past the cap back at the front of the queue, on the server's clock", async () => {
-    const serverTime = Date.now() - 10 * 60_000;
+    const serverTime = NOW - 10 * 60_000;
     // Paused, so the released entry is not claimed again at once.
     enter({
       paused: true,
@@ -349,14 +355,14 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
     useComposerDraftStore
       .getState()
       .setPrompt(scopeThreadRef(env, threadId("queued-b")), "continue queued-b");
-    const serverTime = Date.now() - 10 * 60_000;
+    const serverTime = NOW - 10 * 60_000;
     enter({ inFlight: claimedAgo(serverTime, 6 * 60_000) });
     await renderDom(<ThreadQueueCoordinator />);
     await vi.waitFor(() => expect(startedThreadIds()).toEqual(["queued-b"]));
   });
 
   it("a started send past the cap only frees the slot, and only while still unsent", async () => {
-    const serverTime = Date.now() - 10 * 60_000;
+    const serverTime = NOW - 10 * 60_000;
     enter({
       paused: true,
       inFlight: { ...claimedAgo(serverTime, 7 * 60_000), sendingAt: serverTime - 6 * 60_000 },
@@ -429,7 +435,7 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
         attempts += 1;
         const document = useThreadQueueStore.getState().server!;
         if (input.state.inFlight !== null) throw new Error("ThreadQueueWriteError: disk full");
-        return { ok: true, document, serverTime: Date.now() - 10 * 60_000 };
+        return { ok: true, document, serverTime: NOW - 10 * 60_000 };
       },
       reportFailure: vi.fn(),
     });
@@ -465,7 +471,7 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
         }
         const ok = input.expectedRevision === document.revision;
         if (ok) document = { ...document, ...input.state, revision: document.revision + 1 };
-        return { ok, document, serverTime: Date.now() - 10 * 60_000 };
+        return { ok, document, serverTime: NOW - 10 * 60_000 };
       },
       reportFailure: vi.fn(),
     });
@@ -503,7 +509,7 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
         }
         const ok = input.expectedRevision === document.revision;
         if (ok) document = { ...document, ...input.state, revision: document.revision + 1 };
-        return { ok, document, serverTime: Date.now() - 10 * 60_000 };
+        return { ok, document, serverTime: NOW - 10 * 60_000 };
       },
       reportFailure: vi.fn(),
     });
@@ -527,10 +533,10 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
             revision: document.revision + 1,
             entries: [queuedOnServer("queued-a")],
           };
-          return { ok: false, document, serverTime: Date.now() - 10 * 60_000 };
+          return { ok: false, document, serverTime: NOW - 10 * 60_000 };
         }
         if (input.state.inFlight !== null) throw new Error("ThreadQueueWriteError: disk full");
-        return { ok: true, document, serverTime: Date.now() - 10 * 60_000 };
+        return { ok: true, document, serverTime: NOW - 10 * 60_000 };
       },
       reportFailure: vi.fn(),
     });
@@ -559,7 +565,7 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
         useQueueSlotSettingsStore.setState({ providerSlots: { codex: 1, claudeAgent: 1 } });
         const document = useThreadQueueStore.getState().server!;
         if (input.state.inFlight !== null) throw new Error("ThreadQueueWriteError: disk full");
-        return { ok: true, document, serverTime: Date.now() - 10 * 60_000 };
+        return { ok: true, document, serverTime: NOW - 10 * 60_000 };
       },
       reportFailure: vi.fn(),
     });
@@ -595,7 +601,7 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
         if (input.expectedRevision === document.revision) {
           document = { ...document, ...input.state, revision: document.revision + 1 };
         }
-        return { ok: true, document, serverTime: Date.now() - 10 * 60_000 };
+        return { ok: true, document, serverTime: NOW - 10 * 60_000 };
       },
       reportFailure: vi.fn(),
     });
@@ -619,7 +625,7 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
     useComposerDraftStore
       .getState()
       .setPrompt(scopeThreadRef(env, threadId("queued-b")), "continue queued-b");
-    const serverTime = Date.now() - 10 * 60_000;
+    const serverTime = NOW - 10 * 60_000;
     enter(
       {
         entries: [queuedOnServer("queued-b"), queuedOnServer("deleted-thread")],

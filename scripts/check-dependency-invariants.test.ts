@@ -81,13 +81,10 @@ it.effect("the installed dependencies still hold every invariant", () =>
 // Measured rather than read: beta.103 fixed the aggregate leak by refactoring,
 // which left the old source marker intact and its verdict wrong. Calibration is
 // ~3.8 MB on the leaking build against ~0.02 MB here.
-it.effect(
-  "the installed effect build does not leak on idle schedule ticks",
-  () =>
-    Effect.gen(function* () {
-      assert.ok(behaviorInvariants.length > 0, "behaviorInvariants must not be empty");
-      const failures = yield* checkBehaviorInvariants(behaviorInvariants);
-      assert.deepStrictEqual(failures.map(formatFailure), []);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  { timeout: 120_000 },
+it.effect("the installed effect build does not leak on idle schedule ticks", () =>
+  Effect.gen(function* () {
+    assert.ok(behaviorInvariants.length > 0, "behaviorInvariants must not be empty");
+    const failures = yield* checkBehaviorInvariants(behaviorInvariants);
+    assert.deepStrictEqual(failures.map(formatFailure), []);
+  }).pipe(Effect.provide(NodeServices.layer)),
 );

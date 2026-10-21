@@ -60,10 +60,10 @@ duplication between `classifyInlineCodePath` and `inferFileViewerKind`.
 
 - `TEXT_FILE_EXTENSIONS: ReadonlySet<string>` — curated text/code allow-list:
   `txt log csv tsv json json5 jsonc yaml yml toml ini conf cfg properties xml sql py
-rb go rs java kt kts c h cpp cc cxx hpp hh cs php swift scala sh bash zsh fish ps1
-lua pl pm r dart ex exs erl hs clj cljs cljc edn js cjs mjs jsx ts cts mts tsx vue
-svelte astro css scss sass less graphql gql proto gradle groovy tf hcl vim diff
-patch`. Deliberately **excludes** `.md`/`.html` (handled specially), binary/media,
+  rb go rs java kt kts c h cpp cc cxx hpp hh cs php swift scala sh bash zsh fish ps1
+  lua pl pm r dart ex exs erl hs clj cljs cljc edn js cjs mjs jsx ts cts mts tsx vue
+  svelte astro css scss sass less graphql gql proto gradle groovy tf hcl vim diff
+  patch`. Deliberately **excludes** `.md`/`.html` (handled specially), binary/media,
   `.env`/extensionless (secrets / keeps the existing server test valid), and the
   ambiguous single-letter `.m`/`.mm` (high prose-false-positive risk — review #9).
 - `classifyFileViewerKind(path): FileViewerKind | null` — the shared lookup:

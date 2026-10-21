@@ -235,24 +235,25 @@ export const make = Effect.fn("makeLlmServeManager")(function* () {
       }),
     );
 
-  const unload = (configId: string): Effect.Effect<{ ok: true }, LlmServeError> =>
-    Effect.gen(function* () {
-      const live = yield* Ref.get(registry);
-      const managed = live.get(configId);
-      if (!managed) {
-        return yield* new LlmServeError({
-          kind: "not_managed_process",
-          reason: `Config ${configId} is not loaded by t3code`,
-        });
-      }
-      // Mark stopping (so list() shows it stopping), close the service-owned scope (the
-      // spawner's release reaps the whole detached group and awaits exit), then remove the
-      // entry. Closing the scope interrupts the supervisor, so we delete here.
-      yield* updateState(configId, "stopping");
-      yield* Scope.close(managed.scope, Exit.void).pipe(Effect.ignore);
-      yield* deleteEntry(configId);
-      return { ok: true as const };
-    });
+  const unload = Effect.fn("LlmServeManager.unload")(function* (
+    configId: string,
+  ): Effect.fn.Return<{ ok: true }, LlmServeError> {
+    const live = yield* Ref.get(registry);
+    const managed = live.get(configId);
+    if (!managed) {
+      return yield* new LlmServeError({
+        kind: "not_managed_process",
+        reason: `Config ${configId} is not loaded by t3code`,
+      });
+    }
+    // Mark stopping (so list() shows it stopping), close the service-owned scope (the
+    // spawner's release reaps the whole detached group and awaits exit), then remove the
+    // entry. Closing the scope interrupts the supervisor, so we delete here.
+    yield* updateState(configId, "stopping");
+    yield* Scope.close(managed.scope, Exit.void).pipe(Effect.ignore);
+    yield* deleteEntry(configId);
+    return { ok: true as const };
+  });
 
   // On server shutdown, stop every managed launch (closing scopes reaps their groups).
   //

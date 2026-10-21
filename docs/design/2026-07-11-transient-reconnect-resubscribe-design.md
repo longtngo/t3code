@@ -133,7 +133,7 @@ third failure). It must ship as **B+** below. Review verdicts:
    is broadcast first), so the socket reconnects **and** the app re-establishes
    its subscriptions on it.
 2. **Classify the abandon condition as transport-retryable** — add `/\bsend
-abandoned\b/i` to `TRANSPORT_ERROR_PATTERNS` (`transportError.ts`) so the
+   abandoned\b/i` to `TRANSPORT_ERROR_PATTERNS` (`transportError.ts`) so the
    re-subscribe that races the reconnect window is retried (every 250 ms) until
    `connectedLatch` reopens and the send lands, instead of exiting the loop.
 

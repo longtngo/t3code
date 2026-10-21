@@ -54,7 +54,7 @@ that lump `(nullRows, nullBytes)`:
    three content arms (messages `text`+`attachments_json`, activities
    `payload_json`+`summary`, plans `plan_markdown`) widens its predicate to
    `turn_id IN (candidates) OR (turn_id IS NULL AND created_at >= lower
-[AND created_at < upper])` — the same shape `windowTurnPredicate` /
+   [AND created_at < upper])` — the same shape `windowTurnPredicate` /
    `historyTurnPredicate` already use. The two branches are mutually exclusive, so the
    existing `GROUP BY turn_id` yields the per-turn buckets **and** a single
    `turn_id IS NULL` group — the lump — from one scan per table (no new arms, no raw-row
@@ -68,7 +68,7 @@ that lump `(nullRows, nullBytes)`:
 
 3. **Subtract the lump before the walk.** Both callers reduce the budget:
    `accumulateTurnsWithinBudget(turnRows, statsByTurnId, reduce(maxRows, nullLump.rows),
-reduce(maxBytes, nullLump.bytes))`, where `reduce(undefined, _) = undefined` (no
+   reduce(maxBytes, nullLump.bytes))`, where `reduce(undefined, _) = undefined` (no
    bound → stays unbounded, lump not subtracted) and `reduce(n, x) = Math.max(0, n − x)`.
    Subscribe passes no upper; `getThreadHistoryPage` passes `beforeTurn.requestedAt` as
    `nullTurnUpperExclusive`.

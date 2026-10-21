@@ -217,7 +217,7 @@ several correctness issues. Revisions:
 - **[m11] NaN/defect guards** mirror `ProviderSessionReaper` (`Number.isNaN(Date.parse(...))` skip +
   `Effect.catch`/`catchDefect` inside the repeated sweep so one bad row can't kill the fiber).
 - **[Simplification R3] Schema trimmed** to `(task_id PK, thread_id, boot_id, started_at,
-last_seen_at, recovery_attempts)`. Dropped `summary`/`output_file` — the recovery message is
+  last_seen_at, recovery_attempts)`. Dropped `summary`/`output_file` — the recovery message is
   deliberately "re-verify whether the work finished," so stale context adds noise. `last_seen_at` is
   refreshed on `task.progress` (needed by Trigger 2).
 - **[Simplification R4] Repository-only, no directory wrapper** — rows are inert scalars; no

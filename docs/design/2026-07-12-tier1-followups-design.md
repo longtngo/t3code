@@ -232,7 +232,7 @@ no caller breaks — `ProviderService.listSessions` is the only consumer and wan
 Item 3 viable but its **snippet had real bugs**; applied fixes:
 
 - **[HIGH wiring]** Raw route layers are aggregated in **`server.ts`** (`makeRoutesLayer =
-Layer.mergeAll(...)`, ~line 349-363), not `http.ts`. Editing only `http.ts` ships an
+  Layer.mergeAll(...)`, ~line 349-363), not `http.ts`. Editing only `http.ts` ships an
   exported-but-never-merged layer → 404. → Add the new route layer(s) to both the `server.ts`
   import block and the `Layer.mergeAll`. Requirements (`PushSubscriptionRepository`,
   `WebPushRelay`) are already in that runtime, so no new service layer.

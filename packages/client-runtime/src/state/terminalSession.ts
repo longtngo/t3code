@@ -6,16 +6,15 @@ import type {
   TerminalSummary,
   ThreadId,
 } from "@t3tools/contracts";
+import { DEFAULT_MAX_TERMINAL_BUFFER_BYTES } from "@t3tools/contracts";
 import {
   appendOutput,
-  DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
   EMPTY_TERMINAL_OUTPUT_STATE,
   resetOutput,
   type TerminalOutputState,
 } from "./terminalOutput.ts";
 
 export {
-  DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
   EMPTY_TERMINAL_OUTPUT_STATE,
   INITIAL_TERMINAL_OUTPUT_CURSOR,
   readTerminalOutputUpdate,
@@ -24,6 +23,7 @@ export {
   type TerminalOutputState,
   type TerminalOutputUpdate,
 } from "./terminalOutput.ts";
+export { DEFAULT_MAX_TERMINAL_BUFFER_BYTES } from "@t3tools/contracts";
 
 export interface TerminalSessionState {
   readonly summary: TerminalSummary | null;

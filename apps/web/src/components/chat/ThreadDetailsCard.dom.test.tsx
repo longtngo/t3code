@@ -1,6 +1,6 @@
 import { createRef } from "react";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { renderDom } from "../../testing/renderDom";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { PopoverCreateHandle } from "../ui/popover";
@@ -49,13 +49,11 @@ function stubHeights(workspaceHeight: number) {
 }
 
 afterEach(() => {
-  vi.unstubAllGlobals();
   if (original) Object.defineProperty(HTMLElement.prototype, "offsetHeight", original);
   useRightPanelStore.getState().setThreadPanelOpen(threadRef, "inline", false);
 });
 
 async function renderCard(workspaceHeight: number) {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   stubHeights(workspaceHeight);
   useRightPanelStore.getState().setThreadPanelOpen(threadRef, "inline", true);
   const view = await renderDom(

@@ -268,8 +268,10 @@ export const make = Effect.gen(function* () {
       allowSpendingCredits: true,
       // FORK: the Claude adapter answers resume questions from the setting.
       offerThreadCompaction: true,
+      threadStop: true,
       environmentIcon: true,
       projectCloneTracking: true,
+      ignoredFileListing: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate

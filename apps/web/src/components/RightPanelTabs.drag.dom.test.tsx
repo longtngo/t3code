@@ -1,9 +1,8 @@
 import type { PreviewSessionSnapshot } from "@t3tools/contracts";
-import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
-import { renderDom } from "../testing/renderDom";
+import { act, renderDom } from "../testing/renderDom";
 
 import { RightPanelTabs } from "./RightPanelTabs";
 

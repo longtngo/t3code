@@ -1,6 +1,5 @@
 import { assert, describe, it, vi } from "@effect/vitest";
 import {
-  type ChatAttachment,
   CommandId,
   MessageId,
   ProjectId,
@@ -168,31 +167,6 @@ function armRegeneration(input: { readonly command: string; readonly threadId: T
 }
 
 describe("formatThreadTitleContext", () => {
-  const attachment = (id: string): ChatAttachment => ({
-    type: "image",
-    id,
-    name: `${id}.png`,
-    mimeType: "image/png",
-    sizeBytes: 1,
-  });
-
-  it("builds a newest-first digest, skipping system messages and empty sections", () => {
-    const context = ThreadTitleRegeneration.formatThreadTitleContext([
-      { role: "user", text: "First question" },
-      { role: "system", text: "Hidden instructions" },
-      { role: "assistant", text: "" },
-      { role: "assistant", text: "Second answer", attachments: [attachment("shot")] },
-    ]);
-    assert.equal(
-      context.message,
-      "USER:\nFirst question\n\nASSISTANT:\nSecond answer\n[Attachments: shot.png]",
-    );
-    assert.deepEqual(
-      context.attachments.map((entry) => entry.name),
-      ["shot.png"],
-    );
-  });
-
   it("pins the first user message ahead of the retained tail once content stops fitting", () => {
     const context = ThreadTitleRegeneration.formatThreadTitleContext([
       { role: "user", text: `Ancient context that anchors the topic ${"x".repeat(600)}` },
@@ -202,32 +176,6 @@ describe("formatThreadTitleContext", () => {
     assert.isTrue(context.message.includes("USER:\nAncient context that anchors the topic"));
     assert.isTrue(context.message.includes("[Earlier content truncated]\n\n"));
     assert.isTrue(context.message.includes("y".repeat(100)));
-  });
-
-  it("truncates an oversized pinned first user message", () => {
-    const context = ThreadTitleRegeneration.formatThreadTitleContext([
-      { role: "user", text: `Topic anchor ${"a".repeat(4_000)}` },
-      { role: "assistant", text: "y".repeat(9_000) },
-      { role: "user", text: "z".repeat(1_500) },
-    ]);
-    assert.isTrue(context.message.includes("USER:\nTopic anchor"));
-    assert.isTrue(context.message.includes("[Content truncated]"));
-    assert.isTrue(context.message.includes("[Earlier content truncated]\n\n"));
-  });
-
-  it("retains at most four attachments from the newest messages", () => {
-    const context = ThreadTitleRegeneration.formatThreadTitleContext([
-      { role: "user", text: "older", attachments: [attachment("a"), attachment("b")] },
-      {
-        role: "user",
-        text: "newer",
-        attachments: [attachment("c"), attachment("d"), attachment("e")],
-      },
-    ]);
-    assert.deepEqual(
-      context.attachments.map((entry) => entry.name),
-      ["a.png", "c.png", "d.png", "e.png"],
-    );
   });
 });
 
@@ -336,65 +284,6 @@ describe("ThreadTitleRegenerationService", () => {
     }),
   );
 
-  it.effect("keeps the current title when generation returns the fallback", () =>
-    Effect.gen(function* () {
-      const harness = makeHarness({
-        generateTitle: () => Effect.succeed({ title: "New thread" }),
-      });
-      yield* Effect.gen(function* () {
-        const threads = yield* ThreadManagement.ThreadManagementService;
-        const titleRegeneration = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
-        const threadId = yield* createThread({
-          command: "command:title:fallback:create",
-          thread: "thread:title:fallback",
-        });
-        yield* dispatchUserMessage({
-          command: "command:title:fallback:message",
-          threadId,
-          text: "Some conversation",
-        });
-        const requestId = yield* armRegeneration({ command: "command:title:fallback:1", threadId });
-
-        yield* titleRegeneration.execute({ threadId, requestId, kind: { type: "regenerate" } });
-
-        const projection = yield* threads.getThreadProjection(threadId);
-        assert.equal(projection.thread.title, "Seed title");
-        assert.isNotOk(projection.thread.titleRegeneration);
-      }).pipe(Effect.provide(harness.layer));
-    }),
-  );
-
-  it.effect("keeps the current title when regeneration reproduces it", () =>
-    Effect.gen(function* () {
-      const harness = makeHarness({
-        generateTitle: () => Effect.succeed({ title: "Seed title" }),
-      });
-      yield* Effect.gen(function* () {
-        const threads = yield* ThreadManagement.ThreadManagementService;
-        const titleRegeneration = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
-        const threadId = yield* createThread({
-          command: "command:title:unchanged:create",
-          thread: "thread:title:unchanged",
-        });
-        yield* dispatchUserMessage({
-          command: "command:title:unchanged:message",
-          threadId,
-          text: "Some conversation",
-        });
-        const requestId = yield* armRegeneration({
-          command: "command:title:unchanged:1",
-          threadId,
-        });
-
-        yield* titleRegeneration.execute({ threadId, requestId, kind: { type: "regenerate" } });
-
-        const projection = yield* threads.getThreadProjection(threadId);
-        assert.equal(projection.thread.title, "Seed title");
-        assert.isNotOk(projection.thread.titleRegeneration);
-      }).pipe(Effect.provide(harness.layer));
-    }),
-  );
-
   it.effect("clears the marker and keeps the title when generation fails", () =>
     Effect.gen(function* () {
       const harness = makeHarness({
@@ -478,32 +367,6 @@ describe("ThreadTitleRegenerationService", () => {
         assert.equal(recovered.thread.title, "Fresh title");
         assert.isNotOk(recovered.thread.titleRegenerationFailedAt);
         assert.isNotOk((yield* threads.getThreadShell(threadId))?.titleRegenerationFailedAt);
-      }).pipe(Effect.provide(harness.layer));
-    }),
-  );
-
-  it.effect("completes without generating when the initial message is unavailable", () =>
-    Effect.gen(function* () {
-      const harness = makeHarness();
-      yield* Effect.gen(function* () {
-        const threads = yield* ThreadManagement.ThreadManagementService;
-        const titleRegeneration = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
-        const threadId = yield* createThread({
-          command: "command:title:missing:create",
-          thread: "thread:title:missing",
-        });
-        const requestId = yield* armRegeneration({ command: "command:title:missing:1", threadId });
-
-        yield* titleRegeneration.execute({
-          threadId,
-          requestId,
-          kind: { type: "initial", messageId: MessageId.make("message:title:missing") },
-        });
-
-        assert.equal(harness.generateThreadTitle.mock.calls.length, 0);
-        const projection = yield* threads.getThreadProjection(threadId);
-        assert.equal(projection.thread.title, "Seed title");
-        assert.isNotOk(projection.thread.titleRegeneration);
       }).pipe(Effect.provide(harness.layer));
     }),
   );

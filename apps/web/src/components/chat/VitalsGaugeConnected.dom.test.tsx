@@ -1,9 +1,8 @@
 import { EnvironmentId, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import type { ServerProvider } from "@t3tools/contracts";
-import { act } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { renderDom } from "../../testing/renderDom";
+import { act, renderDom } from "../../testing/renderDom";
 
 const refreshProviders = vi.fn(async () => undefined);
 

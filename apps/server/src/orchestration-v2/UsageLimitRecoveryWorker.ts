@@ -11,6 +11,7 @@ import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export function limitRecoveryCommand(
@@ -82,6 +83,7 @@ export const MAX_INCONCLUSIVE_SKIPS = 3;
 export const makeSweep = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
   const settings = yield* ServerSettings.ServerSettingsService;
   const creditSpendGuard = yield* CreditSpendGuard;
   // "Allow to spend credits" refusing the resume now: skip it instead of sending a turn the
@@ -102,41 +104,42 @@ export const makeSweep = Effect.gen(function* () {
   // the resume goes out on the published reading, as the start gate itself fails open.
   const refusedThreads = new Set<ThreadId>();
   const inconclusiveSkips = new Map<ThreadId, number>();
-  const resumeRefused = (threadId: ThreadId) =>
-    Effect.gen(function* () {
-      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
-      if (shell === null) return false;
-      const cached = yield* creditSpendGuard.cachedRefusalFor(shell.providerInstanceId);
-      const check =
-        cached === null
-          ? yield* creditSpendGuard.resumeCheck(shell.providerInstanceId)
-          : { refusal: cached, inconclusive: false };
-      if (check.refusal === null && check.inconclusive) {
-        const skips = (inconclusiveSkips.get(threadId) ?? 0) + 1;
-        if (skips <= MAX_INCONCLUSIVE_SKIPS) {
-          inconclusiveSkips.set(threadId, skips);
-          yield* Effect.logInfo("orchestration-v2.limit-recovery.credit-unverified", {
-            threadId,
-            skips,
-          });
-          return true;
-        }
-      }
-      inconclusiveSkips.delete(threadId);
-      if (check.refusal === null) {
-        refusedThreads.delete(threadId);
-        return false;
-      }
-      // Once per blocked spell, not every sweep.
-      if (!refusedThreads.has(threadId)) {
-        refusedThreads.add(threadId);
-        yield* Effect.logInfo("orchestration-v2.limit-recovery.credit-refused", {
+  const resumeRefused = Effect.fn("UsageLimitRecoveryWorker.resumeRefused")(function* (
+    threadId: ThreadId,
+  ) {
+    const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
+    if (shell === null) return false;
+    const cached = yield* creditSpendGuard.cachedRefusalFor(shell.providerInstanceId);
+    const check =
+      cached === null
+        ? yield* creditSpendGuard.resumeCheck(shell.providerInstanceId)
+        : { refusal: cached, inconclusive: false };
+    if (check.refusal === null && check.inconclusive) {
+      const skips = (inconclusiveSkips.get(threadId) ?? 0) + 1;
+      if (skips <= MAX_INCONCLUSIVE_SKIPS) {
+        inconclusiveSkips.set(threadId, skips);
+        yield* Effect.logInfo("orchestration-v2.limit-recovery.credit-unverified", {
           threadId,
-          reason: check.refusal,
+          skips,
         });
+        return true;
       }
-      return true;
-    });
+    }
+    inconclusiveSkips.delete(threadId);
+    if (check.refusal === null) {
+      refusedThreads.delete(threadId);
+      return false;
+    }
+    // Once per blocked spell, not every sweep.
+    if (!refusedThreads.has(threadId)) {
+      refusedThreads.add(threadId);
+      yield* Effect.logInfo("orchestration-v2.limit-recovery.credit-refused", {
+        threadId,
+        reason: check.refusal,
+      });
+    }
+    return true;
+  });
   return Effect.fn("UsageLimitRecoveryWorker.sweep")(function* () {
     const preferences = yield* settings.getSettings;
     const now = yield* DateTime.now;
@@ -161,7 +164,17 @@ export const makeSweep = Effect.gen(function* () {
       );
       if (command === null) continue;
       if (command.type === "message.dispatch" && (yield* resumeRefused(thread.id))) continue;
-      yield* threads.dispatch(command).pipe(
+      yield* Effect.gen(function* () {
+        if (command.type === "thread.metadata.update" && command.limitRecovery != null) {
+          yield* orchestrator.autoArmLimitRecovery({
+            commandId: command.commandId,
+            threadId: command.threadId,
+            limitRecovery: command.limitRecovery,
+          });
+        } else {
+          yield* threads.dispatch(command);
+        }
+      }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("orchestration-v2.limit-recovery.dispatch-failed", {
             threadId: thread.id,

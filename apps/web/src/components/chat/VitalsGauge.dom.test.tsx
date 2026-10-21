@@ -187,7 +187,7 @@ describe("VitalsGaugeIcon", () => {
   it("still colours a window by fullness when there is no pace projection", async () => {
     // No `resetsAt` => no projection => windowSeverity falls back to fullness,
     // so this path must keep behaving exactly as it did before.
-    const arc = windowArc({ utilization: 74, resetsAt: null }, FIVE_HOUR_MS, Date.now(), 15);
+    const arc = windowArc({ utilization: 74, resetsAt: null }, FIVE_HOUR_MS, 0, 15);
 
     expect(arc).toEqual({ pct: 74, level: "warn" });
 

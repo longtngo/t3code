@@ -76,7 +76,7 @@ cheap independent cleanups. Bigger durability work is deferred until measured.
   implicate the hub → would point at the secondary #2/#3.)
 - **Git-fetch quieting.** The upstream-status fix (`5a5ff6099`) **is deployed** and
   correctly fail-_fasts_ (`GIT_TERMINAL_PROMPT=0`), but ~38k `could not read
-Username` failures still fire (post-boot) against an auth-requiring remote
+  Username` failures still fire (post-boot) against an auth-requiring remote
   (`sparse-attn-lab`), spamming the 52 MB log (which would obscure the gauge reads)
   and burning CPU. Cheap fix: cache the auth-failure and back off long / let the
   user exclude the repo. Not the OOM cause; fully independent.

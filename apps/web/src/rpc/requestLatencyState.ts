@@ -6,12 +6,14 @@ import { appAtomRegistry } from "./atomRegistry";
 
 export const SLOW_RPC_ACK_THRESHOLD_MS = 15_000;
 /**
- * Some requests are slow by design — they shell out to a package manager on the
- * server and only respond once the install finishes. Warning about those after
- * 15s is noise, so they get a much longer leash.
+ * Some requests are slow by design. Provider and server updates shell out to a
+ * package manager and only respond once the install finishes. A VCS status
+ * refresh fetches, may auto-pull, looks up the pull request, and first waits for
+ * any background refresh of the same repository, which often totals over 15s.
+ * Warning about those after 15s is noise, so they get a much longer leash.
  */
 export const LONG_RUNNING_RPC_ACK_THRESHOLD_MS = 120_000;
-export const MAX_TRACKED_RPC_ACK_REQUESTS = 256;
+const MAX_TRACKED_RPC_ACK_REQUESTS = 256;
 let slowRpcAckThresholdMs = SLOW_RPC_ACK_THRESHOLD_MS;
 
 export interface SlowRpcAckRequest {
@@ -29,13 +31,16 @@ interface PendingRpcAckRequest {
 
 const pendingRpcAckRequests = new Map<string, PendingRpcAckRequest>();
 const untrackedRpcAckMethods = new Set<string>();
-// Usage summary shells out to every provider CLI, so it joins the long leash
-// (fork precedent: pull requests) rather than the untracked set upstream chose.
+// Usage summary shells out to every provider CLI, and the client-activity heartbeat is the
+// first thing a busy host delays, so both join the long leash (fork precedent: pull requests)
+// rather than the untracked set upstream chose: a call wedged for 120s is still worth reporting.
 const longRunningRpcAckMethods = new Set<string>([
   WS_METHODS.serverUpdateProvider,
   WS_METHODS.serverRefreshProviders,
   WS_METHODS.serverUpdateServer,
   WS_METHODS.serverGetUsageSummary,
+  WS_METHODS.serverReportClientActivity,
+  WS_METHODS.vcsRefreshStatus,
 ]);
 /**
  * Pull request calls fan out across every configured server and shell out to
@@ -121,14 +126,6 @@ export function acknowledgeRpcRequest(requestId: string): void {
   setSlowRpcAckRequests(slowRequests.filter((request) => request.requestId !== requestId));
 }
 
-function clearAllTrackedRpcRequests(): void {
-  for (const pending of pendingRpcAckRequests.values()) {
-    clearTimeout(pending.timeoutId);
-  }
-  pendingRpcAckRequests.clear();
-  setSlowRpcAckRequests([]);
-}
-
 function clearTrackedRpcRequest(requestId: string): void {
   const pending = pendingRpcAckRequests.get(requestId);
   if (!pending) {
@@ -160,9 +157,14 @@ function evictOldestPendingRpcRequestIfNeeded(): void {
   }
 }
 
+// FORK: the long-leash rule (registry invariant 23) keeps its own test, which needs these.
 export function resetRequestLatencyStateForTests(): void {
   slowRpcAckThresholdMs = SLOW_RPC_ACK_THRESHOLD_MS;
-  clearAllTrackedRpcRequests();
+  for (const pending of pendingRpcAckRequests.values()) {
+    clearTimeout(pending.timeoutId);
+  }
+  pendingRpcAckRequests.clear();
+  setSlowRpcAckRequests([]);
 }
 
 export function useSlowRpcAckRequests(): ReadonlyArray<SlowRpcAckRequest> {

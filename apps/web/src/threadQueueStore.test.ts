@@ -123,6 +123,9 @@ function fakeServer(initial: ThreadQueueDocument) {
   return server;
 }
 
+// The server's clock reads the same as this device's, fixed so no test depends on when it runs.
+const NOW = Date.UTC(2026, 0, 1);
+
 async function enterLocal() {
   store().setConnection(LOCAL);
   await useThreadQueueStore.persist.rehydrate();
@@ -350,6 +353,7 @@ describe("threadQueueStore", () => {
 });
 
 describe("queue modes", () => {
+  beforeEach(() => vi.setSystemTime(NOW));
   // Pending accepts no user change and never writes.
   it("pending shows the mirror read-only and accepts no user change", () => {
     const write = vi.fn();
@@ -366,7 +370,7 @@ describe("queue modes", () => {
 
     // A session without operate scope sees the live queue but cannot change it either.
     store().setConnection({ ...SERVER, canWrite: false });
-    store().receiveDocument({ ...emptyDocument("boot-1"), entries: [queued(a)] }, Date.now());
+    store().receiveDocument({ ...emptyDocument("boot-1"), entries: [queued(a)] }, NOW);
     expect(store()).toMatchObject({ mode: "server", readOnly: true });
     store().enqueue(b);
     store().remove("env-1:thread-A");
@@ -381,7 +385,7 @@ describe("queue modes", () => {
     const write = vi.fn();
     store().setWriter({ write, reportFailure: vi.fn() });
     store().setConnection({ ...SERVER, configSource: "cache" });
-    store().receiveDocument(emptyDocument("boot-1"), Date.now());
+    store().receiveDocument(emptyDocument("boot-1"), NOW);
     expect(store().mode).toBe("pending");
     store().setConnection({ ...SERVER, capability: false });
     expect(store().mode).toBe("local");
@@ -398,7 +402,7 @@ describe("queue modes", () => {
 
     store().setWriter({ write: acceptAll(), reportFailure: vi.fn() });
     store().setConnection(SERVER);
-    store().receiveDocument(emptyDocument("boot-1"), Date.now());
+    store().receiveDocument(emptyDocument("boot-1"), NOW);
     expect(store().mode).toBe("server");
     await enterLocal();
     expect(store()).toMatchObject({ paused: true, entries: [expect.objectContaining(a)] });
@@ -416,12 +420,12 @@ describe("queue modes", () => {
     const v1 = localStorage.getItem(THREAD_QUEUE_STORAGE_KEY);
     store().setWriter({ write: acceptAll(), reportFailure: vi.fn() });
     store().setConnection(SERVER);
-    store().receiveDocument(emptyDocument("boot-1"), Date.now());
+    store().receiveDocument(emptyDocument("boot-1"), NOW);
     expect(store().localEntriesLeftBehind).toBe(2);
     useThreadQueueStore.setState({ localEntriesLeftBehind: 0 });
     store().setConnection({ ...SERVER, connected: false });
     store().setConnection(SERVER);
-    store().receiveDocument(emptyDocument("boot-1", 1), Date.now());
+    store().receiveDocument(emptyDocument("boot-1", 1), NOW);
     expect(store().mode).toBe("server");
     expect(store().localEntriesLeftBehind).toBe(0);
     expect(localStorage.getItem(THREAD_QUEUE_STORAGE_KEY)).toBe(v1);
@@ -443,7 +447,7 @@ describe("queue modes", () => {
       for (let revision = 0; revision < 3; revision++) {
         fresh.getState().setConnection({ ...SERVER, connected: false });
         fresh.getState().setConnection(SERVER);
-        fresh.getState().receiveDocument(emptyDocument("boot-1", revision), Date.now());
+        fresh.getState().receiveDocument(emptyDocument("boot-1", revision), NOW);
         expect(fresh.getState().mode).toBe("server");
         counts.push(fresh.getState().localEntriesLeftBehind);
         fresh.setState({ localEntriesLeftBehind: 0 });
@@ -460,7 +464,7 @@ describe("queue modes", () => {
     expect(v1).toContain("thread-A");
     store().setWriter({ write: acceptAll(), reportFailure: vi.fn() });
     store().setConnection(SERVER);
-    store().receiveDocument(emptyDocument("boot-1"), Date.now());
+    store().receiveDocument(emptyDocument("boot-1"), NOW);
     expect(store().mode).toBe("server");
     store().enqueue(b);
     store().setPaused(true);
@@ -486,7 +490,7 @@ describe("queue modes", () => {
     };
     const document = { ...emptyDocument("boot-1", 3), entries: [queued(a)], inFlight: sending };
     store().setConnection(SERVER);
-    store().receiveDocument(document, Date.now());
+    store().receiveDocument(document, NOW);
     store().setConnection({ ...SERVER, connected: false });
     removeSentThreadFromQueue("env-1:thread-A", null);
     // The queue's own send of B settles while the primary is away.
@@ -497,7 +501,7 @@ describe("queue modes", () => {
     expect(store().inFlight?.sentAt).toBe(7);
 
     store().setConnection(SERVER);
-    store().receiveDocument(document, Date.now());
+    store().receiveDocument(document, NOW);
     await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
     expect(write.mock.calls[0]![0]).toMatchObject({ expectedRevision: 3, state: { entries: [] } });
     expect(write.mock.calls[1]![0]).toMatchObject({
@@ -512,7 +516,7 @@ describe("queue modes", () => {
     store().fail("claim-B", failure);
     expect(store()).toMatchObject({ paused: true, inFlight: null, lastFailure: failure });
     store().setConnection(SERVER);
-    store().receiveDocument(store().server!, Date.now());
+    store().receiveDocument(store().server!, NOW);
     await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(3));
     expect(write.mock.calls[2]![0]).toMatchObject({
       expectedRevision: 5,
@@ -558,7 +562,7 @@ describe("queue modes", () => {
     const server = fakeServer({ ...emptyDocument("boot-1"), entries: [queued(a), queued(c)] });
     store().setWriter({ write: server.write, reportFailure: vi.fn() });
     store().setConnection(SERVER);
-    store().receiveDocument(server.document, Date.now());
+    store().receiveDocument(server.document, NOW);
 
     store().claimEntry({ key: "env-1:thread-A", claimId: "one", now: 1, resolve: resolveWith() });
     expect(await store().confirmClaim("one")).toBe(true);
@@ -585,7 +589,7 @@ describe("queue modes", () => {
     const server = fakeServer({ ...emptyDocument("boot-1"), entries: [queued(a), queued(c)] });
     store().setWriter({ write: server.write, reportFailure: vi.fn() });
     store().setConnection(SERVER);
-    store().receiveDocument(server.document, Date.now());
+    store().receiveDocument(server.document, NOW);
 
     store().claimEntry({ key: "env-1:thread-A", claimId: "one", now: 1, resolve: resolveWith() });
     await store().confirmClaim("one");
@@ -603,7 +607,7 @@ describe("queue modes", () => {
     held();
     expect(store().held).toHaveLength(1);
     store().setConnection(SERVER);
-    store().receiveDocument(server.document, Date.now());
+    store().receiveDocument(server.document, NOW);
     await vi.waitFor(() =>
       expect(server.document.inFlight).toMatchObject({ claimId: "two", handSent: true }),
     );
@@ -621,7 +625,7 @@ describe("queue modes", () => {
     });
     store().setWriter({ write, reportFailure: vi.fn() });
     store().setConnection(SERVER);
-    store().receiveDocument(server.document, Date.now());
+    store().receiveDocument(server.document, NOW);
 
     // In flight, holding the claim behind it. Not a pause: a paused queue refuses the claim anyway.
     store().enqueue(c);
@@ -633,7 +637,7 @@ describe("queue modes", () => {
     await vi.waitFor(() => expect(server.document.entries).toHaveLength(2));
 
     store().setConnection(SERVER);
-    store().receiveDocument(server.document, Date.now());
+    store().receiveDocument(server.document, NOW);
     await vi.waitFor(() => expect(store().pending).toEqual([]));
     expect(write).toHaveBeenCalledTimes(1);
     expect(server.document.inFlight).toBeNull();
@@ -647,7 +651,7 @@ describe("queue modes", () => {
   it("held changes never reach another primary's queue, and a held failure never pauses the local one", async () => {
     const failure = { threadKey: "env-1:thread-C", title: "C", message: "boom" };
     store().setConnection(SERVER);
-    store().receiveDocument({ ...emptyDocument("boot-1"), entries: [queued(a)] }, Date.now());
+    store().receiveDocument({ ...emptyDocument("boot-1"), entries: [queued(a)] }, NOW);
     store().setConnection({ ...SERVER, connected: false });
     removeSentThreadFromQueue("env-1:thread-A", null);
     expect(store().held).toHaveLength(1);
@@ -672,7 +676,7 @@ describe("queue modes", () => {
   // While pending, the last document seen from this primary is shown, and only its.
   it("pending shows the last document mirrored for this primary, read-only", () => {
     store().setConnection(SERVER);
-    store().receiveDocument({ ...emptyDocument("boot-1", 4), entries: [queued(a)] }, Date.now());
+    store().receiveDocument({ ...emptyDocument("boot-1", 4), entries: [queued(a)] }, NOW);
     const other = EnvironmentId.make("env-other");
     store().setConnection({ ...SERVER, primaryId: other, connected: false });
     expect(store()).toMatchObject({ mode: "pending", entries: [] });
@@ -1317,6 +1321,7 @@ describe("a write that gets no reply", () => {
         slowNext = false;
         const applied = applyAfterMs === 0 ? server.apply(input) : null;
         return new Promise((resolve) => {
+          // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- runs under vi.useFakeTimers; advanceTimersByTimeAsync fires it, no real time passes
           setTimeout(() => resolve(applied ?? server.apply(input)), BOUND + 5_000);
         });
       },
@@ -1343,6 +1348,7 @@ describe("a write that gets no reply", () => {
       write: (input) => {
         if (replyMs === null) return never();
         const reply = server.apply(input);
+        // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- runs under vi.useFakeTimers; advanceTimersByTimeAsync fires it, no real time passes
         return new Promise((resolve) => setTimeout(() => resolve(reply), replyMs!));
       },
     });
@@ -1538,6 +1544,7 @@ describe("a write that gets no reply", () => {
 // Ids the server derives from other ids grow past a few hundred characters: an MCP thread id
 // carries an encoded client request id, and a run id encodes the thread id again.
 describe("server-derived ids", () => {
+  beforeEach(() => vi.setSystemTime(NOW));
   const mcpThreadId = (request: string) =>
     [
       "thread",
@@ -1562,7 +1569,7 @@ describe("server-derived ids", () => {
       reportFailure: (error) => failures.push(error),
     });
     store().setConnection(SERVER);
-    store().receiveDocument(server.document, Date.now());
+    store().receiveDocument(server.document, NOW);
     return { server, failures };
   }
 
@@ -1601,6 +1608,7 @@ describe("server-derived ids", () => {
 // A claim whose prior ids outgrow the wire bound fails to encode before it is sent. Nothing
 // distinguishes the next attempt, so the entry would sit at the head and block the queue.
 describe("a claim that cannot be saved", () => {
+  beforeEach(() => vi.setSystemTime(NOW));
   it("leaves the queue, is reported once with its entry, and the next entry is claimed", async () => {
     const server = fakeServer(emptyDocument("boot-1"));
     const encode = Schema.encodeUnknownSync(ThreadQueueSetInput);
@@ -1613,7 +1621,7 @@ describe("a claim that cannot be saved", () => {
       reportFailure,
     });
     store().setConnection(SERVER);
-    store().receiveDocument(server.document, Date.now());
+    store().receiveDocument(server.document, NOW);
     store().enqueue(a);
     store().enqueue(c);
     await vi.waitFor(() => expect(server.document.entries).toHaveLength(2));

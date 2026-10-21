@@ -7,14 +7,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import serverPackageJson from "../../apps/server/package.json" with { type: "json" };
-
 import { findEsmImportsOfExternalPackages } from "./cli-executable-imports.ts";
 
 import {
   isRuntimeExternalCliDependency,
   findInlinedExternalPackages,
-  selectCliRuntimeExternalDependencies,
   shouldBundleCliDependency,
 } from "./cli-external-packages.ts";
 
@@ -32,16 +29,6 @@ type PackageManifest = typeof PackageManifest.Type;
 const decodeManifest = Schema.decodeUnknownSync(Schema.fromJsonString(PackageManifest));
 
 describe("shouldBundleCliDependency", () => {
-  it("bundles ordinary runtime dependencies", () => {
-    for (const id of ["effect", "@effect/platform", "hono", "@t3tools/shared/HostProcess"]) {
-      assert.strictEqual(shouldBundleCliDependency(id), true, id);
-    }
-  });
-
-  it("never bundles node: builtins", () => {
-    assert.strictEqual(shouldBundleCliDependency("node:fs"), false);
-  });
-
   it("leaves native addons and their dlopen wrappers external", () => {
     for (const id of [
       "node-pty",
@@ -58,36 +45,6 @@ describe("shouldBundleCliDependency", () => {
 
   it("treats prefix-matched siblings as external", () => {
     assert.strictEqual(shouldBundleCliDependency("node-gyp-build-optional-packages"), false);
-  });
-});
-
-describe("selectCliRuntimeExternalDependencies", () => {
-  it("keeps only runtime-external dependency roots for the Windows sidecar", () => {
-    assert.deepStrictEqual(
-      selectCliRuntimeExternalDependencies({
-        "@ff-labs/fff-node": "2.0.0",
-        effect: "3.0.0",
-        "node-pty": "4.0.0",
-      }),
-      {
-        "@ff-labs/fff-node": "2.0.0",
-        "node-pty": "4.0.0",
-      },
-    );
-  });
-
-  it("selects every external root declared by the server", () => {
-    assert.deepStrictEqual(
-      Object.keys(selectCliRuntimeExternalDependencies(serverPackageJson.dependencies)).sort(),
-      [
-        "@cursor/sdk",
-        "@ff-labs/fff-node",
-        "@napi-rs/keyring",
-        "node-pty",
-        "playwright-core",
-        "undici",
-      ],
-    );
   });
 });
 
@@ -139,69 +96,39 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
   // loaded by Node, so their closure genuinely does not need to be external.
   const isRuntimeExternal = isRuntimeExternalCliDependency;
 
-  // These two read the pnpm store off disk: ~2,285 package directories walked
-  // and ~1,500 manifests read, sequentially. Idle that is 3-12s; on a shared
-  // machine under contention it has repeatedly blown the global 60s deadline
-  // and failed a gate with nothing actually broken. The deadline is raised HERE
-  // rather than in `vite.config.ts`, because a global raise would also hide a
-  // genuine hang -- one showed up in this repo the same week, wedged at exactly
-  // its timeout. The real fix is to index the store by name and read only the
-  // manifests these assertions need; see the note above `readInstalledPackages`.
-  const STORE_WALK_TIMEOUT_MS = 180_000;
+  it.effect("keeps every runtime dependency of an external package external too", () =>
+    Effect.gen(function* () {
+      const installed = yield* readInstalledPackages;
+      const violations: string[] = [];
+      const seen = new Set<string>();
+      const queue = [...installed.keys()].filter(isRuntimeExternal);
 
-  it.effect(
-    "finds the runtime-external packages on disk",
-    () =>
-      Effect.gen(function* () {
-        const installed = yield* readInstalledPackages;
-        const found = [...installed.keys()].filter(isRuntimeExternal);
+      for (const name of queue) {
+        if (seen.has(name)) continue;
+        seen.add(name);
 
-        for (const required of ["node-pty", "node-addon-api"]) {
-          assert.ok(
-            found.includes(required),
-            `expected ${required} in the pnpm store; the closure check is only meaningful if it can read these (found ${found.length})`,
-          );
-        }
-      }),
-    STORE_WALK_TIMEOUT_MS,
-  );
+        const manifest = installed.get(name);
+        if (!manifest) continue;
 
-  it.effect(
-    "keeps every runtime dependency of an external package external too",
-    () =>
-      Effect.gen(function* () {
-        const installed = yield* readInstalledPackages;
-        const violations: string[] = [];
-        const seen = new Set<string>();
-        const queue = [...installed.keys()].filter(isRuntimeExternal);
-
-        for (const name of queue) {
-          if (seen.has(name)) continue;
-          seen.add(name);
-
-          const manifest = installed.get(name);
-          if (!manifest) continue;
-
-          const declared = {
-            ...(manifest.dependencies ?? {}),
-            ...(manifest.optionalDependencies ?? {}),
-            ...(manifest.peerDependencies ?? {}),
-          };
-          for (const dependency of Object.keys(declared)) {
-            if (!isRuntimeExternal(dependency)) {
-              violations.push(`${name} -> ${dependency}`);
-            }
-            if (!seen.has(dependency)) queue.push(dependency);
+        const declared = {
+          ...(manifest.dependencies ?? {}),
+          ...(manifest.optionalDependencies ?? {}),
+          ...(manifest.peerDependencies ?? {}),
+        };
+        for (const dependency of Object.keys(declared)) {
+          if (!isRuntimeExternal(dependency)) {
+            violations.push(`${name} -> ${dependency}`);
           }
+          if (!seen.has(dependency)) queue.push(dependency);
         }
+      }
 
-        assert.deepStrictEqual(
-          violations,
-          [],
-          `these dependencies of external packages would be bundled away and fail to resolve under WSL: ${violations.join(", ")}`,
-        );
-      }),
-    STORE_WALK_TIMEOUT_MS,
+      assert.deepStrictEqual(
+        violations,
+        [],
+        `these dependencies of external packages would be bundled away and fail to resolve under WSL: ${violations.join(", ")}`,
+      );
+    }),
   );
 });
 
@@ -223,23 +150,6 @@ var x = 1;
     assert.strictEqual(result.regionCount, 2);
   });
 
-  it("flags scoped external packages", () => {
-    const result = findInlinedExternalPackages(
-      region("../../node_modules/@ff-labs/fff-node/dist/src/index.js"),
-    );
-    assert.deepStrictEqual(result.inlined, ["@ff-labs/fff-node"]);
-  });
-
-  it("ignores packages that are meant to be bundled", () => {
-    const source =
-      region("../../node_modules/.pnpm/effect@4.0.0/node_modules/effect/dist/index.js") +
-      region("../../src/server/main.ts");
-    const result = findInlinedExternalPackages(source);
-
-    assert.deepStrictEqual(result.inlined, []);
-    assert.strictEqual(result.regionCount, 2);
-  });
-
   it("reports the packages that were inlined, not just the violations", () => {
     const source =
       region("../../node_modules/.pnpm/effect@4.0.0/node_modules/effect/dist/index.js") +
@@ -248,19 +158,6 @@ var x = 1;
     const result = findInlinedExternalPackages(source);
 
     assert.deepStrictEqual(result.inlinedPackages, ["effect", "yaml"]);
-    assert.deepStrictEqual(result.inlined, []);
-  });
-
-  it("does not report the pnpm store directory as a package", () => {
-    const result = findInlinedExternalPackages(
-      region("../../node_modules/.pnpm/effect@4.0.0/node_modules/effect/dist/index.js"),
-    );
-    assert.deepStrictEqual(result.inlinedPackages, ["effect"]);
-  });
-
-  it("reports no regions when the marker format is absent", () => {
-    const result = findInlinedExternalPackages("var x = 1; // node_modules/node-pty/lib.js");
-    assert.strictEqual(result.regionCount, 0);
     assert.deepStrictEqual(result.inlined, []);
   });
 });

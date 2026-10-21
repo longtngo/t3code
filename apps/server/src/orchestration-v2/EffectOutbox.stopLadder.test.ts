@@ -14,6 +14,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 
 import { layerMemory as SqlitePersistenceMemory } from "../persistence/Sqlite.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -53,7 +54,10 @@ const commitHardPress = (
     return cancelled;
   });
 
-it.live("the second press stops the turn long before the cooperative grace runs out", () =>
+// Under the TestClock the cooperative grace never elapses on its own, so the hard stop
+// can only come from the second press superseding the first, with no time passing. The
+// clock then runs past the grace to prove the superseded rung cannot still escalate.
+it.effect("the second press stops the turn long before the cooperative grace runs out", () =>
   Effect.gen(function* () {
     const outbox = yield* EffectOutbox.EffectOutboxV2;
     const threadId = ThreadId.make("thread:ladder-supersede");
@@ -96,8 +100,9 @@ it.live("the second press stops the turn long before the cooperative grace runs 
       const pressedAt = yield* Clock.currentTimeMillis;
       const cancelled = yield* commitHardPress(outbox, "effect:second-press", threadId);
       assert.deepEqual(cancelled, ["effect:first-press"]);
-      const doneAt = yield* Deferred.await(hardDone).pipe(Effect.timeout("2 seconds"));
-      assert.isBelow(doneAt - pressedAt, 2_000);
+      const doneAt = yield* Deferred.await(hardDone);
+      assert.equal(doneAt - pressedAt, 0, "the hard stop must not wait on any clock time");
+      yield* TestClock.adjust(COOPERATIVE_INTERRUPT_GRACE);
       assert.deepEqual(hardStops, ["effect:second-press"], "exactly one hard stop");
       assert.isTrue(cooperativeInterrupted, "the superseded rung cannot escalate");
       const first = yield* outbox.get("effect:first-press");

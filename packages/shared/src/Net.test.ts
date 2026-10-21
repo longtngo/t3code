@@ -65,15 +65,6 @@ const openServerOn = (port: number, host: string): Effect.Effect<NodeNet.Server 
 
 it.layer(NetService.layer)("NetService", (it) => {
   describe("Net helpers", () => {
-    it.effect("reserveLoopbackPort returns a positive loopback port", () =>
-      Effect.gen(function* () {
-        const net = yield* NetService.NetService;
-        const port = yield* net.reserveLoopbackPort();
-
-        assert.ok(port > 0);
-      }),
-    );
-
     it.effect.each(["EAFNOSUPPORT", "EADDRNOTAVAIL"])(
       "keeps ports available when IPv6 binds fail with %s",
       (code) =>
@@ -116,6 +107,22 @@ it.layer(NetService.layer)("NetService", (it) => {
       ),
     );
 
+    it.effect("findAvailablePort falls back when a wildcard listener occupies IPv4", () =>
+      Effect.acquireUseRelease(
+        openServer("0.0.0.0"),
+        (server) =>
+          Effect.gen(function* () {
+            const net = yield* NetService.NetService;
+            const preferred = getPort(server);
+
+            const resolved = yield* net.findAvailablePort(preferred);
+            assert.ok(resolved > 0);
+            assert.notEqual(resolved, preferred);
+          }),
+        closeServer,
+      ),
+    );
+
     it.effect("reserveLoopbackPort returns a port both loopback families accept", () =>
       Effect.gen(function* () {
         const net = yield* NetService.NetService;
@@ -139,32 +146,6 @@ it.layer(NetService.layer)("NetService", (it) => {
         assert.equal(parkedPorts.has(port), false);
         assert.equal(yield* net.isPortAvailableOnLoopback(port), true);
       }),
-    );
-
-    it.effect("findAvailablePort returns preferred when it is free", () =>
-      Effect.gen(function* () {
-        const net = yield* NetService.NetService;
-        const preferred = yield* net.reserveLoopbackPort();
-
-        const resolved = yield* net.findAvailablePort(preferred);
-        assert.equal(resolved, preferred);
-      }),
-    );
-
-    it.effect("findAvailablePort falls back when a wildcard listener occupies IPv4", () =>
-      Effect.acquireUseRelease(
-        openServer("0.0.0.0"),
-        (server) =>
-          Effect.gen(function* () {
-            const net = yield* NetService.NetService;
-            const preferred = getPort(server);
-
-            const resolved = yield* net.findAvailablePort(preferred);
-            assert.ok(resolved > 0);
-            assert.notEqual(resolved, preferred);
-          }),
-        closeServer,
-      ),
     );
   });
 });

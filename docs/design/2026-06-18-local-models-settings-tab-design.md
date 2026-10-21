@@ -24,7 +24,7 @@ discovered-models mirror per engine.
   replacement** entry (`Schema.optionalKey(LocalModelsSettings)`), mirroring the existing
   `providerInstances` precedent (settings.ts:587-591), and handle it as a replacement in
   `applyServerSettingsPatch` (serverSettings.ts:104-110): `...(patch.localModels !== undefined
-? { localModels: patch.localModels } : {})`. `applyServerSettingsPatch` is a `deepMerge`,
+  ? { localModels: patch.localModels } : {})`. `applyServerSettingsPatch` is a `deepMerge`,
   so a _replacement_ entry (not a merge) is required — otherwise removing a `perModel` /
   `ds4.perModel` key would never persist (deepMerge adds/overwrites, never deletes). The web
   always sends the **full** `localModels` object (read-modify-write from the current value),
@@ -95,7 +95,7 @@ Sections:
   with the bytes↔GB mapping (`bytes/1e9` display, `round(gb*1e9)` commit; `0` = auto). The
   pure mapping lives in `*.logic.ts` and is unit-tested.
 - **`PerModelOverrides`** — advanced (`<details>`) list: rows of `(modelId text,
-ArgsChipEditor, remove)` + "Add override", editing the `perModel` record. Kept in v1
+  ArgsChipEditor, remove)` + "Add override", editing the `perModel` record. Kept in v1
   (the user approved the prototype with it) but behind the advanced disclosure, with the
   discovered-models mirror directly above so ids can be copied; a discovered-model **picker**
   for the key is the deferred follow-up that de-footguns it.

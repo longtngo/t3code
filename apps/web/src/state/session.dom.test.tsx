@@ -1,6 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import { createElement } from "react";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
   EnvironmentId,
@@ -44,10 +44,6 @@ const session = (permissions: AuthSessionState["permissions"]) =>
     scopes: permissions ?? [],
     permissions,
   }) as AuthSessionState;
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-});
 
 describe("useEnvironmentScopeDenied", () => {
   it("is not a denial while the grant is loading", async () => {

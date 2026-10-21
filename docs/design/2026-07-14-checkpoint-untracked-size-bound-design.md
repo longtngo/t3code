@@ -42,7 +42,7 @@ Two facts make this a _class_ of bug, not a one-off:
   the 3.9GB repo. ✓ (Removes the per-turn-overhead objection.)
 - **Restore couples to capture via `git clean -fd`** (GitVcsDriver.ts:780). `restoreCheckpoint`
   runs `git restore --source <c> --worktree --staged -- .` then **`git clean -fd -- .`**. `clean
--fd` deletes every untracked, non-ignored file not in the checkpoint tree — **but respects
+  -fd` deletes every untracked, non-ignored file not in the checkpoint tree — **but respects
   `.gitignore`** (no `-x`). ✓ **This is the critical constraint:** any file capture _skips_ would
   be _deleted_ on the next restore. A size-bound MUST be applied symmetrically to both ends, or
   it silently destroys the user's 446MB artifacts on undo.

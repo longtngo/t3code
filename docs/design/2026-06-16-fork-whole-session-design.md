@@ -54,8 +54,8 @@ No projector / ProviderService / adapter changes — they already handle the dir
 - **`ChatView`** adds `onForkThread`: dispatch `thread.fork` with `sourceThreadId = activeThread.id`,
   a new `newThreadId`, **no** `forkBeforeMessageId`, `title = "<parent> (fork)"`; on success
   `navigate` to the new thread. **No composer pre-fill** (continue from the end). `forkThreadDisabled
-= !isServerThread || activeThread.messages.length === 0 || phase === "running" || isSendBusy ||
-isConnecting`.
+  = !isServerThread || activeThread.messages.length === 0 || phase === "running" || isSendBusy ||
+  isConnecting`.
 - Shared internals (`readEnvironmentApi`, `newThreadId`, `newCommandId`, `navigate`, toast) mirror
   `onForkUserMessage`; the only differences are the omitted `forkBeforeMessageId` and the absence of
   prefill. Factor the common dispatch into a small helper to avoid duplication.

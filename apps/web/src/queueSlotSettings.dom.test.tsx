@@ -1,7 +1,7 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { QueueSlotSettings } from "@t3tools/contracts";
 import { type Atom, AtomRegistry } from "effect/reactivity";
-import { act, useEffect } from "react";
+import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // The primary environment, its server config atom and the settings command's network call are
@@ -65,7 +65,7 @@ import {
   useSetQueueSlots,
 } from "./queueSlotSettings";
 import { primaryServerConfigAtom } from "./state/server";
-import { renderDom } from "./testing/renderDom";
+import { act, renderDom } from "./testing/renderDom";
 
 const configAtom = primaryServerConfigAtom as unknown as Atom.Writable<{
   settings: Record<string, unknown>;

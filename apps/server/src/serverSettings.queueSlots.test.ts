@@ -117,24 +117,22 @@ it.layer(NodeServices.layer)("queue slot settings writes", (it) => {
     }).pipe(Effect.provide(layer())),
   );
 
-  it.effect(
-    "6: a mixed patch on a broken file writes the other key as before, without the queue",
-    () =>
-      Effect.gen(function* () {
-        const { settingsPath } = yield* ServerConfig.ServerConfig;
-        const settings = yield* ServerSettingsModule.ServerSettingsService;
-        NodeFS.writeFileSync(settingsPath, BROKEN);
-        yield* settings.getRawSettings;
-        const result = yield* settings.updateSettings({
+  it.effect("6: a mixed patch on a broken file is refused and leaves the file alone", () =>
+    Effect.gen(function* () {
+      const { settingsPath } = yield* ServerConfig.ServerConfig;
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      NodeFS.writeFileSync(settingsPath, BROKEN);
+      yield* settings.getRawSettings;
+      // Upstream #18582: a save never replaces a settings file it cannot parse.
+      const error = yield* Effect.flip(
+        settings.updateSettings({
           queueSlots: { slots: 2 },
           cursorKeychainUsageEnabled: true,
-        });
-        // Pins today's behaviour for a non-queue key: the broken file is replaced.
-        const written = fileJson(settingsPath);
-        assert.isTrue(written.cursorKeychainUsageEnabled);
-        assert.notProperty(written, "queueSlots");
-        assert.isUndefined(result.queueSlots);
-      }).pipe(Effect.provide(layer())),
+        }),
+      );
+      assert.equal(error.operation, "read-file");
+      assert.equal(NodeFS.readFileSync(settingsPath, "utf8"), BROKEN);
+    }).pipe(Effect.provide(layer())),
   );
 
   it.effect("7 (I11): an import keeps a history-enabled provider enabled", () =>

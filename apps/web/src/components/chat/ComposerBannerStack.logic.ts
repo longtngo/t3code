@@ -6,10 +6,10 @@ interface ArrangeableBanner {
 }
 
 function noticeRank(item: ArrangeableBanner) {
-  if (item.priority === "activity") return 0;
   if (item.priority === "urgent" || item.variant === "error" || item.variant === "warning") {
-    return 1;
+    return 0;
   }
+  if (item.priority === "activity") return 1;
   return 2;
 }
 
@@ -19,7 +19,7 @@ function noticeRank(item: ArrangeableBanner) {
  * The front row is attached to the composer. Status rows (connection, message sync)
  * describe whether the thread is usable right now, so they never fold: they stack
  * above the front in their given order. Everything else folds behind the peek.
- * Activity and urgent notices keep the front; otherwise the first status row takes
+ * Urgent notices, then activity, keep the front; otherwise the first status row takes
  * it, so a passive notice never sits closer to the composer than the connection.
  */
 export function arrangeComposerBannerStack<T extends ArrangeableBanner>(

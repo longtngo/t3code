@@ -35,7 +35,7 @@ window size.**
    that instance's option list, fall back to the raw slug — using the surviving
    `getTriggerDisplayModelName`.
 2. Thread it as `modelDisplayName` through `VitalsGaugeConnected → VitalsGauge → VitalsDetail →
-ContextBlock`, the same path `providerDisplayName` already takes.
+   ContextBlock`, the same path `providerDisplayName` already takes.
 3. Render it in the Context block's header row, joined to the existing window size:
    `Opus 5 · 1m window`. When the name is unknown, the row degrades to exactly what it shows today.
 

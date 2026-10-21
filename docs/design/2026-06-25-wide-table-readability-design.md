@@ -24,7 +24,7 @@ required interaction.
   - `.chat-markdown table { min-width: max-content }` — forces the table wider than
     its container, which is what pushes the last column off-screen.
   - `[data-expanded="false"] th,td { white-space: nowrap; text-overflow: ellipsis;
-overflow: hidden; max-width: 24rem }` — truncates every cell to one line by
+    overflow: hidden; max-width: 24rem }` — truncates every cell to one line by
     default.
   - An `expanded` toggle (the `⤢` button) flips cells to `overflow-wrap: anywhere`
     and freezes measured column widths.
@@ -43,7 +43,7 @@ full-width overlay for the extreme case.**
 
 1. **Default = wrap, not truncate.** Remove `min-width: max-content` and the
    `nowrap/ellipsis` truncation. Cells get `white-space: normal; overflow-wrap:
-anywhere`. With `table { width: 100% }` and auto table layout, the browser caps
+   anywhere`. With `table { width: 100% }` and auto table layout, the browser caps
    the table at the column width and wraps cell content — no text is ever hidden.
    `overflow-wrap: anywhere` also breaks long unbreakable tokens (URLs/paths) so
    they cannot force horizontal overflow on desktop.

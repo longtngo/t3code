@@ -249,6 +249,7 @@ it.live("the startup finalizer silences web push before shutdown cancels running
       Layer.succeed(ServiceLauncherClient.ServiceLauncherClient, stub()),
       // Startup reads these only on paths this test never reaches.
       Layer.succeed(AnalyticsService.AnalyticsService, stub()),
+      Layer.succeed(ServerSecretStore.ServerSecretStore, stub()),
       Layer.succeed(EnvironmentAuth.EnvironmentAuth, stub()),
       Layer.succeed(ExternalLauncher.ExternalLauncher, stub()),
       Layer.succeed(GitVcsDriver.GitVcsDriver, stub()),

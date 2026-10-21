@@ -1,9 +1,8 @@
 import type { WorkspaceMember } from "@t3tools/contracts";
 import { EnvironmentId } from "@t3tools/contracts";
-import { act } from "react";
 import { describe, expect, it } from "vite-plus/test";
 
-import { renderDom } from "../testing/renderDom";
+import { act, renderDom } from "../testing/renderDom";
 import WorkspaceMembersControl from "./WorkspaceMembersControl";
 
 function member(id: string, title: string): WorkspaceMember {

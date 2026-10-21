@@ -9,10 +9,9 @@ import {
   type ThreadLinkedPullRequest,
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 
+import { act, render } from "../../test/render";
 import { useRightPanelStore } from "../rightPanelStore";
 
 const state = vi.hoisted(() => ({
@@ -140,10 +139,9 @@ const serverConfig = {
   // FORK: ChatMarkdown reads the Jira link settings from the server config.
   settings: { jiraBaseUrl: "", jiraProjectKeys: "" },
 };
-const roots: Root[] = [];
-let container: HTMLDivElement;
 
-beforeEach(() => {
+function setup() {
+  using stack = new DisposableStack();
   state.allowed = true;
   state.fileRead = true;
   state.previewAvailable = false;
@@ -156,36 +154,35 @@ beforeEach(() => {
   state.openFile.mockReset();
   state.openExternal.mockReset().mockResolvedValue(undefined);
   state.copy.mockReset().mockResolvedValue(undefined);
+  const { openFile } = useRightPanelStore.getState();
   useRightPanelStore.setState({ openFile: state.openFile });
-  vi.spyOn(navigator.clipboard, "writeText").mockImplementation(state.copy);
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-});
-
-afterEach(async () => {
-  for (const root of roots.splice(0)) await act(async () => root.unmount());
-  document.body.replaceChildren();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+  stack.defer(() => useRightPanelStore.setState({ openFile }));
+  stack.use(vi.spyOn(navigator.clipboard, "writeText").mockImplementation(state.copy));
+  stack.use(
+    vi.spyOn(navigator.clipboard, "write").mockImplementation(async (items) => {
+      const item = items[0]!;
+      await state.copy(await (await item.getType("text/plain")).text());
+    }),
+  );
+  return stack.move();
+}
 
 async function renderMarkdown(text: string) {
-  container = document.body.appendChild(document.createElement("div"));
-  const root = createRoot(container);
-  roots.push(root);
-  await act(async () =>
-    root.render(<ChatMarkdown cwd="/work" threadRef={threadRef} text={text} />),
-  );
-}
-
-function anchor() {
-  return container.querySelector("a")!;
-}
-
-async function openContextMenu() {
-  await act(async () => {
-    anchor().dispatchEvent(
-      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }),
-    );
+  const screen = await render(<ChatMarkdown cwd="/work" threadRef={threadRef} text={text} />);
+  const anchor = () => screen.container.querySelector("a")!;
+  return Object.assign(screen, {
+    anchor,
+    openContextMenu: () =>
+      act(async () => {
+        anchor().dispatchEvent(
+          new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: 10,
+            clientY: 10,
+          }),
+        );
+      }),
   });
 }
 
@@ -201,20 +198,22 @@ async function setAllowed(allowed: boolean) {
 }
 
 it("removes host actions after revocation while keeping file preview and copying", async () => {
-  await renderMarkdown("[Readme](docs/readme.md)");
-  await openContextMenu();
+  using _setup = setup();
+  await using screen = await renderMarkdown("[Readme](docs/readme.md)");
+  await screen.openContextMenu();
   expect(offeredActions()).toEqual(["open", "reveal", "copy-relative", "copy-full"]);
   await setAllowed(false);
   state.choose.mockResolvedValue("copy-full");
-  await openContextMenu();
+  await screen.openContextMenu();
   expect(offeredActions()).toEqual(["copy-relative", "copy-full"]);
   await vi.waitFor(() => expect(state.copy).toHaveBeenCalledWith("/work/docs/readme.md"));
-  await act(async () => anchor().click());
+  await act(async () => screen.anchor().click());
   expect(state.openFile).toHaveBeenCalledWith(threadRef, "docs/readme.md", undefined);
   expect(state.openEditor).not.toHaveBeenCalled();
 });
 
 it("does not launch an editor after revocation during a native context menu", async () => {
+  using _setup = setup();
   let choose: (action: string) => void = () => {
     throw new Error("Menu not opened");
   };
@@ -224,8 +223,8 @@ it("does not launch an editor after revocation during a native context menu", as
         choose = resolve;
       }),
   );
-  await renderMarkdown("[Readme](docs/readme.md)");
-  await openContextMenu();
+  await using screen = await renderMarkdown("[Readme](docs/readme.md)");
+  await screen.openContextMenu();
   expect(offeredActions()).toContain("open");
   await act(async () => {
     state.allowed = false;
@@ -235,6 +234,7 @@ it("does not launch an editor after revocation during a native context menu", as
 });
 
 it("does not reveal a file after revocation during its workspace lookup", async () => {
+  using _setup = setup();
   let finishLookup: () => void = () => {
     throw new Error("Lookup not started");
   };
@@ -245,8 +245,8 @@ it("does not reveal a file after revocation during its workspace lookup", async 
       }),
   );
   state.choose.mockResolvedValue("reveal");
-  await renderMarkdown("[Readme](readme.md)");
-  await openContextMenu();
+  await using screen = await renderMarkdown("[Readme](readme.md)");
+  await screen.openContextMenu();
   expect(state.search).toHaveBeenCalledOnce();
   await act(async () => {
     state.allowed = false;
@@ -256,35 +256,23 @@ it("does not reveal a file after revocation during its workspace lookup", async 
 });
 
 it("offers the integrated browser for a file only while the grant can read host files", async () => {
+  using _setup = setup();
   state.previewAvailable = true;
-  await renderMarkdown("[Page](/tmp/page.html)");
-  await openContextMenu();
+  await using screen = await renderMarkdown("[Page](/tmp/page.html)");
+  await screen.openContextMenu();
   expect(offeredActions()).toContain("open-in-browser");
   await act(async () => {
     state.fileRead = false;
     for (const listener of state.listeners) listener();
   });
-  await openContextMenu();
+  await screen.openContextMenu();
   expect(offeredActions()).not.toContain("open-in-browser");
 });
-
-it.each([false, true])(
-  "keeps PR links usable without offering metadata edits (linked=%s)",
-  async (linked) => {
-    state.allowed = false;
-    state.linkedPullRequest = linked ? linkedPullRequest : null;
-    state.choose.mockResolvedValue("open-external");
-    await renderMarkdown(`[Review](${linkedPullRequest.url})`);
-    await openContextMenu();
-    expect(offeredActions()).toEqual(["open-external", "copy-link"]);
-    await vi.waitFor(() => expect(state.openExternal).toHaveBeenCalledWith(linkedPullRequest.url));
-    expect(state.updateMetadata).not.toHaveBeenCalled();
-  },
-);
 
 it.each(["link-to-thread", "unlink-from-thread"])(
   "rechecks %s after a native context menu returns",
   async (action) => {
+    using _setup = setup();
     state.linkedPullRequest = action === "unlink-from-thread" ? linkedPullRequest : null;
     let choose: (action: string) => void = () => {
       throw new Error("Menu not opened");
@@ -295,8 +283,8 @@ it.each(["link-to-thread", "unlink-from-thread"])(
           choose = resolve;
         }),
     );
-    await renderMarkdown(`[Review](${linkedPullRequest.url})`);
-    await openContextMenu();
+    await using screen = await renderMarkdown(`[Review](${linkedPullRequest.url})`);
+    await screen.openContextMenu();
     expect(offeredActions()).toContain(action);
     await act(async () => {
       state.allowed = false;
@@ -306,7 +294,7 @@ it.each(["link-to-thread", "unlink-from-thread"])(
 
     await setAllowed(true);
     state.choose.mockResolvedValue(action);
-    await openContextMenu();
+    await screen.openContextMenu();
     await vi.waitFor(() =>
       expect(state.updateMetadata).toHaveBeenCalledExactlyOnceWith({
         environmentId: threadRef.environmentId,

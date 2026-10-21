@@ -26,7 +26,7 @@ panel (like the diff panel) on desktop, instead of the current overlay sheet.
 - `apps/web/src/components/FileViewerSidebar.tsx` — rendered globally in
   `routes/__root.tsx:155` inside a `RightPanelSheet` (overlay). Markdown →
   `ChatMarkdown`; HTML → sandboxed `<iframe srcdoc>` (sandbox `allow-scripts
-allow-popups`, **no** `allow-same-origin`). Has a `handlePopOut` "open in new
+  allow-popups`, **no** `allow-same-origin`). Has a `handlePopOut` "open in new
   tab" for HTML. Reads content via `readEnvironmentApi(env).projects.readFile`.
 - Diff panel (`routes/_chat.$environmentId.$threadId.tsx`) is the layout template
   to copy: desktop renders `<SidebarInset><ChatView/></SidebarInset>` +
@@ -75,7 +75,7 @@ template, and the cache live as module-level helpers / a layer-closure `Map` in
      html with `fromCache: true`, **without reading or hashing** the file.
    - Else read the file, compute a SHA-256 content hash. If the hash matches the cached
      entry → refresh the cached `mtimeMs`/`size` and return cached html (`fromCache:
-true`). (Covers touch-without-change.)
+     true`). (Covers touch-without-change.)
    - Else convert markdown → HTML, store the new entry, return `fromCache: false`.
    - LRU cap (e.g. 64 entries) bounds memory; eviction is least-recently-used.
 4. **Conversion**: `marked` (GFM enabled) → body HTML, wrapped in a self-contained

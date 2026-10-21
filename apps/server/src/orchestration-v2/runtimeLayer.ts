@@ -44,6 +44,7 @@ import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
+import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
@@ -287,6 +288,7 @@ const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
     Layer.mergeAll(
       layerThreadLaunchProvided,
       layerThreadManagementProvided,
+      layerManagedProjectFoldersProvided,
       layerSecretRequestsProvided,
     ),
   ),
@@ -367,7 +369,13 @@ export const layerProduction = Layer.mergeAll(
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,
   UsageLimitRecoveryWorker.layer.pipe(
-    Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerThreadManagementProvided)),
+    Layer.provide(
+      Layer.mergeAll(
+        ProjectionStore.layer,
+        layerThreadManagementProvided,
+        layerOrchestratorProvided,
+      ),
+    ),
   ),
   layerProviderContinuationWorkerProvided,
   layerAgentSessionImporterProvided,
@@ -375,6 +383,8 @@ export const layerProduction = Layer.mergeAll(
   // The client intake gate (ThreadMessageIntake) checks receipts before refusing a send.
   layerCommandReceiptStoreProvided,
 ).pipe(
+  // Before the member hooks: the scheduled-task layer it carries needs them too.
+  Layer.provide(ResourceCleanupService.layer.pipe(Layer.provide(layerScheduledTaskProvided))),
   // Fork: workspace member repositories in capture, finalization and rollback.
   // A required service, so dropping this provide fails the server typecheck.
   Layer.provide(

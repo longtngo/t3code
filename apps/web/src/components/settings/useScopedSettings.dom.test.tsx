@@ -1,10 +1,10 @@
 import { EnvironmentAuthorizationError, type AuthSessionState } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
-import { act, useEffect } from "react";
+import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { renderDom } from "../../testing/renderDom";
+import { act, renderDom } from "../../testing/renderDom";
 
 type Grant = AsyncResult.AsyncResult<AuthSessionState, unknown>;
 

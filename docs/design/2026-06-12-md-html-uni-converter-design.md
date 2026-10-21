@@ -78,7 +78,7 @@ interface MarkdownHtmlRendererShape {
 3. **Fallback** to `renderMarkdownDocument(markdown)` via a single blanket
    `Effect.catchAll` over the whole scoped round-trip — the failure channel is the full
    `ProcessRunError` union (`ProcessSpawnError | ProcessStdinError |
-ProcessOutputLimitError | ProcessReadError | ProcessTimeoutError`) plus
+   ProcessOutputLimitError | ProcessReadError | ProcessTimeoutError`) plus
    `PlatformError` from the temp-file IO, so we catch the _union_, not named tags. We
    additionally treat these _value_-channel results as fallback triggers: non-zero /
    null `code`, `timedOut`, and a missing or whitespace-only output file. Log at debug

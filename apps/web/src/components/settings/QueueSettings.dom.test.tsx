@@ -1,7 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { QueueSlotSettings } from "@t3tools/contracts";
 import { type Atom, AtomRegistry } from "effect/reactivity";
-import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Same seams as QueueSlotsControl.dom.test.tsx: primary environment, its server config atom and
@@ -69,7 +68,7 @@ vi.mock("../../state/use-atom-command", () => ({
 
 import { useQueueSlotSettingsStore } from "../../queueSlotSettingsStore";
 import { primaryServerConfigAtom } from "../../state/server";
-import { renderDom } from "../../testing/renderDom";
+import { act, renderDom } from "../../testing/renderDom";
 import { QueueSlotsControl, useQueueSlots } from "../QueueSlotsControl";
 import type { QueueSlotInstance } from "../threadQueue.logic";
 import { QueueSettingsView } from "./QueueSettings";

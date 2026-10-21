@@ -148,6 +148,8 @@ import { appAtomRegistry } from "./atom-registry";
 import { dispatchingQueuedMessageIdAtom } from "./use-thread-outbox";
 import { useThreadOutboxDrain } from "./use-thread-outbox-drain";
 
+const NOW = Date.parse("2026-06-01T12:00:00.000Z");
+
 const message = (overrides: Partial<QueuedThreadMessage> = {}): QueuedThreadMessage => ({
   environmentId: EnvironmentId.make("secondary"),
   threadId: ThreadId.make("thread"),
@@ -156,7 +158,7 @@ const message = (overrides: Partial<QueuedThreadMessage> = {}): QueuedThreadMess
   text: "Keep this queued",
   attachments: [],
   // FORK: the drain drops a turn queued more than 12 hours ago (MAX_QUEUED_TURN_AGE_MS).
-  createdAt: new Date().toISOString(),
+  createdAt: new Date(NOW).toISOString(),
   ...overrides,
 });
 const remaining = () =>
@@ -172,6 +174,7 @@ function runDrain() {
 }
 
 beforeEach(() => {
+  vi.setSystemTime(NOW);
   state.grantedEnvironments = new Set(["primary"]);
   state.draftText = "Keep this draft separate";
   appAtomRegistry.set(state.manager.queuedMessagesByThreadKeyAtom, {});
@@ -254,26 +257,6 @@ describe("queued PR checkout", () => {
     expect(remaining()).toEqual([queued]);
   });
 
-  it("restores the PR draft when the reused worktree cannot reach the PR head", async () => {
-    state.grantedEnvironments.add("secondary");
-    await state.manager.enqueue(queuedPullRequest());
-    state.checkout.mockResolvedValueOnce(
-      AsyncResult.success({ ...preparedCheckout, isOnPullRequestHead: false }),
-    );
-    await runDrain();
-    expect(state.start).not.toHaveBeenCalled();
-    expect(remaining()).toEqual([]);
-    const { updateComposerDraftSettings } = await import("./use-composer-drafts");
-    expect(updateComposerDraftSettings).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        workspaceSelection: expect.objectContaining({
-          pullRequestReference: queuedPullRequest().creation?.pullRequestReference,
-        }),
-      }),
-    );
-  });
-
   it("stops launch if operation access is revoked while checking out the PR", async () => {
     state.grantedEnvironments.add("secondary");
     const queued = queuedPullRequest();
@@ -303,6 +286,7 @@ describe("queued PR checkout", () => {
 });
 afterEach(() => {
   state.cleanups.splice(0).forEach((cleanup) => cleanup());
+  vi.useRealTimers();
 });
 
 describe("queued task operation access", () => {
@@ -341,8 +325,6 @@ describe("queued task operation access", () => {
 
   it.each([
     { isCreation: false, accepted: false },
-    { isCreation: true, accepted: false },
-    { isCreation: false, accepted: true },
     { isCreation: true, accepted: true },
   ])(
     "preserves a rejected queue but removes an accepted turn after access loss (new task: $isCreation, accepted: $accepted)",

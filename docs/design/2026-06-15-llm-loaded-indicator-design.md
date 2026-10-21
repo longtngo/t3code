@@ -57,14 +57,14 @@ A new streaming subscription `subscribeLlmModels` parallel to `subscribeHostMetr
 New schemas:
 
 - `LlmModel` = `{ id, loaded: boolean, state?: string, sizeBytes?: number,
-quantization?: string, contextLength?: number, isMoe?: boolean,
-capabilities?: readonly string[] }`
+  quantization?: string, contextLength?: number, isMoe?: boolean,
+  capabilities?: readonly string[] }`
 - `LlmProvider` = `{ name, baseUrl, reachable: boolean, error?: string,
-models: readonly LlmModel[] }`
+  models: readonly LlmModel[] }`
 - `LlmModelsSample` = `{ ts: number, providers: readonly LlmProvider[] }`
 - `WsSubscribeLlmModelsRpc` = `Rpc.make(WS_METHODS.subscribeLlmModels, { payload:{
-intervalMs?: number }, success: LlmModelsSample, error:
-EnvironmentAuthorizationError, stream: true })`, added to `WsRpcGroup` and
+  intervalMs?: number }, success: LlmModelsSample, error:
+  EnvironmentAuthorizationError, stream: true })`, added to `WsRpcGroup` and
   `WS_METHODS` (`subscribeLlmModels`) — a 3-site change (enum @ `rpc.ts:209`,
   `Rpc.make`, group list @ `rpc.ts:658-717`).
 - **Each schema gets its `typeof X.Type` export** (mirror `rpc.ts:644`), since the
@@ -98,7 +98,7 @@ Mirror `HostMetrics.ts`:
   satisfied ambiently by `FetchHttpClient.layer` — **NOT raw `fetch`**, which the
   server source never uses and which won't interrupt/trace correctly). Pattern:
   `providerMaintenance.ts:403-406` — `const client = yield* HttpClient.HttpClient;
-HttpClientRequest.get(baseUrl + "/v1/models").pipe(setHeader("accept","application/json"))`,
+  HttpClientRequest.get(baseUrl + "/v1/models").pipe(setHeader("accept","application/json"))`,
   bounded by `Effect.timeout`/`timeoutOption` (~1.5 s) like `readGpu` bounds the
   spawn (`HostMetrics.ts:110-115`). Parse OpenAI `data[]`, map mlx-serve fields.
   Resident = `loaded === true` when the field exists, else `true` (served = loaded).
@@ -148,7 +148,7 @@ HttpClientRequest.get(baseUrl + "/v1/models").pipe(setHeader("accept","applicati
 - `apps/web/src/components/chat/LlmModels.tsx`: the widget. **Copy
   `HostMetrics.tsx:232-280` structure verbatim** — two controls:
   1. **Popover trigger** (uncontrolled): `<PopoverTrigger openOnHover delay={150}
-closeDelay={0} render={<button aria-label="Local models" .../>} />`. base-ui's
+     closeDelay={0} render={<button aria-label="Local models" .../>} />`. base-ui's
      default `stickIfOpen:true` already gives "hover OR click opens, click pins it
      open" — **no controlled `open`/`onOpenChange` state, no custom hover handlers.**
   2. **Separate sibling live-dot button** (`aria-label="Pause local-model probing"`,
@@ -168,7 +168,7 @@ closeDelay={0} render={<button aria-label="Local models" .../>} />`. base-ui's
     orange "unreachable" tag + note; footer "N resident · M available".
   - **Disabled (paused) collapsed state** mirrors `HostMetrics.tsx:208-221`: a single
     button (`aria-label="Enable local-model probing"`) with a gray dot + `models
-paused` text (`hidden sm:inline`). Empty (no resident, providers up) and
+    paused` text (`hidden sm:inline`). Empty (no resident, providers up) and
     connecting states mirror HostMetrics' popover bodies.
 - `apps/web/src/components/BranchToolbar.tsx`: render `<LlmModels />` after
   `<HostMetrics />` inside the existing wrap container; add the hook calls.

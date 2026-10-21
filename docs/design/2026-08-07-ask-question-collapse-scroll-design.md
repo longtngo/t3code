@@ -50,7 +50,7 @@ with no extra wiring.
 ## Approach — restore the cap and the collapse toggle
 
 1. **Bounded, internally scrolling options.** `max-h-[40dvh] sm:max-h-[22rem] overflow-y-auto
-overscroll-contain pr-1`. Only the options list scrolls; the header, the question text and the
+   overscroll-contain pr-1`. Only the options list scrolls; the header, the question text and the
    multi-select hint stay pinned above it, so the thing you must read to answer is never scrolled
    away. `dvh` (not `vh`) so the mobile keyboard opening or a rotation re-clamps.
    `overscroll-contain` stops a flick at the list's end from chaining into the timeline behind.

@@ -122,7 +122,7 @@ const liveStreamAfter = (afterSequence: number) =>
 1. **Pump + output are trampolined.** `Stream.runForEachArray` and `Stream.fromPull`
    are both driven by `Channel.runWith`'s `Effect.forever(Effect.flatMap(pull, f))`
    (effect `Channel.js:3714`); `Effect.forever` = `whileLoop` (`internal/effect.js
-:1186`), whose primitive re-pushes _itself_ and returns to constant depth
+   :1186`), whose primitive re-pushes _itself_ and returns to constant depth
    (`fiber._stack.push(this)`, effect.js:1827-1841). Each `pull`/pump iteration
    runs on a fresh shallow stack that unwinds on return — **no per-element or
    per-batch frame accumulation**, unlike `stepToBuffer`'s `loop()` self-recursion.

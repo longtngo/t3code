@@ -63,7 +63,7 @@ freshly-starting session and no attempt to kill a non-existent provider process.
 - Skill/coordinator wiring: the agent records the originating `ThreadId` before launching the
   coordinator (passed via env `RESUME_THREAD_ID`). After the health check is green, the
   coordinator runs `node dist/bin.mjs thread resume --thread "$RESUME_THREAD_ID" --message
-"Backend rebuilt and healthy — continue."`. t3code resumes the provider session via its
+  "Backend rebuilt and healthy — continue."`. t3code resumes the provider session via its
   continuation `groupKey`, so the agent picks up with full context.
 - **Descope condition (per the task's explicit gate):** if the CLI cannot be made to drive the
   WS client from Node without interactive auth or browser-only deps, ship A+C and hand B back

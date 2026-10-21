@@ -122,7 +122,7 @@ export const layer: Layer.Layer<
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
 
-    const load = (input: {
+    const load = Effect.fn("ProviderTurnControlService.load")(function* (input: {
       readonly threadId: ThreadId;
       readonly providerSessionId: ProviderSessionId;
       readonly replacementProviderSessionId?: ProviderSessionId;
@@ -130,46 +130,68 @@ export const layer: Layer.Layer<
       readonly providerTurnId: ProviderTurnId;
       readonly operation: "interrupt" | "restart" | "steer";
       readonly messageId?: MessageId;
-    }) =>
-      Effect.gen(function* () {
-        const context = yield* projections.getProviderControlContext(input.threadId, input);
-        const { providerThread, providerTurn } = context;
-        const targetsRecordedSession =
-          providerThread?.providerSessionId === input.providerSessionId;
-        const targetsCommittedReplacement =
-          input.operation === "restart" &&
-          input.replacementProviderSessionId !== undefined &&
-          providerThread?.providerSessionId === input.replacementProviderSessionId;
-        if (
-          providerThread === undefined ||
-          providerTurn === undefined ||
-          (!targetsRecordedSession && !targetsCommittedReplacement) ||
-          providerTurn.providerThreadId !== providerThread.id
-        ) {
+    }) {
+      const context = yield* projections.getProviderControlContext(input.threadId, input);
+      const { providerThread, providerTurn } = context;
+      const targetsRecordedSession = providerThread?.providerSessionId === input.providerSessionId;
+      const targetsCommittedReplacement =
+        input.operation === "restart" &&
+        input.replacementProviderSessionId !== undefined &&
+        providerThread?.providerSessionId === input.replacementProviderSessionId;
+      if (
+        providerThread === undefined ||
+        providerTurn === undefined ||
+        (!targetsRecordedSession && !targetsCommittedReplacement) ||
+        providerTurn.providerThreadId !== providerThread.id
+      ) {
+        return yield* new ProviderTurnControlError({
+          threadId: input.threadId,
+          operation: input.operation,
+          providerTurnId: input.providerTurnId,
+          cause: "The recorded provider execution target is no longer valid.",
+        });
+      }
+      // A restart-session command commits the replacement binding before its
+      // process-bound effect runs. The old live runtime must still receive
+      // the interrupt, but only when the projection matches the exact
+      // replacement captured by that same durable effect.
+      const interruptProviderThread = targetsRecordedSession
+        ? providerThread
+        : { ...providerThread, providerSessionId: input.providerSessionId };
+      if (providerTurn.status !== "running") {
+        if (input.operation === "steer") {
           return yield* new ProviderTurnControlError({
             threadId: input.threadId,
-            operation: input.operation,
+            operation: "steer",
             providerTurnId: input.providerTurnId,
-            cause: "The recorded provider execution target is no longer valid.",
+            turnCompleted: providerTurn.status === "completed",
+            cause: "The provider turn ended before the steering message was delivered.",
           });
         }
-        // A restart-session command commits the replacement binding before its
-        // process-bound effect runs. The old live runtime must still receive
-        // the interrupt, but only when the projection matches the exact
-        // replacement captured by that same durable effect.
-        const interruptProviderThread = targetsRecordedSession
-          ? providerThread
-          : { ...providerThread, providerSessionId: input.providerSessionId };
-        if (providerTurn.status !== "running") {
-          if (input.operation === "steer") {
-            return yield* new ProviderTurnControlError({
+        return {
+          context,
+          providerThread: interruptProviderThread,
+          providerTurn,
+          session: Option.none(),
+        };
+      }
+      const session = yield* sessions.get(input.providerSessionId);
+      if (Option.isNone(session)) {
+        // Interrupt/restart against a already-released session must not fail
+        // the durable effect (and retry 5x). The turn may still look running
+        // in projection until recovery/finalization; there is no live adapter
+        // to interrupt.
+        if (input.operation === "interrupt" || input.operation === "restart") {
+          yield* Effect.logWarning(
+            "Provider interrupt/restart found no live session; treating as already stopped",
+            {
               threadId: input.threadId,
-              operation: "steer",
+              operation: input.operation,
+              providerSessionId: input.providerSessionId,
               providerTurnId: input.providerTurnId,
-              turnCompleted: providerTurn.status === "completed",
-              cause: "The provider turn ended before the steering message was delivered.",
-            });
-          }
+              providerTurnStatus: providerTurn.status,
+            },
+          );
           return {
             context,
             providerThread: interruptProviderThread,
@@ -177,62 +199,39 @@ export const layer: Layer.Layer<
             session: Option.none(),
           };
         }
-        const session = yield* sessions.get(input.providerSessionId);
-        if (Option.isNone(session)) {
-          // Interrupt/restart against a already-released session must not fail
-          // the durable effect (and retry 5x). The turn may still look running
-          // in projection until recovery/finalization; there is no live adapter
-          // to interrupt.
-          if (input.operation === "interrupt" || input.operation === "restart") {
-            yield* Effect.logWarning(
-              "Provider interrupt/restart found no live session; treating as already stopped",
-              {
-                threadId: input.threadId,
-                operation: input.operation,
-                providerSessionId: input.providerSessionId,
-                providerTurnId: input.providerTurnId,
-                providerTurnStatus: providerTurn.status,
-              },
-            );
-            return {
-              context,
-              providerThread: interruptProviderThread,
-              providerTurn,
-              session: Option.none(),
-            };
-          }
-          return yield* new ProviderTurnControlError({
-            threadId: input.threadId,
-            operation: input.operation,
-            providerTurnId: input.providerTurnId,
-            cause: `Provider session ${input.providerSessionId} is not active.`,
-          });
-        }
-        return { context, providerThread: interruptProviderThread, providerTurn, session };
-      });
+        return yield* new ProviderTurnControlError({
+          threadId: input.threadId,
+          operation: input.operation,
+          providerTurnId: input.providerTurnId,
+          cause: `Provider session ${input.providerSessionId} is not active.`,
+        });
+      }
+      return { context, providerThread: interruptProviderThread, providerTurn, session };
+    });
 
     // Terminal provider events project on a detached ingestion fiber, so the
     // cooperative rung reads the projection until the turn leaves `running`.
     // Always bounded by the caller's `COOPERATIVE_INTERRUPT_GRACE`.
-    const awaitProviderTurnSettled = (input: {
+    const awaitProviderTurnSettled = Effect.fn(
+      "ProviderTurnControlService.awaitProviderTurnSettled",
+    )(function* (input: {
       readonly threadId: ThreadId;
       readonly providerThreadId: ProviderThreadId;
       readonly providerTurnId: ProviderTurnId;
-    }) =>
-      Effect.gen(function* () {
-        while (true) {
-          const { providerTurn } = yield* projections.getProviderControlContext(
-            input.threadId,
-            input,
-          );
-          if (providerTurn?.status !== "running") return;
-          yield* Effect.sleep(COOPERATIVE_SETTLE_POLL);
-        }
-      });
+    }) {
+      while (true) {
+        const { providerTurn } = yield* projections.getProviderControlContext(
+          input.threadId,
+          input,
+        );
+        if (providerTurn?.status !== "running") return;
+        yield* Effect.sleep(COOPERATIVE_SETTLE_POLL);
+      }
+    });
 
     return ProviderTurnControlServiceV2.of({
-      interrupt: (input) =>
-        Effect.gen(function* () {
+      interrupt: Effect.fn("ProviderTurnControlService.interrupt")(
+        function* (input) {
           const loaded = yield* load({ ...input, operation: "interrupt" });
           const session = Option.isSome(loaded.session)
             ? loaded.session
@@ -335,20 +334,23 @@ export const layer: Layer.Layer<
             }
           }).pipe(Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()));
           return "hard" as const;
-        }).pipe(
-          Effect.mapError((cause) =>
-            isProviderTurnControlError(cause)
-              ? cause
-              : new ProviderTurnControlError({
-                  threadId: input.threadId,
-                  operation: "interrupt",
-                  providerTurnId: input.providerTurnId,
-                  cause,
-                }),
+        },
+        (effect, input) =>
+          effect.pipe(
+            Effect.mapError((cause) =>
+              isProviderTurnControlError(cause)
+                ? cause
+                : new ProviderTurnControlError({
+                    threadId: input.threadId,
+                    operation: "interrupt",
+                    providerTurnId: input.providerTurnId,
+                    cause,
+                  }),
+            ),
           ),
-        ),
-      interruptAndAwaitTerminal: (input) =>
-        Effect.gen(function* () {
+      ),
+      interruptAndAwaitTerminal: Effect.fn("ProviderTurnControlService.interruptAndAwaitTerminal")(
+        function* (input) {
           const loaded = yield* load({ ...input, operation: "restart" });
           if (Option.isNone(loaded.session)) {
             // No live adapter: nothing can emit a terminal provider-turn update
@@ -401,20 +403,23 @@ export const layer: Layer.Layer<
             providerTurnId: input.providerTurnId,
             cause: `Provider turn ${input.providerTurnId} did not terminalize before restart.`,
           });
-        }).pipe(
-          Effect.mapError((cause) =>
-            isProviderTurnControlError(cause)
-              ? cause
-              : new ProviderTurnControlError({
-                  threadId: input.threadId,
-                  operation: "restart",
-                  providerTurnId: input.providerTurnId,
-                  cause,
-                }),
+        },
+        (effect, input) =>
+          effect.pipe(
+            Effect.mapError((cause) =>
+              isProviderTurnControlError(cause)
+                ? cause
+                : new ProviderTurnControlError({
+                    threadId: input.threadId,
+                    operation: "restart",
+                    providerTurnId: input.providerTurnId,
+                    cause,
+                  }),
+            ),
           ),
-        ),
-      steer: (input) =>
-        Effect.gen(function* () {
+      ),
+      steer: Effect.fn("ProviderTurnControlService.steer")(
+        function* (input) {
           const context = yield* projections.getProviderControlContext(input.threadId, input);
           const ownership = context.message?.delegatedCompletion;
           if (ownership !== undefined) {
@@ -483,18 +488,21 @@ export const layer: Layer.Layer<
                 }),
               ),
             );
-        }).pipe(
-          Effect.mapError((cause) =>
-            isProviderTurnControlError(cause)
-              ? cause
-              : new ProviderTurnControlError({
-                  threadId: input.threadId,
-                  operation: "steer",
-                  providerTurnId: input.providerTurnId,
-                  cause,
-                }),
+        },
+        (effect, input) =>
+          effect.pipe(
+            Effect.mapError((cause) =>
+              isProviderTurnControlError(cause)
+                ? cause
+                : new ProviderTurnControlError({
+                    threadId: input.threadId,
+                    operation: "steer",
+                    providerTurnId: input.providerTurnId,
+                    cause,
+                  }),
+            ),
           ),
-        ),
+      ),
     });
   }),
 );

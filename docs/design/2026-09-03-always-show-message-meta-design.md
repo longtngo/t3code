@@ -16,7 +16,7 @@ Baseline @ 8537c8bad: `grep -c alwaysShowMessageTimestamps packages/contracts/sr
 One boolean client setting, threaded to the two places the hover classes live.
 
 - `packages/contracts/src/settings.ts` — `alwaysShowMessageTimestamps:
-Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false)))` in `ClientSettings`,
+  Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false)))` in `ClientSettings`,
   `Schema.optionalKey(Schema.Boolean)` in `ClientSettingsPatch`. The parity guard in
   `settings.test.ts` covers only the server pair (measured: dropping the client mirror leaves
   138/138 green; typecheck catches it at the first `updateSettings` call), so this change adds

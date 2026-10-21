@@ -4,7 +4,6 @@ import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import { AsyncResult, AtomRegistry } from "effect/reactivity";
-import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // The primary, its config support and the queue subscription are writable atoms; the outgoing
@@ -75,7 +74,7 @@ vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => setThreadQue
 
 import * as environments from "../state/environments";
 import * as server from "../state/server";
-import { renderDom } from "../testing/renderDom";
+import { act, renderDom } from "../testing/renderDom";
 import { THREAD_QUEUE_STORAGE_KEY, useThreadQueueStore } from "../threadQueueStore";
 import { ThreadQueueServerSync } from "./ThreadQueueServerSync";
 
@@ -100,7 +99,11 @@ const document = (bootId: string, revision: number) => ({
 let registry: AtomRegistry.AtomRegistry;
 const set = (atom: never, value: unknown) => act(async () => registry.set(atom, value as never));
 
+// The server's clock reads the same as this device's, which stays fixed for the test.
+const NOW = Date.UTC(2026, 0, 1);
+
 beforeEach(async () => {
+  vi.setSystemTime(NOW);
   localStorage.clear();
   fixture.writes.length = 0;
   fixture.subscribed.length = 0;
@@ -114,6 +117,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   localStorage.clear();
   useThreadQueueStore.getState().setWriter(null);
 });
@@ -140,7 +144,7 @@ describe("ThreadQueueServerSync", () => {
     });
     await set(
       mocked.documents("env-a"),
-      AsyncResult.success({ document: document("boot-a", 1), serverTime: Date.now() }),
+      AsyncResult.success({ document: document("boot-a", 1), serverTime: NOW }),
     );
     expect(useThreadQueueStore.getState().mode).toBe("server");
 
@@ -154,7 +158,7 @@ describe("ThreadQueueServerSync", () => {
       fixture.writes[0]?.reply({
         ok: true,
         document: document("boot-a", 2),
-        serverTime: Date.now(),
+        serverTime: NOW,
       }),
     );
     expect(useThreadQueueStore.getState().server?.bootId).not.toBe("boot-a");
@@ -167,7 +171,7 @@ describe("ThreadQueueServerSync", () => {
     await set(server.primaryThreadQueueSupportAtom as never, live);
     await set(
       mocked.documents("env-a"),
-      AsyncResult.success({ document: document("boot-a", 1), serverTime: Date.now() }),
+      AsyncResult.success({ document: document("boot-a", 1), serverTime: NOW }),
     );
     expect(useThreadQueueStore.getState()).toMatchObject({ mode: "server", readOnly: false });
 
@@ -176,7 +180,7 @@ describe("ThreadQueueServerSync", () => {
       registry.set(mocked.primaryAtom, primary("env-a", "Server A", "disconnected") as never);
       registry.set(
         mocked.documents("env-a"),
-        AsyncResult.success({ document: document("boot-a", 2), serverTime: Date.now() }) as never,
+        AsyncResult.success({ document: document("boot-a", 2), serverTime: NOW }) as never,
       );
     });
     expect(useThreadQueueStore.getState()).toMatchObject({ mode: "pending", readOnly: true });
@@ -190,7 +194,7 @@ describe("ThreadQueueServerSync", () => {
 
     await set(
       mocked.documents("env-a"),
-      AsyncResult.success({ document: document("boot-a", 3), serverTime: Date.now() }),
+      AsyncResult.success({ document: document("boot-a", 3), serverTime: NOW }),
     );
     expect(useThreadQueueStore.getState().server?.revision).toBe(3);
     await act(async () => useThreadQueueStore.getState().setPaused(true));
@@ -205,7 +209,7 @@ describe("ThreadQueueServerSync", () => {
     });
     await set(
       mocked.documents("env-a"),
-      AsyncResult.success({ document: document("boot-a", 1), serverTime: Date.now() }),
+      AsyncResult.success({ document: document("boot-a", 1), serverTime: NOW }),
     );
     await act(async () => useThreadQueueStore.getState().setPaused(true));
     await set(mocked.primaryAtom, primary("env-a", "Renamed A"));
@@ -215,7 +219,7 @@ describe("ThreadQueueServerSync", () => {
       fixture.writes[0]?.reply({
         ok: true,
         document: { ...document("boot-a", 2), paused: true },
-        serverTime: Date.now(),
+        serverTime: NOW,
       }),
     );
     expect(useThreadQueueStore.getState()).toMatchObject({
@@ -233,7 +237,7 @@ describe("ThreadQueueServerSync", () => {
     });
     await set(
       mocked.documents("env-a"),
-      AsyncResult.success({ document: document("boot-a", 1), serverTime: Date.now() }),
+      AsyncResult.success({ document: document("boot-a", 1), serverTime: NOW }),
     );
     expect(useThreadQueueStore.getState().mode).toBe("server");
   };
@@ -319,7 +323,7 @@ describe("ThreadQueueServerSync", () => {
         mocked.documents("env-a"),
         AsyncResult.success({
           document: { ...document("boot-a", 2), entries: [queued] },
-          serverTime: Date.now(),
+          serverTime: NOW,
         }),
       );
       await act(async () => {
@@ -385,7 +389,7 @@ describe("ThreadQueueServerSync", () => {
     await set(mocked.primaryAtom, primary("env-a", "Server A"));
     await set(
       mocked.documents("env-a"),
-      AsyncResult.success({ document: document("boot-a", 2), serverTime: Date.now() }),
+      AsyncResult.success({ document: document("boot-a", 2), serverTime: NOW }),
     );
     expect(useThreadQueueStore.getState().mode).toBe("server");
     expect(fixture.toasts).toEqual([notice]);

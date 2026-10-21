@@ -1,5 +1,5 @@
 import { RegistryContext } from "@effect/atom-react";
-import { act, createElement } from "react";
+import { createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ThreadId, type ServerConfig } from "@t3tools/contracts";
 import { Atom, AtomRegistry } from "effect/reactivity";
@@ -17,7 +17,7 @@ vi.mock("../../state/server", () => ({
 vi.mock("../../state/threads", () => ({ environmentThreadShells: {} }));
 
 import { SidebarThreadSubagentIndicator } from "./SidebarThreadSubagentIndicator";
-import { renderDom } from "../../testing/renderDom";
+import { act, renderDom } from "../../testing/renderDom";
 
 const env = EnvironmentId.make("env-indicator");
 const otherEnv = EnvironmentId.make("env-indicator-other");
@@ -39,7 +39,6 @@ let configAtom: Atom.Writable<ServerConfig | null>;
 let registry: AtomRegistry.AtomRegistry;
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   configAtom = Atom.make<ServerConfig | null>(config({}));
   fixture.configs = new Map<string, unknown>([
     [env, configAtom],

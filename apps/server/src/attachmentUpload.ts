@@ -63,13 +63,13 @@ export function resolveUploadedAttachmentPath(input: {
  * Decode base64 bytes, enforce the size limit, and write them under `attachmentsDir`,
  * returning the absolute path for the agent to Read.
  */
-export const writeUploadedAttachment = (input: {
-  readonly attachmentsDir: string;
-  readonly threadId: string;
-  readonly fileName: string;
-  readonly dataBase64: string;
-}): Effect.Effect<{ readonly path: string }, AttachmentUploadError> =>
-  Effect.gen(function* () {
+export const writeUploadedAttachment = Effect.fn("attachmentUpload.writeUploadedAttachment")(
+  function* (input: {
+    readonly attachmentsDir: string;
+    readonly threadId: string;
+    readonly fileName: string;
+    readonly dataBase64: string;
+  }): Effect.fn.Return<{ readonly path: string }, AttachmentUploadError> {
     const bytes = Buffer.from(input.dataBase64, "base64");
     if (bytes.byteLength === 0) {
       return yield* new AttachmentUploadError({ message: "Uploaded file is empty." });
@@ -100,4 +100,5 @@ export const writeUploadedAttachment = (input: {
     });
 
     return { path: targetPath };
-  });
+  },
+);

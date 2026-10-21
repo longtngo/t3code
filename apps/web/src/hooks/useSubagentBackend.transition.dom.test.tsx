@@ -1,5 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import { createElement, startTransition, Suspense } from "react";
+// oxlint-disable-next-line t3code/require-disposable-render -- a discarded transition render needs React's real scheduler, which renderDom's act would flush synchronously
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, type SubagentBackendState } from "@t3tools/contracts";
@@ -68,7 +69,6 @@ function P(props: { env: EnvironmentId; suspend: boolean }) {
 
 describe("useSubagentBackend discarded transition render", () => {
   it("applies the committed environment's set answer after a transition render is thrown away", async () => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
     renders.length = 0;
     fx.q = new Map([
       [`base:${A}`, { data: st("a"), isPending: false }],
@@ -109,7 +109,6 @@ describe("useSubagentBackend discarded transition render", () => {
       root.unmount();
       host.remove();
       fx.setGate = null;
-      vi.unstubAllGlobals();
     }
   });
 });

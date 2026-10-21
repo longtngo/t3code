@@ -315,6 +315,7 @@ it.live("a watch event applies an untrusted file the timer would skip", () =>
       Queue.take(seen),
       Effect.forever(
         Effect.andThen(
+          // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- paces rewrites to a real fs watcher that macOS drops events from under load; the Queue.take above is the milestone
           Effect.sleep("300 millis"),
           Effect.sync(() => NodeFS.writeFileSync(settingsPath, "{")),
         ),

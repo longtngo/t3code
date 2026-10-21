@@ -1543,65 +1543,59 @@ describe("WebPushRelay interim finish by a newer run", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect(
-    "sends another thread's failure while a finish is held",
-    () =>
-      Effect.gen(function* () {
-        const firstSend = yield* Deferred.make<void>();
-        const { relay, harness } = yield* makeHarness({
-          subscriptions: [subscription(FCM)],
-          threads: {
-            streamDomainEvents: Stream.empty,
-            getThreadShell: (threadId) => Effect.succeed(shell({ id: threadId })),
-          },
-          respond: () => Deferred.succeed(firstSend, undefined).pipe(Effect.as(201)),
-        });
-        yield* relay.handleEvent(runUpdated(run()));
-        const other = ThreadId.make("push-other");
-        yield* relay.handleEvent(
-          runUpdated(run({ id: RunId.make("run-other"), threadId: other, status: "failed" })),
-        );
-        // No clock movement: a hold inside the serial worker would never get here.
-        yield* Deferred.await(firstSend);
-        assert.deepEqual(harness.sent, [FCM]);
-        yield* settle(relay);
-        assert.deepEqual(harness.sent, [FCM, FCM]);
-      }).pipe(Effect.scoped),
-    10_000,
+  it.effect("sends another thread's failure while a finish is held", () =>
+    Effect.gen(function* () {
+      const firstSend = yield* Deferred.make<void>();
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: (threadId) => Effect.succeed(shell({ id: threadId })),
+        },
+        respond: () => Deferred.succeed(firstSend, undefined).pipe(Effect.as(201)),
+      });
+      yield* relay.handleEvent(runUpdated(run()));
+      const other = ThreadId.make("push-other");
+      yield* relay.handleEvent(
+        runUpdated(run({ id: RunId.make("run-other"), threadId: other, status: "failed" })),
+      );
+      // No clock movement: a hold inside the serial worker would never get here.
+      yield* Deferred.await(firstSend);
+      assert.deepEqual(harness.sent, [FCM]);
+      yield* settle(relay);
+      assert.deepEqual(harness.sent, [FCM, FCM]);
+    }).pipe(Effect.scoped),
   );
 
-  it.effect(
-    "a held finish ends with the relay's scope, and drain still resolves",
-    () =>
-      Effect.gen(function* () {
-        const scope = yield* Scope.make();
-        const failureSent = yield* Deferred.make<void>();
-        const { relay, harness } = yield* makeHarness({
-          subscriptions: [subscription(FCM)],
-          threads: {
-            streamDomainEvents: Stream.empty,
-            getThreadShell: (threadId) => Effect.succeed(shell({ id: threadId })),
-          },
-          respond: () => Deferred.succeed(failureSent, undefined).pipe(Effect.as(201)),
-        }).pipe(Scope.provide(scope));
-        yield* relay.handleEvent(runUpdated(run()));
-        // The serial worker reaches this failure only after it has held the finish.
-        yield* relay.handleEvent(
-          runUpdated(
-            run({
-              id: RunId.make("run-other"),
-              threadId: ThreadId.make("push-other"),
-              status: "failed",
-            }),
-          ),
-        );
-        yield* Deferred.await(failureSent);
-        // Without `stop` first; server shutdown calls `stop` before this scope closes.
-        yield* Scope.close(scope, Exit.void);
-        yield* relay.drain;
-        yield* TestClock.adjust(FINAL_FINISH_GRACE_MILLIS);
-        assert.deepEqual(harness.sent, [FCM]);
-      }),
-    10_000,
+  it.effect("a held finish ends with the relay's scope, and drain still resolves", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const failureSent = yield* Deferred.make<void>();
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: (threadId) => Effect.succeed(shell({ id: threadId })),
+        },
+        respond: () => Deferred.succeed(failureSent, undefined).pipe(Effect.as(201)),
+      }).pipe(Scope.provide(scope));
+      yield* relay.handleEvent(runUpdated(run()));
+      // The serial worker reaches this failure only after it has held the finish.
+      yield* relay.handleEvent(
+        runUpdated(
+          run({
+            id: RunId.make("run-other"),
+            threadId: ThreadId.make("push-other"),
+            status: "failed",
+          }),
+        ),
+      );
+      yield* Deferred.await(failureSent);
+      // Without `stop` first; server shutdown calls `stop` before this scope closes.
+      yield* Scope.close(scope, Exit.void);
+      yield* relay.drain;
+      yield* TestClock.adjust(FINAL_FINISH_GRACE_MILLIS);
+      assert.deepEqual(harness.sent, [FCM]);
+    }),
   );
 });

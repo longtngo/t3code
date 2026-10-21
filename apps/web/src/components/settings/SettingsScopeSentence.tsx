@@ -33,6 +33,7 @@ import {
   ALL_PROJECTS_VALUE,
   environmentAxisValue,
   projectAxisValue,
+  projectScopeMenuGroups,
   selectEnvironmentAxis,
   selectProjectAxis,
   settingsScopeEnvironmentAddress,
@@ -234,6 +235,13 @@ function EnvironmentScopeMenu({
   const selected = environments.find(
     (environment) => environment.environmentId === environmentValue,
   );
+  const project = groups.find((group) => group.projectKey === value.project);
+  const memberEnvironmentIds = project
+    ? new Set(project.memberProjects.map((member) => member.environmentId))
+    : null;
+  const options = memberEnvironmentIds
+    ? environments.filter((environment) => memberEnvironmentIds.has(environment.environmentId))
+    : environments;
   return (
     <ScopeMenu
       ariaLabel="Environment scope"
@@ -267,7 +275,7 @@ function EnvironmentScopeMenu({
               icon: <LayersIcon aria-hidden className="size-3.5 shrink-0" />,
             }
       }
-      options={environments.map((environment) => {
+      options={options.map((environment) => {
         const { primary, secondary } = settingsScopeEnvironmentLabels(environment, environments);
         return {
           value: environment.environmentId,
@@ -292,7 +300,7 @@ function EnvironmentScopeMenu({
 
 function ProjectScopeMenu({ value, groups, environments, onChange }: SettingsScopeMenuProps) {
   const selected = groups.find((group) => group.projectKey === value.project);
-  const projects = groups.map((group) => ({
+  const projects = projectScopeMenuGroups(groups, value).map((group) => ({
     group,
     machines: settingsScopeProjectMachines(group, environments, true).join(", "),
   }));

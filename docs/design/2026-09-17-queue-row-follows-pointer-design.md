@@ -236,7 +236,7 @@ the suite could not see, all of them live-reachable:
 
 - The clip box's TOP edge. Dragging a row downward auto-scrolls the list until the header sits at
   73..105 under a viewport starting at 96, so its top 23px are unpainted; dropping `pointer.y >=
-box.top` enqueued wrongly 5 times out of 5 with 6032 tests and all 20 arms green. Every existing
+  box.top` enqueued wrongly 5 times out of 5 with 6032 tests and all 20 arms green. Every existing
   check sampled the BOTTOM edge only.
 - The zone rect's RIGHT edge. No arm can discriminate a horizontal operand - every probe fixes x at
   the dragged row's centre and varies only y - so releasing 5px right of the header enqueued 3/3.

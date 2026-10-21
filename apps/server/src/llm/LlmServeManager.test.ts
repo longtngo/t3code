@@ -45,53 +45,52 @@ const isAlive = (pid: number): boolean => {
 // the layer-scoped tester. Under the default TestClock the grace period is
 // virtual time that never elapses, and an earlier version of this test passed
 // identically with `forceKillAfter` removed entirely.
-it.live(
-  "reaps a model server that ignores SIGTERM, instead of waiting on it forever",
-  () =>
-    Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const scope = yield* Scope.make();
+it.live("reaps a model server that ignores SIGTERM, instead of waiting on it forever", () =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const scope = yield* Scope.make();
 
-      const child = yield* spawner
-        .spawn(
-          // Survives a SIGTERM delivered to the whole process GROUP, which is
-          // what `detached: true` makes the spawner signal. `trap "" TERM; sleep
-          // 600` is not enough: the group signal kills the untrapped `sleep`
-          // child, the trapping shell falls through and exits on its own, and
-          // the escalation is never reached. The loop restarts the sleep, so the
-          // shell really does outlive SIGTERM.
-          ChildProcess.make("/bin/sh", ["-c", 'trap "" TERM; while true; do sleep 0.2; done'], {
-            detached: true,
-            shell: false,
-            stdout: "ignore",
-            stderr: "ignore",
-            forceKillAfter: Duration.seconds(1),
-          }),
-        )
-        .pipe(Effect.provideService(Scope.Scope, scope));
+    const child = yield* spawner
+      .spawn(
+        // Survives a SIGTERM delivered to the whole process GROUP, which is
+        // what `detached: true` makes the spawner signal. `trap "" TERM; sleep
+        // 600` is not enough: the group signal kills the untrapped `sleep`
+        // child, the trapping shell falls through and exits on its own, and
+        // the escalation is never reached. The loop restarts the sleep, so the
+        // shell really does outlive SIGTERM.
+        ChildProcess.make("/bin/sh", ["-c", 'trap "" TERM; while true; do sleep 0.2; done'], {
+          detached: true,
+          shell: false,
+          stdout: "ignore",
+          stderr: "ignore",
+          forceKillAfter: Duration.seconds(1),
+        }),
+      )
+      .pipe(Effect.provideService(Scope.Scope, scope));
 
-      const pid = Number(child.pid);
-      yield* Effect.sleep(Duration.millis(300));
-      assert.isTrue(isAlive(pid), "the fixture process should be running before we stop it");
+    const pid = Number(child.pid);
+    // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- lets the real shell install its TERM trap; nothing observable marks that point
+    yield* Effect.sleep(Duration.millis(300));
+    assert.isTrue(isAlive(pid), "the fixture process should be running before we stop it");
 
-      // The live clock, because this test runs under `it.live` — it measures
-      // real elapsed wall time, which is the whole point.
-      const startedAt = yield* Clock.currentTimeMillis;
-      yield* Scope.close(scope, Exit.void);
-      const closeMs = (yield* Clock.currentTimeMillis) - startedAt;
+    // The live clock, because this test runs under `it.live` — it measures
+    // real elapsed wall time, which is the whole point.
+    const startedAt = yield* Clock.currentTimeMillis;
+    yield* Scope.close(scope, Exit.void);
+    const closeMs = (yield* Clock.currentTimeMillis) - startedAt;
 
-      // The close actually waited out the grace period. If this were ~0 the
-      // escalation was never exercised and the assertion below would prove
-      // nothing — which is exactly how the first version of this test lied.
-      assert.isAtLeast(closeMs, 900);
+    // The close actually waited out the grace period. If this were ~0 the
+    // escalation was never exercised and the assertion below would prove
+    // nothing — which is exactly how the first version of this test lied.
+    assert.isAtLeast(closeMs, 900);
 
-      yield* Effect.sleep(Duration.millis(300));
-      assert.isFalse(
-        isAlive(pid),
-        "the process must actually be dead, not merely abandoned by a timeout",
-      );
-    }).pipe(Effect.provide(NodeServices.layer)),
-  { timeout: 30_000 },
+    // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- gives the kernel time to reap the SIGKILLed real process before probing its pid
+    yield* Effect.sleep(Duration.millis(300));
+    assert.isFalse(
+      isAlive(pid),
+      "the process must actually be dead, not merely abandoned by a timeout",
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 it("bounds the production stop with a real, positive grace period", () => {

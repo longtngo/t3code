@@ -27,7 +27,7 @@ itself. It is distinct from — and complementary to — the existing
 
 - **Completion signal.** A thread's derived UI truth is `thread.latestTurn.state`
   (`apps/web/src/store.ts`), which transitions `running → completed | error |
-interrupted` when the assistant turn stops streaming. The orchestration event
+  interrupted` when the assistant turn stops streaming. The orchestration event
   stream carries `thread.message.assistant.complete` and `thread.session-set`
   (session `status` leaving `running`, `activeTurnId → null`). The derived
   `latestTurn.state` transition is the most robust trigger because it is the
@@ -44,7 +44,7 @@ interrupted` when the assistant turn stops streaming. The orchestration event
   `DesktopBridge` contract, `packages/contracts/src/ipc.ts:397`) via
   `contextBridge` in `apps/desktop/src/preload.ts`. Each capability is a channel
   in `apps/desktop/src/ipc/channels.ts`, a `makeIpcMethod({channel, payload,
-result, handler})` in `apps/desktop/src/ipc/methods/*.ts`, wired in
+  result, handler})` in `apps/desktop/src/ipc/methods/*.ts`, wired in
   `DesktopIpcHandlers.ts`. `confirm`, `setTheme`, `openExternal`,
   `showContextMenu` are simple request/response templates; `onMenuAction` /
   `onCloudAuthCallback` are the main→renderer push template.
@@ -191,7 +191,7 @@ separate `ElectronNotification` service**; inline like `openExternal`):
   `showNotification(input: DesktopNotificationInput) => Promise<void>` and
   `onNotificationActivated(listener) => () => void`, plus a
   `DesktopNotificationInputSchema` ({ `title`, `body`, `threadRef:
-{environmentId, threadId}` }) in `packages/contracts/src/ipc.ts`.
+  {environmentId, threadId}` }) in `packages/contracts/src/ipc.ts`.
 - **Channel:** `desktop:show-notification` and `desktop:notification-activated`
   in `ipc/channels.ts`.
 - **Method (inline):** `showNotification` in a new `ipc/methods/notifications.ts`
@@ -201,7 +201,7 @@ separate `ElectronNotification` service**; inline like `openExternal`):
   pushes the activation to the renderer. ~15 lines; no service wrapper.
 - **Click → navigate (reuse existing pattern):** mirror `onCloudAuthCallback` /
   `onMenuAction` exactly — `electronWindow.sendAll(NOTIFICATION_ACTIVATED_CHANNEL,
-threadRef)`; preload exposes `onNotificationActivated(listener)` (copy of the
+  threadRef)`; preload exposes `onNotificationActivated(listener)` (copy of the
   `onCloudAuthCallback` wrapper); a small web hook
   (`useNotificationActivation.ts`) subscribes — **guarded with
   `typeof ...onNotificationActivated === "function"`** — and routes via
@@ -212,7 +212,7 @@ threadRef)`; preload exposes `onNotificationActivated(listener)` (copy of the
 
 - Add `notifyOnThreadCompletion: Schema.Boolean` (decoding default **false**)
   to `ClientSettingsSchema`, and `notifyOnThreadCompletion:
-Schema.optionalKey(Schema.Boolean)` to `ClientSettingsPatch`
+  Schema.optionalKey(Schema.Boolean)` to `ClientSettingsPatch`
   (`packages/contracts/src/settings.ts:490`). The decoding default makes old
   persisted localStorage payloads lacking the key decode cleanly (backward
   compatible, verified — same pattern as `autoOpenPlanSidebar`).

@@ -91,11 +91,12 @@ export function ThreadDetailsCard({
     const measure = () => {
       const frame = element.closest<HTMLElement>("[data-thread-details-card]");
       const next = element.offsetHeight + (frame ? frame.offsetHeight - frame.clientHeight : 0);
-      // Activity sections (Tasks, Background, Lineage) grow with Show more and scroll with the
-      // card. Counting them toward density would hide the workspace controls as a list grows.
+      // Activity sections (Tasks, Background, Lineage) and PR lists grow with Show more and
+      // scroll with the card. Counting them toward density would hide the workspace controls as
+      // a list grows.
       const activityHeight = Array.from(
         element.querySelectorAll<HTMLElement>(
-          "[data-thread-relationships-panel], [data-thread-details-activity]",
+          "[data-thread-relationships-panel], [data-thread-details-activity], [data-thread-details-pr-list]",
         ),
       ).reduce((sum, section) => sum + section.offsetHeight, 0);
       const fittingHeight = next - activityHeight;

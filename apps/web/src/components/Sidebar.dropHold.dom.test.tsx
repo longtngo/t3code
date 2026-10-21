@@ -1,9 +1,9 @@
-import { act, useEffect } from "react";
+import { useEffect } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { SidebarThreadSummary } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
-import { renderDom } from "../testing/renderDom";
+import { act, renderDom } from "../testing/renderDom";
 import {
   customSidebarSection,
   holdSidebarDrop,

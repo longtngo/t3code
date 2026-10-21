@@ -248,7 +248,7 @@ The corrected design drops the coordinator (it stays dormant) for a simple monot
   rather than silently dropping the tail past the read cap. No cursor → the existing snapshot path.
 - **Client (`service.ts`):** each subscription tracks `lastAppliedSequence` (a monotonic high-water
   mark, persisted across reconnects). A reconnect resubscribes with `fromSequenceExclusive =
-lastAppliedSequence`. Events apply when `sequence > lastAppliedSequence` (which preserves order AND
+  lastAppliedSequence`. Events apply when `sequence > lastAppliedSequence` (which preserves order AND
   dedups the read/live overlap); there is deliberately **no contiguity/gap check** — the thread stream
   is sparse on the global axis, and completeness is the server's responsibility (stream-all-or-snapshot).
 - **Removed** the now-dead `applyEnvironmentThreadDetailEvent` (superseded by the inline apply path).

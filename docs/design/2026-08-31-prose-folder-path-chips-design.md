@@ -230,7 +230,7 @@ streaming re-scan, longest message (41,258 chars), 1032 deltas:
 - `apps/web/src/markdown-links.ts` — export the known-root predicate
 - `apps/web/src/chatFilePathLinks.ts` — the widened gate
 - `apps/web/src/chatFilePathLinks.test.ts` — **three existing assertions invert.** `it("only links
-file kinds the viewer can render")` currently asserts `/etc/hosts` (`:82`), `.env` (`:86`) and
+  file kinds the viewer can render")` currently asserts `/etc/hosts` (`:82`), `.env` (`:86`) and
   `clip.mp4` (`:88`) all resolve to `null`. The first two flip under this design, the third under
   the video design, and the test's stated contract is the one being replaced. It is rewritten to
   express the new contract, not deleted.

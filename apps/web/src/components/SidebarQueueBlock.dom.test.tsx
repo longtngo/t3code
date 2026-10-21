@@ -1,4 +1,3 @@
-import { act } from "react";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import { DndContext } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
@@ -7,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { ForeignQueueRow, SidebarQueueBlock } from "./SidebarQueueBlock";
 import { useQueueSlotSettingsStore } from "../queueSlotSettingsStore";
-import { renderDom } from "../testing/renderDom";
+import { act, renderDom } from "../testing/renderDom";
 import { threadQueueEntryKey, type ThreadQueueEntry } from "../threadQueueRules";
 import { queueDeviceId, useThreadQueueStore } from "../threadQueueStore";
 

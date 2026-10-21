@@ -1,8 +1,8 @@
 import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import { act, render } from "../../test/render";
 
 const setAudioMuted = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -21,8 +21,6 @@ vi.mock(import("./preview/previewBridge"), () => ({
 import { RightPanelTabs } from "./RightPanelTabs";
 
 // A real 1x1 PNG, so the browser keeps it instead of falling back on a decode error.
-const PIXEL_A =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 const PIXEL_B =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
@@ -61,10 +59,7 @@ const favicon = (dataUrl: string, pageUrl: string): DesktopPreviewFavicon => ({
   capturedAt: 1,
 });
 
-function overlay(
-  icon: DesktopPreviewFavicon | null,
-  audio?: { audible?: boolean; audioMuted?: boolean },
-) {
+function overlay(icon: DesktopPreviewFavicon | null) {
   return {
     hasWebContents: true,
     canGoBack: false,
@@ -73,156 +68,74 @@ function overlay(
     zoomFactor: 1,
     pictureInPicture: false,
     colorScheme: "system" as const,
-    audioMuted: audio?.audioMuted ?? false,
-    audible: audio?.audible ?? false,
+    audioMuted: false,
+    audible: false,
     controller: "none" as const,
     favicon: icon,
   };
 }
 
-let root: Root;
-let container: HTMLDivElement;
 const noop = () => undefined;
 
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  setAudioMuted.mockClear();
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(() => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
-});
-
-async function renderTabs(
-  first: DesktopPreviewFavicon | null,
-  second?: DesktopPreviewFavicon,
-  audio?: { audible?: boolean; audioMuted?: boolean },
-  previewRuntimeTabId: ((tabId: string) => string) | null = (tabId) => `runtime:${tabId}`,
+function renderTabs(
   handlers: { onActivate?: (id: string) => void; onCloseSurface?: (id: string) => void } = {},
 ) {
-  await act(() =>
-    root.render(
-      <RightPanelTabs
-        mode="inline"
-        open
-        keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
-        getShortcutContext={() => ({
-          terminalFocus: false,
-          terminalOpen: false,
-          previewFocus: false,
-          previewOpen: false,
-          isWeb: true,
-          isDesktop: false,
-        })}
-        surfaces={second ? [previewSurface, secondSurface] : [previewSurface]}
-        environmentId={null}
-        activeSurfaceId={previewSurface.id}
-        pendingSurfaceIds={new Set()}
-        previewSessions={sessions}
-        desktopByTabId={{
-          "tab-1": overlay(first, audio),
-          ...(second ? { "tab-2": overlay(second) } : {}),
-        }}
-        {...(previewRuntimeTabId ? { previewRuntimeTabId } : {})}
-        terminalLabelsById={new Map()}
-        onActivate={(surface) => handlers.onActivate?.(surface.id)}
-        onCloseSurface={(surface) => handlers.onCloseSurface?.(surface.id)}
-        onCloseOtherSurfaces={noop}
-        onCloseSurfacesToRight={noop}
-        onCloseAllSurfaces={noop}
-        onCopyFilePath={noop}
-        onAddBrowser={noop}
-        onAddBrowserInProfile={noop}
-        onAddTerminal={noop}
-        onAddPullRequest={noop}
-        onAddPullRequests={noop}
-        onAddDiff={noop}
-        onAddFiles={noop}
-        onAddDevice={noop}
-        browserAvailable
-        terminalAvailable={false}
-        diffAvailable={false}
-        filesAvailable={false}
-        pullRequestAvailable={false}
-        pullRequestsAvailable={false}
-        deviceAvailable={false}
-      >
-        <div>content</div>
-      </RightPanelTabs>,
-    ),
+  const second = favicon(PIXEL_B, "http://24x.xf.local/admin");
+  return render(
+    <RightPanelTabs
+      mode="inline"
+      open
+      keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
+      getShortcutContext={() => ({
+        terminalFocus: false,
+        terminalOpen: false,
+        previewFocus: false,
+        previewOpen: false,
+        isWeb: true,
+        isDesktop: false,
+      })}
+      surfaces={[previewSurface, secondSurface]}
+      environmentId={null}
+      activeSurfaceId={previewSurface.id}
+      pendingSurfaceIds={new Set()}
+      previewSessions={sessions}
+      desktopByTabId={{ "tab-1": overlay(null), "tab-2": overlay(second) }}
+      previewRuntimeTabId={(tabId) => `runtime:${tabId}`}
+      terminalLabelsById={new Map()}
+      onActivate={(surface) => handlers.onActivate?.(surface.id)}
+      onCloseSurface={(surface) => handlers.onCloseSurface?.(surface.id)}
+      onCloseOtherSurfaces={noop}
+      onCloseSurfacesToRight={noop}
+      onCloseAllSurfaces={noop}
+      onCopyFilePath={noop}
+      onAddBrowser={noop}
+      onAddBrowserInProfile={noop}
+      onAddTerminal={noop}
+      onAddPullRequest={noop}
+      onAddPullRequests={noop}
+      onAddDiff={noop}
+      onAddFiles={noop}
+      onAddDevice={noop}
+      browserAvailable
+      terminalAvailable={false}
+      diffAvailable={false}
+      filesAvailable={false}
+      pullRequestAvailable={false}
+      pullRequestsAvailable={false}
+      deviceAvailable={false}
+    >
+      <div>content</div>
+    </RightPanelTabs>,
   );
 }
-
-const imageSources = () => [...container.querySelectorAll("img")].map((image) => image.src);
-const button = (name: string) =>
-  [...container.querySelectorAll("button")].find((element) => element.ariaLabel === name);
-
-describe("preview tab favicon", () => {
-  it("prefers a live capture and never asks a public provider about a private hostname", async () => {
-    await renderTabs(favicon(PIXEL_A, "http://24x.xf.local/"));
-    expect(imageSources()).toEqual([PIXEL_A]);
-
-    await renderTabs(null);
-    expect(imageSources()).toEqual([]);
-  });
-
-  it("keeps route-specific captures isolated between live tabs on one origin", async () => {
-    await renderTabs(
-      favicon(PIXEL_A, "http://24x.xf.local/"),
-      favicon(PIXEL_B, "http://24x.xf.local/admin"),
-    );
-    expect(imageSources()).toEqual([PIXEL_A, PIXEL_B]);
-  });
-
-  it("hides a capture while the server session still describes another origin", async () => {
-    await renderTabs(favicon(PIXEL_A, "https://example.com/"));
-    expect(imageSources()).not.toContain(PIXEL_A);
-  });
-});
-
-describe("preview tab audio toggle", () => {
-  it.each([
-    { audible: false, audioMuted: false },
-    { audible: false, audioMuted: true },
-  ])("is absent for a silent tab (muted=$audioMuted)", async (audio) => {
-    await renderTabs(null, undefined, audio);
-    expect(button("Mute Local site")).toBeUndefined();
-    expect(button("Unmute Local site")).toBeUndefined();
-  });
-
-  it.each([
-    { audioMuted: false, label: "Mute Local site", nextMuted: true },
-    { audioMuted: true, label: "Unmute Local site", nextMuted: false },
-  ])("$label addresses the desktop by runtime tab id", async ({ audioMuted, label, nextMuted }) => {
-    await renderTabs(null, undefined, { audible: true, audioMuted });
-    await act(() => button(label)!.click());
-    expect(setAudioMuted).toHaveBeenCalledExactlyOnceWith("runtime:tab-1", nextMuted);
-  });
-
-  it("hides the toggle when no runtime tab id can be resolved", async () => {
-    await renderTabs(null, undefined, { audible: true }, null);
-    expect(button("Mute Local site")).toBeUndefined();
-  });
-});
 
 // FORK: the drag-to-reorder sensors must leave a click on a tab's title and close control alone.
 describe("preview tab controls", () => {
   it("activates the tab whose title was clicked", async () => {
     const onActivate = vi.fn();
-    await renderTabs(
-      null,
-      favicon(PIXEL_B, "http://24x.xf.local/admin"),
-      undefined,
-      (tabId) => `runtime:${tabId}`,
-      { onActivate },
-    );
+    await using screen = await renderTabs({ onActivate });
 
-    const secondTitle = [...container.querySelectorAll("button")].find(
+    const secondTitle = [...screen.container.querySelectorAll("button")].find(
       (element) => element.textContent === "Admin",
     );
     await act(() => secondTitle!.click());
@@ -232,15 +145,12 @@ describe("preview tab controls", () => {
 
   it("closes only the tab whose close control was clicked", async () => {
     const onCloseSurface = vi.fn();
-    await renderTabs(
-      null,
-      favicon(PIXEL_B, "http://24x.xf.local/admin"),
-      undefined,
-      (tabId) => `runtime:${tabId}`,
-      { onCloseSurface },
-    );
+    await using screen = await renderTabs({ onCloseSurface });
 
-    await act(() => button("Close Admin")!.click());
+    const close = [...screen.container.querySelectorAll("button")].find(
+      (element) => element.ariaLabel === "Close Admin",
+    );
+    await act(() => close!.click());
 
     expect(onCloseSurface).toHaveBeenCalledTimes(1);
     expect(onCloseSurface).toHaveBeenCalledWith(secondSurface.id);

@@ -121,7 +121,7 @@ ingestion and nothing consumes it).
 3. **Ingestion case** in `runtimeEventToActivities()`
    (`apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`): add
    `case "account.usage.updated"` → activity `{ kind: "account.usage.updated", tone: "info",
-summary: "Account usage updated", payload }`. This is the load-bearing change — without it
+   summary: "Account usage updated", payload }`. This is the load-bearing change — without it
    the event is dropped at the `default` branch (same gap that currently swallows
    `account.rate-limits.updated`). Transport (`ws.ts`) needs no change: it gates on
    `thread.activity-appended`, which this produces.

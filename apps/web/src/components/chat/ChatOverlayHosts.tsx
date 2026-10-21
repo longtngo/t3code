@@ -220,12 +220,13 @@ export function RevertConfirmHost(props: {
                   pending?.discardedCount === 1 ? "message and its" : "messages and their"
                 } turn diffs are discarded.`
               : ""}{" "}
-            Your prompt and attachments return to the composer.
+            Your prompt and attachments return to the composer. “Revert files too” also undoes your
+            own edits.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-          <Button variant="destructive" onClick={() => confirm(true)}>
+          <Button variant="destructive-outline" onClick={() => confirm(true)}>
             Revert files too
           </Button>
           <Button onClick={() => confirm(false)}>Revert and keep changes</Button>

@@ -1,7 +1,6 @@
-import { act } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { renderDom } from "../../testing/renderDom";
+import { act, renderDom } from "../../testing/renderDom";
 
 import { DiffCommentAnnotation } from "./DiffCommentAnnotation";
 

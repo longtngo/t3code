@@ -50,21 +50,17 @@ describe("listCursorModels concurrency", () => {
           expect(models.map((model) => model.id)).toEqual(["auto"]);
         }
       }).pipe(Effect.provide(NodeServices.layer)),
-    { timeout: 20_000 },
   );
 
-  it.effect(
-    "still serves a later caller from the cache without respawning",
-    () =>
-      Effect.gen(function* () {
-        const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "cm-dedupe-"));
-        const binary = countingBinary(dir, "agent-sequential");
+  it.effect("still serves a later caller from the cache without respawning", () =>
+    Effect.gen(function* () {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "cm-dedupe-"));
+      const binary = countingBinary(dir, "agent-sequential");
 
-        yield* listCursorModels(binary.path);
-        yield* listCursorModels(binary.path);
+      yield* listCursorModels(binary.path);
+      yield* listCursorModels(binary.path);
 
-        expect(binary.runs()).toBe(1);
-      }).pipe(Effect.provide(NodeServices.layer)),
-    { timeout: 20_000 },
+      expect(binary.runs()).toBe(1);
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

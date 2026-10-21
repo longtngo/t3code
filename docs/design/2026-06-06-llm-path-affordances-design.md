@@ -116,7 +116,7 @@ the read auth scope, capped at 2 MiB, returned as text only.
 
 - `apps/web/src/markdownViewerStore.ts` — zustand store
   `{ open, request: { path, cwd, environmentId } | null, openMarkdownViewer(req),
-closeMarkdownViewer() }` (mirrors `commandPaletteStore`).
+  closeMarkdownViewer() }` (mirrors `commandPaletteStore`).
 - `apps/web/src/components/MarkdownFileViewerSidebar.tsx` — subscribes to the
   store; when open, calls `readEnvironmentApi(environmentId).projects.readFile`,
   shows loading/error/empty states, renders contents via `ChatMarkdown` inside a

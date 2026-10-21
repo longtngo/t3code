@@ -290,7 +290,7 @@ rejected, on cost:
   commits there include a from-scratch connection rewrite (which this fork already paid a
   579-commit reconcile for), the commit that _created_ the `-probe`/`-reconnect` split this
   design consumes, and, most recently, `ae7b27de8 fix: prevent reconnect loops during server
-stalls (#5561)` — a fix in the same neighbourhood as the stall the retry addresses. A
+  stalls (#5561)` — a fix in the same neighbourhood as the stall the retry addresses. A
   divergence inside `monitorConnectedLease` maximises reconcile cost and stands a real chance of
   being superseded.
 - **Native pays for a web problem.** Native reaches `-probe` only after backgrounds under 10

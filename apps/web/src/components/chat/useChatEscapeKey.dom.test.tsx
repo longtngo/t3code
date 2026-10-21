@@ -1,8 +1,8 @@
-import { act, createElement, useRef } from "react";
+import { createElement, useRef } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { QueuedRecallOutcome } from "../ChatView.logic";
-import { renderDom } from "../../testing/renderDom";
+import { act, renderDom } from "../../testing/renderDom";
 import { useChatEscapeKey } from "./useChatEscapeKey";
 
 /** A composer stand-in: a form holding a focused textarea, wired the way ChatComposer is. */

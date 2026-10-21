@@ -33,12 +33,12 @@ critically — the underlying agent **conversation context** ("context window").
 
 - **Threads are an event-sourced aggregate.** `OrchestrationThread`
   (`packages/contracts/src/orchestration.ts:333`) carries `id, projectId, title, modelSelection,
-runtimeMode, interactionMode, branch, worktreePath, latestTurn, messages[], proposedPlans[],
-activities[], checkpoints[], session, …`. Commands → `decider` → events → `projector` builds the
+  runtimeMode, interactionMode, branch, worktreePath, latestTurn, messages[], proposedPlans[],
+  activities[], checkpoints[], session, …`. Commands → `decider` → events → `projector` builds the
   in-memory read model. Creation today: `thread.create` command (`decider.ts:215`) →
   `thread.created` event → projector creates an empty thread (`projector.ts:243`).
 - **Messages** (`OrchestrationMessage`, `orchestration.ts:213`) carry `id, role, text, attachments?,
-turnId, streaming, createdAt, updatedAt`. They live only in the read model (event-sourced, capped
+  turnId, streaming, createdAt, updatedAt`. They live only in the read model (event-sourced, capped
   at 2000). There is **no per-message provider/SDK id** stored today.
 - **Per-turn checkpoints** (`OrchestrationCheckpointSummary`, `orchestration.ts:283`) carry
   `turnId, checkpointTurnCount, checkpointRef (git), assistantMessageId, status, files`. The
@@ -49,7 +49,7 @@ turnId, streaming, createdAt, updatedAt`. They live only in the read model (even
 - **Session context is held by the agent backend, keyed by an opaque `resumeCursor`**
   (`ProviderSession.resumeCursor`, `provider.ts:34`):
   - **Claude** (`ClaudeAdapter.ts`): `resumeCursor = { threadId, resume: <sessionUUID>,
-resumeSessionAt: <last assistant message uuid>, turnCount }`. The Claude Agent SDK 0.3.159
+    resumeSessionAt: <last assistant message uuid>, turnCount }`. The Claude Agent SDK 0.3.159
     `query()` accepts `resume`, `resumeSessionAt`, and **`forkSession: true`** (`sdk.d.ts:1429`),
     which resumes from a session **into a new session id**, leaving the original transcript intact —
     exactly a fork. `resumeSessionAt` truncates the forked context to a specific message uuid. The
@@ -92,7 +92,7 @@ The **decider** (`decider.ts`):
    revert would use).
 3. Build a **fork resume directive** from the parent's live session + the fork point (see §3).
 4. Emit one `thread.forked` event carrying: cloned config (`projectId, title, modelSelection,
-runtimeMode, interactionMode, branch, worktreePath`), the cloned `messages[]` slice, and the
+   runtimeMode, interactionMode, branch, worktreePath`), the cloned `messages[]` slice, and the
    `forkResume` directive.
 
 The **projector** handles `thread.forked` by constructing a fully-populated `OrchestrationThread`

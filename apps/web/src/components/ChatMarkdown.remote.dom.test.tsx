@@ -31,7 +31,10 @@ vi.mock("@effect/atom-react", async () => {
     },
   };
 });
-vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("../hooks/useTheme", () => ({
+  useTheme: () => ({ resolvedTheme: "dark" }),
+  useRenderedAppearance: () => "dark",
+}));
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../state/session", async (importOriginal) => {
@@ -69,7 +72,8 @@ vi.mock("~/lib/openPullRequestLink", () => ({
 
 import { useRightPanelStore } from "../rightPanelStore";
 
-import ChatMarkdown, { shouldUseMarkdownFileBrowserPrimaryAction } from "./ChatMarkdown";
+import ChatMarkdown from "./ChatMarkdown";
+import { shouldUseMarkdownFileBrowserPrimaryAction } from "./chat/MarkdownFileLink.logic";
 
 const threadRef = {
   environmentId: EnvironmentId.make("environment-1"),

@@ -52,10 +52,8 @@ export function parseCursorModelList(stdout: string): SubagentBackendModelOption
 }
 
 /** Runs `<binaryPath> --list-models`, returning stdout or "" on any failure or timeout. */
-const runListModels = (
-  binaryPath: string,
-): Effect.Effect<string, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function* () {
+const runListModels = Effect.fn("cursorModels.runListModels")(
+  function* (binaryPath: string) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const child = yield* spawner.spawn(
       ChildProcess.make(binaryPath, ["--list-models"], { cwd: process.cwd() }),
@@ -65,12 +63,12 @@ const runListModels = (
       maxBytes: MAX_OUTPUT_BYTES,
     });
     return collected.text;
-  }).pipe(
-    Effect.scoped,
-    Effect.timeoutOption(LIST_MODELS_TIMEOUT),
-    Effect.map((result) => (Option.isSome(result) ? result.value : "")),
-    Effect.catchCause(() => Effect.succeed("")),
-  );
+  },
+  Effect.scoped,
+  Effect.timeoutOption(LIST_MODELS_TIMEOUT),
+  Effect.map((result) => (Option.isSome(result) ? result.value : "")),
+  Effect.catchCause(() => Effect.succeed("")),
+);
 
 interface CacheEntry {
   readonly models: readonly SubagentBackendModelOption[];

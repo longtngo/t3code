@@ -175,6 +175,12 @@ import Migration0071 from "./Migrations/062_ThreadFailureLookupIndex.ts";
 // the next free ids (72, 73) rather than their filename numbers (registry section 1).
 import Migration0072 from "./Migrations/063_DropUnusedV1Projections.ts";
 import Migration0073 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
+// Upstream's 065-067 (Codex native turn index, client settlement timestamp repair, webhook
+// dedupe) arrive after the fork already deployed ids 33-73, so they take the next free ids
+// (74, 75, 76) rather than their filename numbers (registry section 1).
+import Migration0074 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
+import Migration0075 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
+import Migration0076 from "./Migrations/067_WebhookDedupe.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -253,6 +259,9 @@ export const migrationEntries = [
   [71, "ThreadFailureLookupIndex", Migration0071],
   [72, "DropUnusedV1Projections", Migration0072],
   [73, "CanonicalizeThreadPullRequestLinks", Migration0073],
+  [74, "CodexUsageNativeTurnIndex", Migration0074],
+  [75, "RepairClientSettlementTimestamps", Migration0075],
+  [76, "WebhookDedupe", Migration0076],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

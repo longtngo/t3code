@@ -36,14 +36,15 @@ describe("arrangeComposerBannerStack", () => {
     expect(ids(arranged.folded)).toEqual(["update-available", "branch-changed"]);
   });
 
-  it("orders folded notices as before: urgent and warnings ahead of plain notices", () => {
+  // Upstream #18919: a warning or urgent notice is never hidden behind an activity banner.
+  it("puts urgent and warnings ahead of activity, and activity ahead of plain notices", () => {
     const arranged = arrangeComposerBannerStack([
       banner("plain"),
       banner("warning", undefined, "warning"),
       banner("activity", "activity"),
     ]);
-    expect(arranged.front?.id).toBe("activity");
-    expect(ids(arranged.folded)).toEqual(["warning", "plain"]);
+    expect(arranged.front?.id).toBe("warning");
+    expect(ids(arranged.folded)).toEqual(["activity", "plain"]);
   });
 
   it("a passive notice never takes the front from a status row, but an urgent one does", () => {

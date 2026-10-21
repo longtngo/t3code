@@ -134,7 +134,6 @@ type View = Awaited<ReturnType<typeof renderFooter>>;
 const trigger = (view: View) => view.find("button[aria-expanded]");
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   fixture.modes = {};
   fixture.canSet = true;
   fixture.setDenied = false;

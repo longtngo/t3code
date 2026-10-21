@@ -24,7 +24,7 @@ receives what it needs.
   `detailPayload`, i.e. the _completed_ one that includes `result`. ✓ (read source)
 - **The payload shape is `data: { toolName, input, result }`, passed through raw.**
   `ClaudeAdapter.ts:2177` emits `toolData = { toolName: tool.toolName, input: tool.input, result:
-toolResult.block }` on item completion; `input` and `result` are not stripped or reshaped.
+  toolResult.block }` on item completion; `input` and `result` are not stripped or reshaped.
   `result` is the raw tool-result block `{ type: "tool_result", content, tool_use_id, is_error? }`.
   ✓ (read emission path) — and the three example payloads in the task args are live captures that
   match this exactly (direct measurement of the live system).
@@ -48,7 +48,7 @@ toolResult.block }` on item completion; `input` and `result` are not stripped or
 - **AskUserQuestion answers exist only in `result.content` as a formatted string** — there is no
   structured answers field. Format:
   `Your questions have been answered: "Q1"="A1", "Q2"="A2". You can now continue with these
-answers in mind.` Answers can contain commas, periods, and quotes, so naive splitting fails;
+  answers in mind.` Answers can contain commas, periods, and quotes, so naive splitting fails;
   the exact question texts (from `input.questions[].question`) are used as anchors to slice each
   answer deterministically. ✓ (live captured payload)
 
@@ -111,7 +111,7 @@ blanks out. Normalizing first closes that gap and makes the parser robust to bot
   previous match (left-to-right, sequential).
 - Answer `i` runs from just after its anchor to just before the next question's anchor (trimming
   the `", ` + closing quote that separates them); the last answer runs to the `". You can now
-continue` suffix, or the final `"` if that suffix is absent.
+  continue` suffix, or the final `"` if that suffix is absent.
 - Any question whose anchor isn't found → its answer is `null` (rendered as "no recorded answer");
   the questions/options still render. Extraction never throws.
 - The view highlights the option whose `label` equals the parsed `answer` (computed at render time

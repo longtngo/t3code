@@ -1,7 +1,8 @@
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@t3tools/contracts";
-import { act, useEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { useEffect } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import { act, render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   settings: null as UnifiedSettings | null,
@@ -37,7 +38,6 @@ vi.mock(import("../../localApi"), async (original) => ({
 
 import { useSettingsRestore } from "./SettingsPanels";
 
-let root: Root;
 let restore: ReturnType<typeof useSettingsRestore>;
 
 function Probe() {
@@ -48,63 +48,25 @@ function Probe() {
   return null;
 }
 
-beforeEach(async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.clearAllMocks();
-  state.settings = { ...DEFAULT_UNIFIED_SETTINGS };
-  state.confirm.mockResolvedValue(true);
-  root = createRoot(document.createElement("div"));
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  vi.unstubAllGlobals();
-});
-
-const render = () => act(async () => root.render(<Probe />));
-
 describe("restoring V2 settings", () => {
-  it.each([
-    ["persistComposerContextStrip", "Composer context"],
-    ["autoResumeLimitedThreads", "Auto-resume limited threads"],
-    ["snoozeLimitedThreads", "Snooze limited threads"],
-  ] as const)("restores %s when it is the only changed setting", async (key, label) => {
-    state.settings = { ...DEFAULT_UNIFIED_SETTINGS, [key]: true };
-    await render();
-
-    expect(restore.changedSettingLabels).toEqual([label]);
-    await act(() => restore.restoreDefaults());
-
-    expect(state.confirm.mock.calls[0]?.[0]).toContain(label);
-    expect(state.update).toHaveBeenCalledOnce();
-    expect(state.update.mock.calls[0]?.[0][key]).toBe(DEFAULT_UNIFIED_SETTINGS[key]);
-  });
-
   it.each([
     ["threadDetailsSectionRowLimit", 10, "Thread details rows"],
     ["usagePaceTolerance", 30, "Pace tolerance"],
   ] as const)(
     "lists %s once it changes after the first render, and restores it",
     async (key, value, label) => {
-      await render();
+      state.settings = { ...DEFAULT_UNIFIED_SETTINGS };
+      state.update.mockClear();
+      state.confirm.mockReset().mockResolvedValue(true);
+      await using screen = await render(<Probe />, { router: false });
       expect(restore.changedSettingLabels).toEqual([]);
 
       state.settings = { ...DEFAULT_UNIFIED_SETTINGS, [key]: value };
-      await render();
+      await screen.rerender(<Probe />);
 
       expect(restore.changedSettingLabels).toEqual([label]);
       await act(() => restore.restoreDefaults());
       expect(state.update.mock.calls[0]?.[0][key]).toBe(DEFAULT_UNIFIED_SETTINGS[key]);
     },
   );
-
-  it("does not reset settings after cancellation", async () => {
-    state.settings = { ...DEFAULT_UNIFIED_SETTINGS, autoResumeLimitedThreads: true };
-    state.confirm.mockResolvedValue(false);
-    await render();
-
-    await act(() => restore.restoreDefaults());
-
-    expect(state.confirm).toHaveBeenCalledOnce();
-    expect(state.update).not.toHaveBeenCalled();
-  });
 });

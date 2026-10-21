@@ -77,6 +77,7 @@ function renderPanel(relativePath: string) {
       environmentId={environmentId}
       cwd="/Users/me/project"
       projectName="project"
+      openInShortcutEnabled={false}
       relativePath={relativePath}
       threadRef={threadRef}
       composerDraftTarget={threadRef}

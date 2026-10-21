@@ -85,7 +85,10 @@ export function applyUsageLimitsUpdate(input: {
       changed = true;
     }
   }
-  if (!changed && previous !== undefined && previous.unavailable === undefined) {
+  if (!changed && previous !== undefined) {
+    if (previous.unavailable !== undefined) {
+      return previous;
+    }
     // The provider just confirmed these numbers, so the reading is current. Re-stamp it,
     // but only when the update names every window (Claude reports one window per event, and
     // a 5-hour confirmation says nothing about the weekly), and at most every
@@ -99,10 +102,13 @@ export function applyUsageLimitsUpdate(input: {
       ? { ...previous, checkedAt: input.checkedAt }
       : previous;
   }
+  const unavailable =
+    previous === undefined ? { reason: "probeFailed" as const } : previous.unavailable;
   return {
     ...makeUsageLimits({ checkedAt: input.checkedAt, windows: merged.values() }),
     ...(previous?.resetCredits !== undefined ? { resetCredits: previous.resetCredits } : {}),
     ...(previous?.spend !== undefined ? { spend: previous.spend } : {}),
+    ...(unavailable !== undefined ? { unavailable } : {}),
   };
 }
 
@@ -118,7 +124,7 @@ function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageW
 }
 
 /**
- * FORK: a probe can serve a cached read (Claude caches its capabilities
+ * A probe can serve a cached read (Claude caches its capabilities
  * probe for minutes), so a successful probe whose windows were read BEFORE
  * the published ones keeps the published windows rather than reverting a
  * newer runtime update to older numbers. Everything else comes from the
@@ -134,11 +140,11 @@ export function resolveUsageLimitsAfterProbe(input: {
     return published;
   }
   if (
-    probed &&
     published &&
-    !probed.unavailable &&
+    probed &&
     !published.unavailable &&
-    Date.parse(probed.checkedAt) < Date.parse(published.checkedAt)
+    !probed.unavailable &&
+    Date.parse(published.checkedAt) > Date.parse(probed.checkedAt)
   ) {
     return { ...probed, checkedAt: published.checkedAt, windows: published.windows };
   }
