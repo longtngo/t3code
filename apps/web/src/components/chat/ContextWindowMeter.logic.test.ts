@@ -4,7 +4,6 @@ import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
   hasAvailableCompactionProvider,
   hasDismissedResumeCompaction,
-  shouldOfferResumeCompaction,
 } from "./ContextWindowMeter.logic";
 
 function claudeProvider(input: {
@@ -75,22 +74,6 @@ describe("hasAvailableCompactionProvider", () => {
         lockedInstanceId: originalInstanceId,
       }),
     ).toBe(true);
-  });
-});
-
-// FORK: upstream pruned its own cases for this helper; the setting gate is the fork's.
-describe("shouldOfferResumeCompaction", () => {
-  it("does not offer when the Offer to compact threads setting is off", () => {
-    const offer = (offerEnabled: boolean) =>
-      shouldOfferResumeCompaction({
-        offerEnabled,
-        provider: "claudeAgent",
-        usedTokens: 300_000,
-        updatedAt: "2026-08-24T09:00:00.000Z",
-        now: "2026-08-24T12:00:00.000Z",
-      });
-    expect(offer(true)).toBe(true);
-    expect(offer(false)).toBe(false);
   });
 });
 

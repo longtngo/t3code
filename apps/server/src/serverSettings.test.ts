@@ -228,6 +228,45 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  // FORK: the retired "Offer to compact threads" switch (fork registry invariant 71).
+  it.effect(
+    "turns idle compaction off for a saved offerThreadCompaction false and drops the key",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        // A build that read both gates can have saved a mode beside the switch; the switch won.
+        yield* fs.writeFileString(
+          config.settingsPath,
+          `{ "offerThreadCompaction": false, "idleCompaction": "onReturn" }`,
+        );
+
+        const settings = yield* service.getSettings;
+        assert.equal(settings.idleCompaction, "off");
+        const persisted = JSON.parse(yield* fs.readFileString(config.settingsPath));
+        assert.notProperty(persisted, "offerThreadCompaction");
+        assert.equal(persisted.idleCompaction, "off");
+      }).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  it.effect("keeps the saved idle compaction mode for offerThreadCompaction true", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fs.writeFileString(
+        config.settingsPath,
+        `{ "offerThreadCompaction": true, "idleCompaction": "beforeCacheExpires" }`,
+      );
+
+      const settings = yield* service.getSettings;
+      assert.equal(settings.idleCompaction, "beforeCacheExpires");
+      const persisted = JSON.parse(yield* fs.readFileString(config.settingsPath));
+      assert.notProperty(persisted, "offerThreadCompaction");
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("tells clients it reads idle compaction modes before any settings are saved", () =>
     Effect.gen(function* () {
       const service = yield* ServerSettingsModule.ServerSettingsService;

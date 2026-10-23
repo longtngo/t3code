@@ -254,7 +254,8 @@ Provider commands must start the message to run. T3 Code commands such as
 
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. When you return to a long, idle Claude thread, T3 Code offers to compact it
-first. Turn that off in **Settings → General → Offer to compact threads**; `/compact` still works.
+first. Turn that off by setting **Settings → General → Compact idle threads** to **Never**
+(a Claude provider can override it); `/compact` still works.
 
 Claude instances can also compact idle threads for you. See
 [compact long conversations](./providers-claude.md#compact-long-conversations).

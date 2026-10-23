@@ -101,7 +101,6 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: false,
       hasSubagentBackendThreadModes: false,
       hasAllowSpendingCredits: false,
-      hasOfferThreadCompaction: false,
       hasJiraTicketLinks: false,
     });
 
@@ -138,7 +137,6 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: false,
       hasAllowSpendingCredits: false,
-      hasOfferThreadCompaction: false,
       hasJiraTicketLinks: false,
     });
     const with_ = filterAvailableSettingsSearchItems({
@@ -151,7 +149,6 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: true,
       hasAllowSpendingCredits: true,
-      hasOfferThreadCompaction: true,
       hasJiraTicketLinks: false,
     });
     expect(without.some((item) => item.id === "subagent-offload")).toBe(false);
@@ -161,8 +158,6 @@ describe("searchSettings", () => {
     // and revert with no error — and here the direction it reverts to is "keep spending".
     expect(without.some((item) => item.id === "allow-spending-credits")).toBe(false);
     expect(with_.some((item) => item.id === "allow-spending-credits")).toBe(true);
-    expect(without.some((item) => item.id === "offer-thread-compaction")).toBe(false);
-    expect(with_.some((item) => item.id === "offer-thread-compaction")).toBe(true);
   });
 
   it("shows Jira ticket links only when an environment supports them", () => {
@@ -176,7 +171,6 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: false,
       hasAllowSpendingCredits: false,
-      hasOfferThreadCompaction: false,
     };
     expect(
       filterAvailableSettingsSearchItems({ ...base, hasJiraTicketLinks: false }).some(
@@ -276,7 +270,6 @@ describe("auto-settlement search availability", () => {
       hasThreadAutoSettlement: availability.eligibleEnvironmentIds.length > 0,
       hasSubagentBackendThreadModes: false,
       hasAllowSpendingCredits: false,
-      hasOfferThreadCompaction: false,
       hasJiraTicketLinks: false,
     });
     expect(searchSettings("auto-settle", items).map((item) => item.id)).toEqual([

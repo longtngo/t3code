@@ -40,9 +40,8 @@ without wrappers, and each fork method needs an entry in `RPC_AGGREGATES`
 (`observability/RpcInstrumentation.ts`) and `RPC_REQUIRED_SCOPES` (`auth/RpcAuthorization.ts`).
 Upstream's `includeRemote: false` vcs status subscription replaced the fork's `localOnly` flag;
 the fork keeps the `vcsLocalOnlyStatus` capability as the "this server honours it" signal.
-Upstream's compact-and-send replaced the fork's resume compaction banner, still gated by the
-fork's **Offer to compact threads** setting. The fork's `"timeout"` and `"spawn"` git failure
-reasons moved into upstream's `GitCommandFailureReason`.
+Upstream's compact-and-send replaced the fork's resume compaction banner. The fork's `"timeout"`
+and `"spawn"` git failure reasons moved into upstream's `GitCommandFailureReason`.
 Startup auto-pull is upstream's (#14912): it runs after activation instead of the fork's
 bounded, awaited phase, so `autoPullProjects` asks `VcsAutoPullPolicy.isIdle` per root and skips a
 busy checkout. The policy is a `Context.Reference` that defaults to "idle", so `server.ts` provides
@@ -1465,15 +1464,14 @@ markers, so a later merge can bring it back with nothing failing.
   (`chat/MarkdownTable.tsx`) and never set the attribute. Probe:
   `grep -c 'data-expanded' apps/web/src/index.css` is `0`.
 
-### 71. Two compaction gates: upstream's idle-compaction mode and the fork's offer toggle
+### 71. A stored `offerThreadCompaction: false` loads as idle compaction "off"
 
-Upstream #23037 turned `compactIdleThreads` into a mode (`onReturn` / `beforeCacheExpires` / `off`)
-with a per-Claude-instance `idleCompaction` override, resolved by `resolveIdleCompaction`. The fork's
-server setting `offerThreadCompaction` ("Offer to compact threads") answers the same resume dialog.
-Both gates are kept at the 52nd reconcile, ANDed: `ClaudeAdapterV2`'s `resume_return` handler and
-`ChatView`'s `resumeCompactionTokens` (`offerEnabled`) each check the fork toggle and then upstream's
-mode. Collapsing them onto upstream's mode is a follow-up: it needs a migration of a stored
-`offerThreadCompaction: false` to `compactIdleThreads: "off"`, or that user starts seeing offers.
+The fork's **Offer to compact threads** setting is retired onto upstream's idle-compaction mode
+(#23037, `resolveIdleCompaction`). `serverSettings.ts` reads the retired key through
+`LegacyProviderSettingsJson`: `false` sets the global `idleCompaction` to `"off"`, and any stored
+value makes the load rewrite the file without it. Keep that read until no install can still hold the
+key; dropping it turns the offer back on for a user who had switched it off. Probe:
+`grep -c offerThreadCompaction apps/server/src/serverSettings.ts` is non-zero.
 
 ### 72. Fork tests that poll sit on a burn-down list, like upstream's
 

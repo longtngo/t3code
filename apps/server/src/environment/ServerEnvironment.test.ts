@@ -237,7 +237,6 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       // Load-bearing: this test asserts a subset, so a schema field the server stopped
       // advertising would pass and hide the Settings switch on every client.
       expect(second.capabilities.allowSpendingCredits).toBe(true);
-      expect(second.capabilities.offerThreadCompaction).toBe(true);
       expect(second.capabilities.serverResolvedCommandContext).toBe(true);
       expect(second.capabilities.projectProviderInstanceOverrides).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);

@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  type IdleCompactionMode,
   MessageId,
   NodeId,
   ProjectId,
@@ -34,13 +35,13 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import { ClaudeDriver } from "./ClaudeDriver.ts";
 
-// FORK: the "Offer to compact threads" server setting must reach the adapter
-// that answers Claude Code's resume question.
-describe("ClaudeDriver offerThreadCompaction wiring", () => {
-  const driverLayer = (offerThreadCompaction: boolean) =>
-    ProviderHostLive.layer.pipe(Layer.provideMerge(driverDeps(offerThreadCompaction)));
-  const driverDeps = (offerThreadCompaction: boolean) =>
-    ServerConfig.layerTest(process.cwd(), { prefix: "t3-claude-driver-offer-" }).pipe(
+// FORK: the environment-wide idle compaction mode must reach the driver-built
+// adapter that answers Claude Code's resume question.
+describe("ClaudeDriver idle compaction wiring", () => {
+  const driverLayer = (idleCompaction: IdleCompactionMode) =>
+    ProviderHostLive.layer.pipe(Layer.provideMerge(driverDeps(idleCompaction)));
+  const driverDeps = (idleCompaction: IdleCompactionMode) =>
+    ServerConfig.layerTest(process.cwd(), { prefix: "t3-claude-driver-idle-compaction-" }).pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(IdAllocator.layer),
       Layer.provideMerge(McpProviderSessions.layer),
@@ -53,7 +54,7 @@ describe("ClaudeDriver offerThreadCompaction wiring", () => {
           ),
         }),
       ),
-      Layer.provideMerge(ServerSettings.layerTest({ offerThreadCompaction })),
+      Layer.provideMerge(ServerSettings.layerTest({ idleCompaction })),
       Layer.provideMerge(
         Layer.mock(BackgroundPolicy.BackgroundPolicy)({
           shouldRunScopeWork: () => Effect.succeed(false),
@@ -192,16 +193,16 @@ describe("ClaudeDriver offerThreadCompaction wiring", () => {
     return settled;
   });
 
-  it.effect("answers the resume question itself when the setting is off", () =>
-    Effect.scoped(resumeAnswer().pipe(Effect.provide(driverLayer(false)))).pipe(
+  it.effect("answers the resume question itself when idle compaction is off", () =>
+    Effect.scoped(resumeAnswer().pipe(Effect.provide(driverLayer("off")))).pipe(
       Effect.map((settled) =>
         expect(settled).toEqual({ behavior: "completed", result: "continue" }),
       ),
     ),
   );
 
-  it.effect("asks the user when the setting is on", () =>
-    Effect.scoped(resumeAnswer().pipe(Effect.provide(driverLayer(true)))).pipe(
+  it.effect("asks the user when idle compaction is on return", () =>
+    Effect.scoped(resumeAnswer().pipe(Effect.provide(driverLayer("onReturn")))).pipe(
       Effect.map((settled) => expect(settled).toBe("asked")),
     ),
   );

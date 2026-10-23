@@ -1866,11 +1866,6 @@ export const ServerSettings = Schema.Struct({
     // silently stops every provider.
     Schema.catchDecoding(() => Effect.succeed(Option.some(true))),
   ),
-  // When false, T3 Code stops offering to compact an old Claude thread. Default true.
-  offerThreadCompaction: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(true)),
-    Schema.catchDecoding(() => Effect.succeed(Option.some(true))),
-  ),
   sourceControlHosts: Schema.Record(Schema.String, SourceControlHostSettings).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -2253,7 +2248,6 @@ export const ServerSettingsPatch = Schema.Struct({
   // client patches `{ [threadId]: mode }` without resending every other thread.
   subagentBackendThreadModes: Schema.optionalKey(SubagentBackendThreadModes),
   allowSpendingCredits: Schema.optionalKey(Schema.Boolean),
-  offerThreadCompaction: Schema.optionalKey(Schema.Boolean),
   // `disableAuthentication` is deliberately NOT patchable. It is a startup-only switch
   // (`--disable-auth` / `T3CODE_DISABLE_AUTH`), and boot falls back to the persisted value,
   // so accepting it here let any client holding the ordinary settings-write scope turn all

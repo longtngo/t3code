@@ -321,7 +321,6 @@ function makeTurnInput(input: {
 
 const makeHarness = (options?: {
   readonly getContextUsage?: Effect.Effect<SDKControlGetContextUsageResponse>;
-  readonly offerThreadCompaction?: boolean;
   readonly modelSelection?: ModelSelection;
   readonly prepareSubagentBackend?: ClaudeAdapterV2.ClaudeAdapterV2Options["prepareSubagentBackend"];
 }) =>
@@ -347,9 +346,6 @@ const makeHarness = (options?: {
       crypto: yield* Crypto.Crypto,
       path: yield* Path.Path,
       idAllocator,
-      ...(options?.offerThreadCompaction === undefined
-        ? {}
-        : { offerThreadCompaction: Effect.succeed(options.offerThreadCompaction) }),
       ...(options?.prepareSubagentBackend === undefined
         ? {}
         : { prepareSubagentBackend: options.prepareSubagentBackend }),
@@ -617,43 +613,6 @@ describe("ClaudeAdapterV2 fork deltas", () => {
           autoCompactThreshold: 967_000,
           autoCompactSource: "settings",
         });
-      }).pipe(provide),
-    ),
-  );
-
-  it.effect("answers the resume question without asking when compaction offers are off", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        for (const offer of [false, true]) {
-          const harness = yield* makeHarness({ offerThreadCompaction: offer });
-          yield* harness.startTurn();
-          const onUserDialog = harness.getOpenedOptions()?.onUserDialog;
-          assert.isDefined(onUserDialog);
-          if (onUserDialog === undefined) return;
-          const abort = new AbortController();
-          const answer = onUserDialog(
-            {
-              dialogKind: "resume_return",
-              payload: { sessionAgeMinutes: 120, estimatedTokens: 400_000 },
-            } as never,
-            { signal: abort.signal, requestId: `dialog-${offer}` } as never,
-          );
-          if (!offer) {
-            assert.deepEqual(yield* Effect.promise(() => answer), {
-              behavior: "completed",
-              result: "continue",
-            });
-            continue;
-          }
-          // Offered: the question becomes a pending runtime request.
-          for (let attempt = 0; attempt < 5000; attempt++) {
-            if (harness.events.some((event) => event.type === "runtime_request.updated")) break;
-            yield* Effect.yieldNow;
-          }
-          assert.isTrue(harness.events.some((event) => event.type === "runtime_request.updated"));
-          abort.abort();
-          yield* Effect.promise(() => answer.catch(() => undefined));
-        }
       }).pipe(provide),
     ),
   );

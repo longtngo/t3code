@@ -330,6 +330,9 @@ const LegacyProviderSettingsJson = fromLenientJson(
     providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
     bitbucket: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
     github: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+    // FORK: the retired "Offer to compact threads" switch (fork registry invariant 71).
+    // Unknown, so a bad value cannot fail this decode and distrust the whole file.
+    offerThreadCompaction: Schema.optionalKey(Schema.Unknown),
   }),
 );
 const decodeLegacyProviderSettingsJsonExit = Schema.decodeUnknownExit(LegacyProviderSettingsJson);
@@ -745,6 +748,7 @@ const make = Effect.gen(function* () {
     let settings = DEFAULT_SERVER_SETTINGS;
     let legacyProviders: Readonly<Record<string, unknown>> | undefined;
     let legacySourceControl: Parameters<typeof migrateLegacySourceControlSettings>[1] = {};
+    let legacyOfferThreadCompaction: unknown;
     // A file that failed to decode must stay on disk for the user to repair;
     // the fold below only writes when it started from the file's real contents.
     let settingsFileTrusted = true;
@@ -755,6 +759,7 @@ const make = Effect.gen(function* () {
       const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
       if (legacySettings._tag === "Success") {
         legacyProviders = legacySettings.value.providers;
+        legacyOfferThreadCompaction = legacySettings.value.offerThreadCompaction;
         legacySourceControl = {
           bitbucket: legacySettings.value.bitbucket,
           github: legacySettings.value.github,
@@ -780,7 +785,12 @@ const make = Effect.gen(function* () {
     // Settings saved by a server that kept the mode in `compactIdleThreads` move
     // it to `idleCompaction`, so that switch goes to clients as a boolean. The
     // defaults gain the field too, which tells clients this server reads modes.
-    settings = withIdleCompaction(settings, globalIdleCompaction(settings));
+    settings = withIdleCompaction(
+      settings,
+      // FORK: a user who turned offers off keeps them off; no mode means "compact before
+      // expiry but never offer", so off is the only safe mapping.
+      legacyOfferThreadCompaction === false ? "off" : globalIdleCompaction(settings),
+    );
 
     const providerHistory = yield* sql<{
       readonly providerName: string;
@@ -874,6 +884,7 @@ const make = Effect.gen(function* () {
     const rewrote =
       migrated !== loaded ||
       (settingsFileTrusted && legacyProviders !== undefined) ||
+      (settingsFileTrusted && legacyOfferThreadCompaction !== undefined) ||
       hasLegacySourceControl;
     if (rewrote) {
       yield* writeSettingsAtomically(migrated);

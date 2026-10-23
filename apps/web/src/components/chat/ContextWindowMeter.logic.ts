@@ -69,8 +69,6 @@ export function hasDismissedResumeCompaction(
 }
 
 export function shouldOfferResumeCompaction(input: {
-  /** FORK: the server's "Offer to compact threads" setting. */
-  readonly offerEnabled: boolean;
   readonly provider: string | null | undefined;
   readonly usedTokens: number | null | undefined;
   readonly updatedAt: string | null | undefined;
@@ -78,7 +76,6 @@ export function shouldOfferResumeCompaction(input: {
   readonly now: string;
 }): boolean {
   if (
-    !input.offerEnabled ||
     input.provider !== "claudeAgent" ||
     (input.usedTokens ?? 0) < COMPACTION_SUGGESTION_MIN_TOKENS
   ) {

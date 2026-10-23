@@ -2749,8 +2749,6 @@ export default function ChatView(props: ChatViewProps) {
     !hasHeldQueuedRuns &&
     multipleModelSelections === null &&
     shouldOfferResumeCompaction({
-      // FORK: server-scoped "Offer to compact threads".
-      offerEnabled: settings.offerThreadCompaction,
       provider: selectedProvider,
       usedTokens: activeContextWindow.usedTokens,
       updatedAt: activeContextWindow.updatedAt,

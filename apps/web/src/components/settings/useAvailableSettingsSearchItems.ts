@@ -53,11 +53,6 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
       (environment) =>
         environment.serverConfig?.environment.capabilities.allowSpendingCredits === true,
     ) === true;
-  const hasOfferThreadCompaction =
-    environments.some(
-      (environment) =>
-        environment.serverConfig?.environment.capabilities.offerThreadCompaction === true,
-    ) === true;
   const hasJiraTicketLinks =
     environments.some(
       (environment) => environment.serverConfig?.environment.capabilities.jiraTicketLinks === true,
@@ -89,7 +84,6 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
     hasThreadAutoSettlement,
     hasSubagentBackendThreadModes,
     hasAllowSpendingCredits,
-    hasOfferThreadCompaction,
     hasJiraTicketLinks,
     managedTunnelActive,
   });

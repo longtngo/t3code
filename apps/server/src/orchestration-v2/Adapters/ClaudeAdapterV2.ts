@@ -4007,11 +4007,6 @@ export interface ClaudeAdapterV2Options {
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
   /**
-   * FORK: the "Offer to compact threads" server setting, read per resume
-   * question so a toggle reaches live sessions. Absent means offer.
-   */
-  readonly offerThreadCompaction?: Effect.Effect<boolean>;
-  /**
    * FORK: prepares a thread's subagent offload before its process spawns. Defaults to the
    * server's live preparer (`prepareActiveSubagentThreadBackend`), which is `undefined` —
    * no offload — when the subagent backend layer is not running.
@@ -9278,16 +9273,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               if (request.dialogKind !== "resume_return") {
                 return { behavior: "cancelled" as const };
               }
-              // FORK: the setting off answers "Keep full history" without
-              // asking. `continue`, not `never`, so turning it back on restores
-              // the offer.
-              const offerCompaction =
-                adapterOptions.offerThreadCompaction === undefined
-                  ? true
-                  : yield* adapterOptions.offerThreadCompaction;
-              if (!offerCompaction) {
-                return { behavior: "completed" as const, result: "continue" as const };
-              }
               const idleCompaction = Option.isSome(serverSettings)
                 ? yield* serverSettings.value.getSettings.pipe(
                     Effect.map((settings) =>
@@ -10772,10 +10757,7 @@ export type ClaudeAdapterV2DriverEnv =
 export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
   function* (
     input: ProviderAdapterDriverCreateInput<ClaudeSettings>,
-    hooks: Pick<
-      ClaudeAdapterV2Options,
-      "scopedLimitNames" | "onUsageLimits" | "offerThreadCompaction"
-    > = {},
+    hooks: Pick<ClaudeAdapterV2Options, "scopedLimitNames" | "onUsageLimits"> = {},
   ) {
     const { instanceId, environment, enabled, config } = input;
     const fileSystem = yield* FileSystem.FileSystem;

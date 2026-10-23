@@ -282,7 +282,6 @@ describe("latestProviderTurnTokenUsage", () => {
     expect(snapshot?.usedTokens).toBe(513_000);
     expect(
       shouldOfferResumeCompaction({
-        offerEnabled: true,
         provider: "claudeAgent",
         usedTokens: snapshot?.usedTokens,
         updatedAt: snapshot?.updatedAt,

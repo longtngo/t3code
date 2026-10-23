@@ -64,7 +64,6 @@ export interface SettingsSearchItem {
   readonly requiresThreadAutoSettlement?: boolean;
   readonly requiresSubagentBackendThreadModes?: boolean;
   readonly requiresAllowSpendingCredits?: boolean;
-  readonly requiresOfferThreadCompaction?: boolean;
   readonly requiresJiraTicketLinks?: boolean;
 }
 
@@ -79,7 +78,6 @@ export interface SettingsSearchAvailability {
   readonly hasThreadAutoSettlement: boolean;
   readonly hasSubagentBackendThreadModes: boolean;
   readonly hasAllowSpendingCredits: boolean;
-  readonly hasOfferThreadCompaction: boolean;
   readonly hasJiraTicketLinks: boolean;
   readonly managedTunnelActive?: boolean;
 }
@@ -357,7 +355,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Compact idle threads",
     to: "/settings/general",
     scope: "environment-defaults",
-    searchTerms: ["claude context compaction idle cache tokens usage summary resume"],
+    searchTerms: [
+      "claude context compaction idle cache tokens usage summary resume old thread prompt",
+    ],
   },
   {
     id: "auto-settle-merged-threads",
@@ -487,13 +487,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     searchTerms: ["credits spend usage limit 100% stop pause provider budget"],
     requiresAllowSpendingCredits: true,
-  },
-  {
-    id: "offer-thread-compaction",
-    title: "Offer to compact threads",
-    to: "/settings/general",
-    searchTerms: ["compact compaction resume context old thread prompt banner summary"],
-    requiresOfferThreadCompaction: true,
   },
   {
     id: "continue-threads-after-server-update",
@@ -1256,7 +1249,6 @@ export function filterAvailableSettingsSearchItems(
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
       (!item.requiresSubagentBackendThreadModes || availability.hasSubagentBackendThreadModes) &&
       (!item.requiresAllowSpendingCredits || availability.hasAllowSpendingCredits) &&
-      (!item.requiresOfferThreadCompaction || availability.hasOfferThreadCompaction) &&
       (!item.requiresJiraTicketLinks || availability.hasJiraTicketLinks) &&
       (!item.managedTunnelOnly || availability.managedTunnelActive === true),
   );

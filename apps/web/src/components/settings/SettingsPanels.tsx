@@ -539,9 +539,6 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.allowSpendingCredits !== DEFAULT_UNIFIED_SETTINGS.allowSpendingCredits
       ? ["Allow to spend credits"]
       : []),
-    ...(settings.offerThreadCompaction !== DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction
-      ? ["Offer to compact threads"]
-      : []),
     ...(settings.jiraBaseUrl !== DEFAULT_UNIFIED_SETTINGS.jiraBaseUrl ||
     settings.jiraProjectKeys !== DEFAULT_UNIFIED_SETTINGS.jiraProjectKeys
       ? ["Jira ticket links"]
@@ -675,7 +672,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       pullRequestLinksOpenInApp: DEFAULT_UNIFIED_SETTINGS.pullRequestLinksOpenInApp,
       enableAgentBrowserAccess: DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess,
       allowSpendingCredits: DEFAULT_UNIFIED_SETTINGS.allowSpendingCredits,
-      offerThreadCompaction: DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction,
       jiraBaseUrl: DEFAULT_UNIFIED_SETTINGS.jiraBaseUrl,
       jiraProjectKeys: DEFAULT_UNIFIED_SETTINGS.jiraProjectKeys,
     });
@@ -904,11 +900,6 @@ export function GeneralSettingsPanel() {
     connectedEnvironments.length > 0 &&
     connectedEnvironments.every(
       (target) => target.serverConfig?.environment.capabilities.allowSpendingCredits === true,
-    );
-  const supportsOfferThreadCompaction =
-    connectedEnvironments.length > 0 &&
-    connectedEnvironments.every(
-      (target) => target.serverConfig?.environment.capabilities.offerThreadCompaction === true,
     );
 
   const textGenerationProviders = serverProviders.filter(
@@ -1766,35 +1757,6 @@ export function GeneralSettingsPanel() {
                   updateSettings({ allowSpendingCredits: Boolean(checked) })
                 }
                 aria-label="Allow to spend credits"
-              />
-            }
-          />
-        ) : null}
-
-        {supportsOfferThreadCompaction ? (
-          <SettingsRow
-            serverScoped
-            {...searchableSetting("offer-thread-compaction")}
-            description="Offer to compact a long Claude thread when you come back to it. Off keeps the full history without asking. /compact still works."
-            resetAction={
-              settings.offerThreadCompaction !== DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction ? (
-                <SettingResetButton
-                  label="offer to compact threads"
-                  onClick={() =>
-                    updateSettings({
-                      offerThreadCompaction: DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.offerThreadCompaction}
-                onCheckedChange={(checked) =>
-                  updateSettings({ offerThreadCompaction: Boolean(checked) })
-                }
-                aria-label="Offer to compact threads"
               />
             }
           />
