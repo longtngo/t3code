@@ -68,7 +68,7 @@ function ModelRow(props: {
   };
 
   const title = !row.loadable
-    ? `${row.providerName} is external / probe-only — t3code can't load it`
+    ? `${row.providerName} is external / probe-only: t3code can't load it`
     : status === "online"
       ? "Click to unload"
       : status === "loading"
@@ -76,7 +76,7 @@ function ModelRow(props: {
         : status === "stopping"
           ? "Stopping…"
           : status === "error"
-            ? "Failed — click to retry"
+            ? "Failed. Click to retry"
             : "Click to load";
 
   return (

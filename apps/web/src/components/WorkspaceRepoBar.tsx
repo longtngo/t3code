@@ -187,9 +187,9 @@ function WorkspaceRepoTab({
       </TooltipTrigger>
       <TooltipPopup>
         {isUnavailable
-          ? `${repo.cwd} — ${report?.detail ?? "unavailable"}`
+          ? `${repo.cwd}: ${report?.detail ?? "unavailable"}`
           : isOwnedByOther
-            ? `${repo.cwd} — on a branch another thread is working in`
+            ? `${repo.cwd}: on a branch another thread is working in`
             : repo.cwd}
       </TooltipPopup>
     </Tooltip>

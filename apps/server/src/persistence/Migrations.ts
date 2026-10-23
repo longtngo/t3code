@@ -181,6 +181,9 @@ import Migration0073 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.t
 import Migration0074 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
 import Migration0075 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
 import Migration0076 from "./Migrations/067_WebhookDedupe.ts";
+// Upstream's 068 (shell stop request index) arrives after the fork already deployed ids
+// 33-76, so it takes the next free id (77) rather than its filename number (registry section 1).
+import Migration0077 from "./Migrations/068_ShellStopRequestIndex.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -262,6 +265,7 @@ export const migrationEntries = [
   [74, "CodexUsageNativeTurnIndex", Migration0074],
   [75, "RepairClientSettlementTimestamps", Migration0075],
   [76, "WebhookDedupe", Migration0076],
+  [77, "ShellStopRequestIndex", Migration0077],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

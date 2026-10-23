@@ -2458,7 +2458,7 @@ export default function GitActionsControl({
             </DialogTitle>
             <DialogDescription>
               The base decides which commits are included. Git records no branch ancestry, so this
-              is the best answer available — check it before continuing.
+              is the best answer available. Check it before continuing.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>

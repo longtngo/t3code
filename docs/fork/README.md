@@ -64,6 +64,16 @@ mirrors for it (`configDirPath`, `outputStyle`, Codex `setupMode`) and their tes
 copy was retired for upstream's per-environment failure messages, and the composer's
 resume-compaction menu for upstream's Compact/Full chip.
 
+The 52nd reconcile (2026-10-23, 196 commits) brought upstream's split of `ChatView` and
+`ChatComposer` into about twenty hooks (`chat/useComposerSend.ts`, `useMultipleModelSend.ts`,
+`useTimelineRewind.ts`, `useComposerSelection.ts`, `useRightPanelActions.ts`, `useThreadLifecycle.tsx`,
+`ComposerControlsBar.tsx`, ...). The fork's code in those blocks moved with them: the offline outbox
+and the Queue slot release live in the two send hooks, `claimThreadRewind` and the discard count in
+`useTimelineRewind`, the model pick's `basis` in `useComposerSelection`. The Stop ladder, the member
+guard banner, the strip toggle and the task/background panels stay in `ChatView`. Upstream also
+pinned Node to exactly 26.12.1 (invariant 46) and made two lint rules errors that fork code broke:
+`no-em-dash-copy` (fork copy reworded) and `no-polling-loop-in-tests` (invariant 72).
+
 The 50th reconcile (2026-10-19, 861 commits) brought three cross-cutting upstream changes. A
 comment prune (#19559) touched 3,139 files. Web React tests moved to a real-browser `browser`
 project (`*.browser.test.tsx`, no jsdom or react-test-renderer), beside the fork's `dom` project
@@ -127,14 +137,14 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 76 entries, ids 1-76, unique and monotonic. Upstream's v2 schema
+Current: 77 entries, ids 1-77, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
 `061_PullRequestReviewGuides` is **70**, `062_ThreadFailureLookupIndex` is **71**,
 `063_DropUnusedV1Projections` is **72**, `064_CanonicalizeThreadPullRequestLinks` is **73**,
 `065_CodexUsageNativeTurnIndex` is **74**, `066_RepairClientSettlementTimestamps` is **75** and
-`067_WebhookDedupe` is **76**.
+`067_WebhookDedupe` is **76** and `068_ShellStopRequestIndex` is **77**.
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
 upstream's `reconcileV2PreviewMigration` stays out.
@@ -153,7 +163,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `76 76 ok` and `1`.
+Expect `77 77 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -449,7 +459,8 @@ ancestor and re-joins the missing tail. Not test-only: a symlinked project root 
 branch in production.
 
 **Recurred at the 47th reconcile** in upstream's `storageCleanup.test.ts`: the sweep refuses a
-root whose realpath differs, so on macOS it removed nothing. Its fixture now realpaths the base dir.
+root whose realpath differs, so on macOS it removed nothing. Upstream's own fixture realpaths the
+base dir since the 52nd reconcile, so that line is upstream's again.
 
 **Recurred at the 36th reconcile**, in a file byte-identical to upstream:
 `apps/server/src/usage/UsageService.test.ts` makes its home with `mkdtemp` and asserts against
@@ -1324,10 +1335,13 @@ copy of the block is gone from `vite.config.ts` too (0 `maxOccurrences`). What s
 before tests in `pnpm verify`, and one lint error cancels the whole test step, so run
 `pnpm run lint` right after the last merge edit.
 
-### 46. Run the gate on the PINNED Node (`^24.13.1`), not whatever `node` resolves to
+### 46. Run the gate on the PINNED Node (`26.12.1`), not whatever `node` resolves to
 
-Every `pnpm` line in a gate log opens with `[WARN] Unsupported engine: wanted {"node":"^24.13.1"}`
-when it is not. That warning is the only tell, and it is easy to read past.
+Since the 52nd reconcile `engines.node` is upstream's exact `26.12.1` (#23165), which is also what
+upstream CI installs (`setup-ci-deps` reads `engines.node`); `.nvmrc` follows it. Install it with
+`nvm install 26.12.1` and put its `bin` first on `PATH` for the gate. Every `pnpm` line in a gate
+log opens with `[WARN] Unsupported engine` when it is not. That warning is the only tell, and it is
+easy to read past. The history below is why the runtime matters.
 
 Measured at the 36th reconcile on Node v26.2.0: `/[\p{L}]$/u.test("\u{10400}")` returns **false**,
 while `/\p{L}$/u` on the same string returns true — a V8 regression on a unicode property escape
@@ -1364,7 +1378,11 @@ cannot silently start matching everything.
 
 ### 65. Fork WebSocket RPCs get their own handler layer
 
-`ws.ts` builds handlers with `UpstreamServerWsRpcGroup.toLayer` plus `ForkServerWsRpcGroup.toLayer`,
+Since the 52nd reconcile upstream splits its own handlers too (`SplitWsRpcGroup` /
+`OtherWsRpcGroup` by tag prefix, merged with `Context.merge` inside `Layer.effectContext`). The fork
+applies that split to `UpstreamServerWsRpcGroup` and adds `ForkServerWsRpcGroup.toHandlers` as a
+third context in the same `Context.mergeAll`. Before that, `ws.ts` built handlers with
+`UpstreamServerWsRpcGroup.toLayer` plus `ForkServerWsRpcGroup.toLayer`,
 not one `ServerWsRpcGroup.toLayer`. A single `toLayer` over all ~196 RPCs exceeds the checker's
 instantiation budget (TS2589, measured at the 47th reconcile; upstream alone sits just under it).
 `tsc-rs` splits files across checkers, so the TS2589 is dropped and only its `any` surfaces, as
@@ -1446,6 +1464,24 @@ markers, so a later merge can bring it back with nothing failing.
 - Inline table expand (`data-expanded` CSS, #20878). The fork's tables open in a dialog
   (`chat/MarkdownTable.tsx`) and never set the attribute. Probe:
   `grep -c 'data-expanded' apps/web/src/index.css` is `0`.
+
+### 71. Two compaction gates: upstream's idle-compaction mode and the fork's offer toggle
+
+Upstream #23037 turned `compactIdleThreads` into a mode (`onReturn` / `beforeCacheExpires` / `off`)
+with a per-Claude-instance `idleCompaction` override, resolved by `resolveIdleCompaction`. The fork's
+server setting `offerThreadCompaction` ("Offer to compact threads") answers the same resume dialog.
+Both gates are kept at the 52nd reconcile, ANDed: `ClaudeAdapterV2`'s `resume_return` handler and
+`ChatView`'s `resumeCompactionTokens` (`offerEnabled`) each check the fork toggle and then upstream's
+mode. Collapsing them onto upstream's mode is a follow-up: it needs a migration of a stored
+`offerThreadCompaction: false` to `compactIdleThreads: "off"`, or that user starts seeing offers.
+
+### 72. Fork tests that poll sit on a burn-down list, like upstream's
+
+Upstream #23983 made `t3code/no-polling-loop-in-tests` an error and kept a "do not add" list of its
+own files still at `warn`. Four fork test files poll (`ClaudeAdapterV2.test.ts` Stop-ladder helper,
+`ClaudeAdapterV2Fork.test.ts`, `ThreadLaunchService.test.ts` `waitUntil`, `GitVcsDriver.test.ts`
+waiting on a real git's `index.lock`). They are in a separate FORK block beside upstream's list in
+the root `vite.config.ts`. Convert a file, then delete its entry; never add one.
 
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 

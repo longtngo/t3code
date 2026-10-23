@@ -67,7 +67,7 @@ export function PresetDialog(props: {
             <div className="mb-1.5 text-xs text-muted-foreground">Model config</div>
             {models.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                No model configs yet — create one in Settings → Local LLM.
+                No model configs yet. Create one in Settings → Local LLM.
               </p>
             ) : (
               <div className="flex flex-wrap gap-1.5">
@@ -110,7 +110,7 @@ export function PresetDialog(props: {
           {preview && config && provider ? (
             <div className="rounded-lg border border-border">
               <div className="border-b border-border bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
-                Merged environment — http://
+                Merged environment: http://
                 {settings.providers[config.providerId]?.host ?? provider.host}:
                 {config.port ?? provider.defaultPort}/v1
               </div>

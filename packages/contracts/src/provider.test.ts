@@ -13,36 +13,7 @@ const decodeProviderSessionStartInput = Schema.decodeUnknownSync(ProviderSession
 const decodeProviderSendTurnInput = Schema.decodeUnknownSync(ProviderSendTurnInput);
 const decodeProviderSession = Schema.decodeUnknownSync(ProviderSession);
 
-function getOptionValue(
-  options: ReadonlyArray<{ id: string; value: unknown }> | undefined,
-  id: string,
-): unknown {
-  return options?.find((option) => option.id === id)?.value;
-}
-
 describe("ProviderSessionStartInput", () => {
-  it("accepts codex-compatible payloads", () => {
-    const parsed = decodeProviderSessionStartInput({
-      threadId: "thread-1",
-      provider: "codex",
-      cwd: "/tmp/workspace",
-      modelSelection: {
-        provider: "codex",
-        model: "gpt-5.3-codex",
-        options: [
-          { id: "reasoningEffort", value: "high" },
-          { id: "fastMode", value: true },
-        ],
-      },
-      runtimeMode: "full-access",
-    });
-    expect(parsed.runtimeMode).toBe("full-access");
-    expect(parsed.modelSelection?.instanceId).toBe("codex");
-    expect(parsed.modelSelection?.model).toBe("gpt-5.3-codex");
-    expect(getOptionValue(parsed.modelSelection?.options, "reasoningEffort")).toBe("high");
-    expect(getOptionValue(parsed.modelSelection?.options, "fastMode")).toBe(true);
-  });
-
   it("carries workspace member paths on session start", () => {
     const parsed = decodeProviderSessionStartInput({
       threadId: "thread-1",

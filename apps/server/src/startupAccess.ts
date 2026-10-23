@@ -141,7 +141,7 @@ export const formatHeadlessOpenAccessOutput = (connectionString: string): string
     "T3 Code server is ready.",
     `Connection string: ${connectionString}`,
     "",
-    "Authentication is DISABLED — anyone who can reach this server has full control.",
+    "Authentication is DISABLED: anyone who can reach this server has full control.",
     "",
   ].join("\n");
 

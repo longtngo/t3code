@@ -247,7 +247,7 @@ export const SUBAGENT_DISPATCH_INSTRUCTION =
   "<subagent_dispatch>Subagent offload is ON for this thread. When you need a subagent, do NOT " +
   "use the Agent tool: write the subagent prompt to a file and run " +
   "`~/bin/subagent-dispatch <short-name> <prompt-file>` with the Bash tool. Exit code 3 means " +
-  "offload is unavailable for this thread — only then fall back to the Agent tool. Any other " +
+  "offload is unavailable for this thread; only then fall back to the Agent tool. Any other " +
   "non-zero exit is not a fallback signal: read stderr, then either fix your invocation or treat " +
   "it as a failed subagent run.</subagent_dispatch>";
 

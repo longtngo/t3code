@@ -784,7 +784,7 @@ export const make = Effect.gen(function* () {
 
   if (config.disableAuthentication) {
     yield* Effect.logWarning(
-      "Authentication is disabled — anyone who can reach this server has full control.",
+      "Authentication is disabled: anyone who can reach this server has full control.",
     );
   }
 

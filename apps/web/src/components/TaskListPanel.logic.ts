@@ -1,4 +1,5 @@
 import type { OrchestrationV2ThreadProjection, PlanId, RunId } from "@t3tools/contracts";
+import type { ThreadStructure } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
 
 import type { ActivePlanState } from "../session-logic";
@@ -23,16 +24,20 @@ export interface TaskListView {
 
 const EMPTY_VIEW: TaskListView = { primary: null, primaryKind: null, history: [] };
 
-function planTime(projection: OrchestrationV2ThreadProjection, planId: PlanId): string {
-  const item = projection.turnItems.findLast(
-    (candidate) => candidate.type === "todo_list" && candidate.planId === planId,
+function planTime(projection: ThreadStructure, plan: TodoPlan): string {
+  const item = latestListItem(projection, plan.id);
+  if (item !== undefined) return DateTime.formatIso(item.updatedAt);
+  // Without a list item, the plan's run dates it; the thread's own timestamps move while a reply
+  // streams, so the quiet structure does not carry them (as upstream's `planItemTime`).
+  const run = projection.runs.find((candidate) => candidate.id === plan.runId);
+  return DateTime.formatIso(
+    run?.completedAt ?? run?.startedAt ?? run?.requestedAt ?? projection.thread.createdAt,
   );
-  return DateTime.formatIso(item?.updatedAt ?? projection.updatedAt);
 }
 
-function toPlanState(projection: OrchestrationV2ThreadProjection, plan: TodoPlan): ActivePlanState {
+function toPlanState(projection: ThreadStructure, plan: TodoPlan): ActivePlanState {
   return {
-    createdAt: planTime(projection, plan.id),
+    createdAt: planTime(projection, plan),
     runId: plan.runId,
     explanation: plan.explanation ?? null,
     steps: plan.steps.map(({ text, status, durationMs }) => ({
@@ -55,9 +60,12 @@ const LIST_STATUS_RANK: Record<TodoPlan["status"], number> = {
   active: 2,
 };
 
-function latestListItem(projection: OrchestrationV2ThreadProjection, planId: PlanId) {
+type TodoListItem = Extract<ThreadStructure["turnItems"][number], { readonly type: "todo_list" }>;
+
+function latestListItem(projection: ThreadStructure, planId: PlanId): TodoListItem | undefined {
   return projection.turnItems.findLast(
-    (candidate) => candidate.type === "todo_list" && candidate.planId === planId,
+    (candidate): candidate is TodoListItem =>
+      candidate.type === "todo_list" && candidate.planId === planId,
   );
 }
 
@@ -67,7 +75,7 @@ function latestListItem(projection: OrchestrationV2ThreadProjection, planId: Pla
  * (ordinal, then update time), and only then to arrival order.
  */
 function isNewerListOfRun(
-  projection: OrchestrationV2ThreadProjection,
+  projection: ThreadStructure,
   candidate: TodoPlan,
   previous: TodoPlan,
 ): boolean {
@@ -93,7 +101,7 @@ function isNewerListOfRun(
  * runs the client has loaded; older history arrives with the timeline's own paging.
  */
 export function deriveTaskListView(
-  projection: OrchestrationV2ThreadProjection | null,
+  projection: ThreadStructure | null,
   latestRunId: RunId | null,
 ): TaskListView {
   if (projection === null) return EMPTY_VIEW;

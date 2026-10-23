@@ -1,4 +1,4 @@
-import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import type { ThreadStructure } from "@t3tools/client-runtime/state/models";
 import type { PendingBackgroundWorkTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set(["preparing", "starting", "running"]);
@@ -14,7 +14,7 @@ const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set(["preparing", "starting
  * listed as soon as the provider reports it.
  */
 export function backgroundPanelTasks(input: {
-  readonly projection: OrchestrationV2ThreadProjection | null;
+  readonly projection: ThreadStructure | null;
   readonly settledTasks: ReadonlyArray<PendingBackgroundWorkTask>;
 }): ReadonlyArray<PendingBackgroundWorkTask> {
   const { projection } = input;

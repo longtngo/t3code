@@ -130,7 +130,7 @@ export function OutboxFlushCoordinator() {
             stackedThreadToast({
               type: "error",
               title: "Queued message failed",
-              description: `${describeQueuedText(turn.input)} — ${
+              description: `${describeQueuedText(turn.input)}: ${
                 error instanceof Error ? error.message : "could not be sent."
               }`,
             }),

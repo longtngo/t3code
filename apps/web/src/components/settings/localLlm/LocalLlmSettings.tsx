@@ -134,8 +134,8 @@ function ProviderCard(props: {
           onToggle={() => patch({ visible: !config.visible })}
           title={
             config.visible
-              ? "Visible in pickers — click to hide"
-              : "Hidden from pickers — click to show"
+              ? "Visible in pickers. Click to hide"
+              : "Hidden from pickers. Click to show"
           }
         />
       </div>
@@ -265,8 +265,8 @@ function ModelConfigCard(props: {
           onToggle={() => patch({ visible: !config.visible })}
           title={
             config.visible
-              ? "Shown in sidebar — click to hide"
-              : "Hidden from sidebar — click to show"
+              ? "Shown in sidebar. Click to hide"
+              : "Hidden from sidebar. Click to show"
           }
         />
       </div>
@@ -345,7 +345,7 @@ function ModelConfigCard(props: {
           <Collapsible>
             <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
               <ChevronRightIcon className="size-3.5" />
-              Advanced — provider config overrides
+              Advanced: provider config overrides
             </CollapsibleTrigger>
             <CollapsiblePanel>
               <div className="space-y-3 pt-2">
@@ -428,7 +428,7 @@ export function LocalLlmSettingsPanel() {
 
       <SettingsSection title="Providers">
         <p className="px-3 pb-2 text-xs text-muted-foreground">
-          A fixed catalog from the local-LLM runbook. The eye icon is visibility-only — a hidden
+          A fixed catalog from the local-LLM runbook. The eye icon is visibility-only: a hidden
           provider stays fully configurable.
         </p>
         <div className="space-y-2 px-1 pb-2">

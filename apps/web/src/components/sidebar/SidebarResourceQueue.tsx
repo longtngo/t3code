@@ -110,7 +110,7 @@ function RowProgressBadge({ progress }: { progress: RowProgress }) {
           </svg>
           <span className="text-3xs text-muted-foreground">queued</span>
         </TooltipTrigger>
-        <TooltipPopup>queued — not started</TooltipPopup>
+        <TooltipPopup>queued, not started</TooltipPopup>
       </Tooltip>
     );
   }
@@ -203,7 +203,7 @@ function QueueRow({
         <div className="mt-1 flex flex-wrap items-center gap-1.5 text-2xs text-muted-foreground">
           <Tag label={item.priority} className={PRIORITY_BADGE[item.priority] ?? FALLBACK_BADGE} />
           <span className="opacity-40">·</span>
-          <span className="truncate">{item.project || "—"}</span>
+          <span className="truncate">{item.project || "-"}</span>
           <span className="opacity-40">·</span>
           <span className="tabular-nums">
             {item.state === "running" ? "running" : "waiting"} {elapsedSince(item.sinceMs)}
@@ -222,8 +222,8 @@ function QueueRow({
             expanded ? "mt-1 max-h-16 opacity-100" : "max-h-0 opacity-0",
           )}
         >
-          pid {item.pid ?? "—"} · {where} · {item.state === "running" ? "started" : "enqueued"}{" "}
-          {clockOf(item.sinceMs)} · eta {item.etaSec != null ? humanizeSec(item.etaSec) : "—"}
+          pid {item.pid ?? "-"} · {where} · {item.state === "running" ? "started" : "enqueued"}{" "}
+          {clockOf(item.sinceMs)} · eta {item.etaSec != null ? humanizeSec(item.etaSec) : "-"}
         </div>
       </div>
       <svg
@@ -434,7 +434,7 @@ export function SidebarResourceQueue({
               </div>
             ) : rows.length === 0 ? (
               <div className="px-2 py-4 text-center text-xs text-muted-foreground/60">
-                Nothing running or queued — all resources free.
+                Nothing running or queued. All resources free.
               </div>
             ) : (
               rows.map((item) => {

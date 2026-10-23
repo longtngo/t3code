@@ -550,7 +550,7 @@ describe("VitalsGauge trigger", () => {
       />,
     );
     expect(view.find("button")?.getAttribute("aria-label")).toBe(
-      "Vitals — context 46%, 5-hour 88%, 7-day 41%, CPU 22%, GPU 44%, memory 50%",
+      "Vitals: context 46%, 5-hour 88%, 7-day 41%, CPU 22%, GPU 44%, memory 50%",
     );
   });
 

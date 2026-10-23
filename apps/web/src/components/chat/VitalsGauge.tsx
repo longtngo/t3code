@@ -435,7 +435,7 @@ function MetricRow(props: { label: string; pct: number | null }) {
           level ? SEVERITY_TEXT[level] : "text-muted-foreground/50",
         )}
       >
-        {reading === null ? "—" : `${reading}%`}
+        {reading === null ? "-" : `${reading}%`}
       </span>
     </div>
   );
@@ -483,7 +483,7 @@ function MachineBlock(props: {
             {enabled ? "live" : "paused"}
           </TooltipTrigger>
           <TooltipPopup>
-            {enabled ? "Live — click to pause" : "Paused — click to resume"}
+            {enabled ? "Live. Click to pause" : "Paused. Click to resume"}
           </TooltipPopup>
         </Tooltip>
       </div>
@@ -614,7 +614,7 @@ function describeInputs(inputs: VitalsGaugeInputs): string {
   push("CPU", inputs.cpu);
   push("GPU", inputs.gpu);
   push("memory", inputs.mem);
-  return parts.length ? `Vitals — ${parts.join(", ")}` : "Vitals";
+  return parts.length ? `Vitals: ${parts.join(", ")}` : "Vitals";
 }
 
 interface VitalsHost {

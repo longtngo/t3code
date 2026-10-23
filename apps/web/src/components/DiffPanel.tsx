@@ -324,7 +324,7 @@ export default function DiffPanel({
     ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
     : isPrimaryRepo
       ? reviewScopeTitle
-      : `${reviewScopeTitle} — ${activeRepo?.title ?? ""}`;
+      : `${reviewScopeTitle}: ${activeRepo?.title ?? ""}`;
   const selectedCheckpointRange =
     typeof selectedCheckpointTurnCount === "number"
       ? {

@@ -338,7 +338,7 @@ export function SidebarSubagentBackend() {
                 />
                 {cursorAvailable ? null : (
                   <TooltipPopup side="top">
-                    No enabled Cursor instance — add one in Settings.
+                    No enabled Cursor instance. Add one in Settings.
                   </TooltipPopup>
                 )}
               </Tooltip>
