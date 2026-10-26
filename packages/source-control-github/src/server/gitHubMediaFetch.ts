@@ -40,8 +40,10 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => null),
     );
 
-  return Effect.fn("GitHubMediaFetch.fetchMedia")(function* (request: SourceControlMediaRequest) {
-    const bearer = yield* token(request.cwd);
+  const fetchAs = Effect.fn("GitHubMediaFetch.fetchAs")(function* (
+    request: SourceControlMediaRequest,
+    bearer: Redacted.Redacted<string> | null,
+  ) {
     let target = request.url;
     for (let hop = 0; ; hop += 1) {
       const authorization =
@@ -65,5 +67,22 @@ export const make = Effect.gen(function* () {
       if (next.protocol !== "https:") return null;
       target = next.toString();
     }
+  });
+
+  return Effect.fn("GitHubMediaFetch.fetchMedia")(function* (request: SourceControlMediaRequest) {
+    const bearer = yield* token(request.cwd);
+    const first = yield* fetchAs(request, bearer);
+    if (first?.status !== 404 || bearer === null || !isCredentialedHost(request.url)) return first;
+    // A folder routed to a repository its account can't see (no local checkout) gets a 404 for
+    // that repository's private media; GET is safe to repeat as each other signed-in login.
+    const others = yield* Effect.suspend(() => credentials.others("github.com", request.cwd)).pipe(
+      Effect.orElseSucceed(() => []),
+    );
+    for (const other of others) {
+      // One login rate-limited, refused or unreachable must not hide another that can see it.
+      const response = yield* fetchAs(request, other.token).pipe(Effect.orElseSucceed(() => null));
+      if (response !== null && response.status < 400) return response;
+    }
+    return first;
   });
 });
