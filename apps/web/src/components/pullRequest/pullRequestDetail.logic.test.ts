@@ -4,6 +4,7 @@ import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLe
 import {
   GitCommandError,
   ProjectId,
+  PullRequestOperationError,
   type PullRequestCheck,
   type PullRequestComment,
   type PullRequestDetail,
@@ -57,6 +58,7 @@ import {
   writePullRequestDetailSnapshot,
   pullRequestNotFoundMessage,
   readableFailure,
+  staleDetailMessage,
 } from "./pullRequestDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
@@ -1494,12 +1496,28 @@ describe("single-PR merge compatibility during stack discovery", () => {
 });
 
 describe("not-found message", () => {
-  it("V6: names the account when known and keeps today's text when not", () => {
-    expect(pullRequestNotFoundMessage("alice")).toBe(
-      "It may be an issue rather than a pull request, or alice can't see it.",
+  it("says the signed-in account may not see it, for the host's own term", () => {
+    expect(pullRequestNotFoundMessage("pull request")).toBe(
+      "It may be an issue rather than a pull request, or the signed-in account can't see it.",
     );
-    expect(pullRequestNotFoundMessage(undefined)).toBe(
-      "It may be an issue rather than a pull request, or this account can't see it.",
+    expect(pullRequestNotFoundMessage("merge request")).toContain("rather than a merge request");
+  });
+});
+
+describe("staleDetailMessage", () => {
+  it("says a shown copy could not be found again, else gives the readable error", () => {
+    const notFound = new PullRequestOperationError({
+      operation: "detail",
+      detail: "GitHub could not find the requested resource, or the credential cannot see it.",
+      reason: "not-found",
+    });
+    expect(staleDetailMessage(notFound.message, notFound, "merge request")).toBe(
+      "This merge request could not be found again; the signed-in account may no longer see it.",
+    );
+    const other = new PullRequestOperationError({ operation: "detail", detail: "Branch is gone." });
+    expect(staleDetailMessage(other.message, other, "pull request")).toBe("Branch is gone.");
+    expect(staleDetailMessage("Pull request operation detail failed: Boom.", null, "x")).toBe(
+      "Boom.",
     );
   });
 });
@@ -1516,5 +1534,16 @@ describe("readableFailure", () => {
     expect(readableFailure(new Error("Branch is protected."), "Try again.")).toBe(
       "Branch is protected.",
     );
+  });
+
+  it("drops the operation prefix from a failed read's message", () => {
+    const sentence =
+      "GitHub could not find the requested resource, or the credential cannot see it.";
+    expect(
+      readableFailure(
+        new PullRequestOperationError({ operation: "detail", detail: sentence }).message,
+        "Try again.",
+      ),
+    ).toBe(sentence);
   });
 });

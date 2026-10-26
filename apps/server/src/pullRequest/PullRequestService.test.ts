@@ -945,7 +945,11 @@ it.effect("routing verifies the current account on the requested host without ca
       providers: [
         fakePullRequestProvider(SourceControlProviderKind.make("github"), {
           getRoutingIdentity: (input) => {
-            assert.deepStrictEqual(input, { cwd: "/a", host: "github.example.test" });
+            assert.deepStrictEqual(input, {
+              cwd: "/a",
+              host: "github.example.test",
+              repository: "acme/web",
+            });
             return Effect.succeed({
               viewer,
               accountId: viewer === "first-account" ? "123" : "456",
@@ -971,6 +975,55 @@ it.effect("routing verifies the current account on the requested host without ca
     if (failure._tag === "PullRequestOperationError") {
       assert.strictEqual(failure.operation, "routeIdentity");
     }
+  }),
+);
+
+it.effect("routing and its guard verify the account that can see the base repository", () =>
+  Effect.gen(function* () {
+    // Only the routed account (202) can see acme/web; the folder's own account is 101.
+    const accountOf = (input: { readonly repository?: string }) =>
+      input.repository === "acme/web"
+        ? { accountId: "202", viewer: "uni-login" }
+        : { accountId: "101", viewer: "octocat" };
+    const verifiedFor: Array<unknown> = [];
+    let operations = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          getRoutingIdentity: (input) => Effect.succeed(accountOf(input)),
+          withVerifiedCredential: (input, use) => {
+            verifiedFor.push(input);
+            const identity = accountOf(input);
+            return use({ ...identity, credentialFingerprint: `credential-${identity.accountId}` });
+          },
+        }),
+      ],
+    });
+    const reference = {
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+      host: "github.com",
+    };
+    const routed = yield* service.routing(reference);
+    assert.strictEqual(routed.accountId, "202");
+    const operation = Effect.sync(() => {
+      operations += 1;
+    });
+    yield* service.withRoutingCredential({ ...reference, expectedAccountId: "202" }, operation);
+    assert.strictEqual(operations, 1);
+    const rejected = yield* Effect.flip(
+      service.withRoutingCredential({ ...reference, expectedAccountId: "101" }, operation),
+    );
+    assert.strictEqual(rejected._tag, "PullRequestOperationError");
+    if (rejected._tag === "PullRequestOperationError")
+      assert.strictEqual(rejected.operation, "routeIdentity");
+    assert.strictEqual(operations, 1);
+    assert.deepStrictEqual(verifiedFor, [
+      { cwd: "/a", host: "github.com", repository: "acme/web" },
+      { cwd: "/a", host: "github.com", repository: "acme/web" },
+    ]);
   }),
 );
 
@@ -1227,6 +1280,7 @@ it.effect("checks and deletes a branch inside one verified credential", () =>
   Effect.gen(function* () {
     let pinned = false;
     const calls: Array<string> = [];
+    const verifiedFor: Array<unknown> = [];
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
@@ -1236,8 +1290,9 @@ it.effect("checks and deletes a branch inside one verified credential", () =>
             actions: ["delete-branch"],
             deleteBranch: true,
           },
-          withVerifiedCredential: (_, use) =>
+          withVerifiedCredential: (input, use) =>
             Effect.suspend(() => {
+              verifiedFor.push(input);
               pinned = true;
               return use({ accountId: "101", viewer: "bilal", credentialFingerprint: "a" });
             }).pipe(Effect.ensuring(Effect.sync(() => (pinned = false)))),
@@ -1266,6 +1321,10 @@ it.effect("checks and deletes a branch inside one verified credential", () =>
       action: "delete-branch",
     });
     assert.deepStrictEqual(calls, ["permissions pinned=true", "delete-branch pinned=true"]);
+    // The base repository routes the check and the deletion to the account that can see it.
+    assert.deepStrictEqual(verifiedFor, [
+      { cwd: "/a", host: "github.com", repository: "acme/web" },
+    ]);
   }),
 );
 
@@ -4764,6 +4823,7 @@ describe("each project's own account as the viewer", () => {
               fingerprint: `${host}:${token}`,
             });
           },
+          account: () => Effect.die("unused"),
           others: () => Effect.succeed([]),
           invalidate: () => Effect.void,
         }),

@@ -366,11 +366,6 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     detail,
     preview,
     previewCard,
-    routing: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:pull-requests:routing",
-      tag: WS_METHODS.pullRequestsRouting,
-      staleTimeMs: 60_000,
-    }),
     checks: normalizePullRequestQuery(
       createEnvironmentRpcQueryAtomFamily(runtime, {
         label: "environment-data:pull-requests:checks",

@@ -101,6 +101,7 @@ import { PullRequestDetailCrumbs } from "./PullRequestDetailCrumbs";
 import { PullRequestTitleEditor } from "./PullRequestTitleEditor";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
+import { PullRequestDetailStaleNotice } from "./PullRequestDetailStaleNotice";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
 import { openOnHostLabel } from "./pullRequestLinkContextMenu";
@@ -130,6 +131,7 @@ import {
   PULL_REQUEST_MERGE_METHOD_LABELS,
   checkoutFailureDescription,
   readableFailure,
+  staleDetailMessage,
   resolvePullRequestReferenceHost,
   resolvePullRequestPrimaryControl,
   allowsSinglePullRequestMerge,
@@ -520,10 +522,6 @@ export function PullRequestDetailPanel({
     : loadingCheckoutCommand;
   const notFound =
     detailQuery.error !== null && !detail && isPullRequestNotFound(detailQuery.failure);
-  // The account the read went out as: the one that could not see it.
-  const notFoundAccount = useEnvironmentQuery(
-    notFound ? pullRequestEnvironment.routing({ environmentId, input: reference }) : null,
-  ).data?.viewer;
   const branchRefsQuery = useEnvironmentQuery(
     detail === null
       ? null
@@ -603,6 +601,10 @@ export function PullRequestDetailPanel({
     setRefreshToken((token) => token + 1);
     setIsInvalidating(false);
   };
+  const staleError =
+    detail !== null && detailQuery.error !== null
+      ? staleDetailMessage(detailQuery.error, detailQuery.failure, terminology.singular)
+      : null;
   const refreshFromHostOnRequest = useEffectEvent(() => void refreshFromHost());
   const appliedForcedToken = useRef(forcedRefreshToken);
   useEffect(() => {
@@ -1687,6 +1689,16 @@ export function PullRequestDetailPanel({
         ) : null}
       </div>
 
+      {staleError !== null ? (
+        <div className="px-3 pt-2">
+          <PullRequestDetailStaleNotice
+            error={staleError}
+            refreshing={refreshing}
+            onRetry={() => void refreshFromHost()}
+          />
+        </div>
+      ) : null}
+
       <div
         className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
         onScrollCapture={(event) => {
@@ -1711,11 +1723,7 @@ export function PullRequestDetailPanel({
             {...(notFound
               ? {
                   title: `${capitalizeTerm(terminology.singular)} #${reference.number} not found`,
-                  // Name the folder's account that could not see it (only GitHub reports one).
-                  error:
-                    notFoundAccount === undefined
-                      ? `It may be an issue rather than a ${terminology.singular}, or this account can't see it.`
-                      : pullRequestNotFoundMessage(notFoundAccount),
+                  error: pullRequestNotFoundMessage(terminology.singular),
                 }
               : { error: detailQuery.error })}
             refreshing={detailQuery.isPending}

@@ -1190,8 +1190,8 @@ export function buildAskAboutGuideStopHandoff(input: {
 
 const isPullRequestOperationError = Schema.is(PullRequestOperationError);
 
-export const pullRequestNotFoundMessage = (account: string | undefined) =>
-  `It may be an issue rather than a pull request, or ${account ?? "this account"} can't see it.`;
+export const pullRequestNotFoundMessage = (term: string) =>
+  `It may be an issue rather than a ${term}, or the signed-in account can't see it.`;
 
 export function isPullRequestNotFound(failure: unknown): boolean {
   return isPullRequestOperationError(failure) && failure.reason === "not-found";
@@ -1222,6 +1222,12 @@ export function readableFailure(failure: unknown, hint: string): string {
       : `${detail.slice(0, FAILURE_DETAIL_MAX_LENGTH - 1)}…`;
   return bounded;
 }
+
+/** The stale-copy notice's error; a shown copy was a real one, so not-found means it went away. */
+export const staleDetailMessage = (error: string, failure: unknown, term: string) =>
+  isPullRequestNotFound(failure)
+    ? `This ${term} could not be found again; the signed-in account may no longer see it.`
+    : readableFailure(error, "Retry to check again.");
 
 const isGitCommandError = Schema.is(GitCommandError);
 

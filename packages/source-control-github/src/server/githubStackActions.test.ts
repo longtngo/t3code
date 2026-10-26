@@ -97,6 +97,7 @@ const runGitHubStackAction = (send: Send, input: Parameters<typeof runStackActio
                       fingerprint: "fp",
                     };
                   }),
+                account: () => Effect.die("unused"),
                 others: () => Effect.succeed([]),
                 invalidate: () => Effect.void,
               }),

@@ -226,6 +226,7 @@ function harness(input: {
                 source: "gh" as const,
                 fingerprint: `${host}:token`,
               })),
+          account: () => Effect.die("unused"),
           others: () => Effect.succeed([]),
           invalidate: () => Effect.void,
         }),

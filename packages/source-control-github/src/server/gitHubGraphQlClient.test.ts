@@ -30,6 +30,7 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
           source: "gh" as const,
           fingerprint: `${host}:secret`,
         }),
+      account: () => Effect.die("unused"),
       others: () => Effect.succeed([]),
       invalidate: () =>
         Effect.sync(() => {

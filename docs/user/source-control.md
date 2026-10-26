@@ -40,6 +40,10 @@ Looking up a repository to clone also tries the other accounts `gh` is signed in
 first one cannot see it, unless you picked an account or set a token. The clone itself then
 signs in through git's own credential setup for the destination folder.
 
+Opening a pull request and acting on it (comments, reviews, labels, merges) goes out as the
+signed-in `gh` account that can see the pull request's repository, unless you picked an
+account or set a token.
+
 For GitHub Enterprise, sign in with `gh auth login --hostname YOUR_HOST`. T3 Code treats a
 custom server name as GitHub once it has a credential for that host.
 

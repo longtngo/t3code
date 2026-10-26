@@ -268,7 +268,8 @@ export interface ProviderRepositoryRef {
 
 export interface PullRequestProviderApi {
   readonly withVerifiedCredential?: <A, E, R>(
-    input: { readonly cwd: string; readonly host: string },
+    /** `repository` verifies the account that can see it rather than the folder's own. */
+    input: { readonly cwd: string; readonly host: string; readonly repository?: string },
     use: (identity: {
       readonly accountId: string;
       readonly viewer: string;
@@ -278,6 +279,8 @@ export interface PullRequestProviderApi {
   readonly getRoutingIdentity?: (input: {
     readonly cwd: string;
     readonly host: string;
+    /** Names the account that can see this repository rather than the folder's own. */
+    readonly repository?: string;
   }) => Effect.Effect<
     { readonly accountId: string; readonly viewer: string },
     PullRequestProviderError

@@ -38,6 +38,7 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
             fingerprint: `${host}:${tokens[0]}`,
           };
         }),
+      account: () => Effect.die("unused"),
       others: () => Effect.succeed([]),
       invalidate: () =>
         Effect.sync(() => {
@@ -269,6 +270,7 @@ describe("GitHubRest", () => {
                   },
             );
           },
+          account: () => Effect.die("unused"),
           others: () => Effect.succeed([]),
           invalidate: () => Effect.void,
         }),

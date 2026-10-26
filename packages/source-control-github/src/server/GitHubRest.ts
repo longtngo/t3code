@@ -51,6 +51,7 @@ export class GitHubRest extends Context.Service<
     readonly rest: (input: GitHubRestInput) => Effect.Effect<GitHubRestResponse, GitHubApiError>;
     readonly credential: GitHubRequestPolicy.GitHubRequestPolicy["Service"]["credential"];
     readonly withDirectory: GitHubRequestPolicy.GitHubRequestPolicy["Service"]["withDirectory"];
+    readonly account: GitHubRequestPolicy.GitHubRequestPolicy["Service"]["account"];
     readonly others: GitHubRequestPolicy.GitHubRequestPolicy["Service"]["others"];
   }
 >()("@t3tools/source-control-github/server/GitHubRest") {}
@@ -216,6 +217,7 @@ export const make = Effect.gen(function* () {
     rest,
     credential: policy.credential,
     withDirectory: policy.withDirectory,
+    account: policy.account,
     others: policy.others,
   });
 });

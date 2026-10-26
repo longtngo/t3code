@@ -1043,7 +1043,8 @@ export const make = Effect.gen(function* () {
         ) {
           return yield* first.failure;
         }
-        for (const other of yield* api.others(locator.host, cwd)) {
+        const others = yield* api.others(locator.host, cwd).pipe(Effect.orElseSucceed(() => []));
+        for (const other of others) {
           const { fingerprint, ...held } = other;
           const retried = yield* readRepository(locator, cwd).pipe(
             Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, {

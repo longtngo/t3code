@@ -40,8 +40,14 @@ function harness(
   tokens: Record<string, string> = {},
   fills: Record<string, FillAnswer> = {},
   /** `activeSignedOut`: gh holds no active login. `stored`: what `gh auth status` lists. */
-  options: { readonly activeSignedOut?: boolean; readonly stored?: ReadonlyArray<string> } = {},
+  options: {
+    readonly activeSignedOut?: boolean;
+    readonly stored?: ReadonlyArray<string>;
+    /** How many `gh auth status` runs fail (the spawn dies) before one succeeds. */
+    readonly statusFailures?: number;
+  } = {},
 ) {
+  let statusFailures = options.statusFailures ?? 0;
   const calls: Array<ReadonlyArray<string>> = [];
   const gitCalls: Array<SourceControlHost.SourceControlProcessInput> = [];
   const ghCalls: Array<SourceControlHost.SourceControlProcessInput> = [];
@@ -71,6 +77,18 @@ function harness(
         TestSourceControlHost.processOutput(answer.stdout, {
           stderr: answer.stderr ?? "",
           exitCode: ChildProcessSpawner.ExitCode(answer.exitCode ?? 0),
+        }),
+      );
+    }
+    if (input.args[1] === "status" && statusFailures > 0) {
+      statusFailures--;
+      ghCalls.push(input);
+      return Effect.fail(
+        new VcsProcessTimeoutError({
+          operation: input.operation,
+          command: input.command,
+          cwd: input.cwd,
+          timeoutMs: input.timeoutMs ?? 0,
         }),
       );
     }
@@ -571,11 +589,12 @@ describe("GitHubCredentials.others", () => {
     vi.unstubAllEnvs();
   });
 
-  it.effect("offers no other login when the credential already tried cannot be read again", () => {
+  it.effect("fails when the credential already tried cannot be read again", () => {
     const { layer } = harness({}, [], {}, {}, { activeSignedOut: true, stored: ["bob"] });
     return Effect.gen(function* () {
       const credentials = yield* GitHubCredentials.GitHubCredentials;
-      expect(yield* credentials.others("github.com", null)).toEqual([]);
+      const failure = yield* credentials.others("github.com", null).pipe(Effect.flip);
+      expect(failure._tag).toBe("GitHubNotSignedInError");
     }).pipe(Effect.provide(layer));
   });
 
@@ -588,5 +607,88 @@ describe("GitHubCredentials.others", () => {
       expect(others.map((credential) => credential.account)).toEqual(["bob"]);
       expect(logs.messages).toEqual(["GitHub account carol on github.com is not signed in to gh"]);
     }).pipe(Effect.provide(Layer.merge(layer, logs.layer)));
+  });
+});
+
+describe("GitHubCredentials.account and explicit", () => {
+  beforeEach(() => {
+    for (const name of TOKEN_VARIABLES) vi.stubEnv(name, "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.effect("account() returns the named login's token and fails when gh lacks it", () => {
+    const { layer, calls } = harness({}, ["missing"], {}, {}, { stored: ["a", "b"] });
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      const credential = yield* credentials.account("github.com", "b");
+      expect(credential.account).toBe("b");
+      expect(credential.source).toBe("gh");
+      expect(Redacted.value(credential.token)).toBe("token-for-b");
+      const failure = yield* credentials.account("github.com", "missing").pipe(Effect.flip);
+      expect(failure._tag).toBe("GitHubNotSignedInError");
+      // It never asked for the active login instead.
+      expect(calls).toEqual([userCall("b"), userCall("missing")]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "explicit is set for settings, env and a pinned account, not for folder or active",
+    () => {
+      const fills = { "/x": { stdout: "username=alice\n" } };
+      const saved = harness({}, [], { "github.com": "saved-token" });
+      const pinned = harness({ "github.com": { account: "work" } });
+      const plain = harness({}, [], {}, fills);
+      const env = harness();
+      return Effect.gen(function* () {
+        const explicitOf = (
+          layer: Layer.Layer<GitHubCredentials.GitHubCredentials>,
+          cwd: string | null,
+        ) =>
+          GitHubCredentials.GitHubCredentials.pipe(
+            Effect.flatMap((credentials) => credentials.get("github.com", cwd)),
+            Effect.map((credential) => credential.explicit),
+            Effect.provide(layer),
+          );
+        expect(yield* explicitOf(saved.layer, null)).toBe(true);
+        expect(yield* explicitOf(pinned.layer, null)).toBe(true);
+        expect(yield* explicitOf(plain.layer, "/x")).toBeUndefined();
+        expect(yield* explicitOf(plain.layer, null)).toBeUndefined();
+        vi.stubEnv("GH_TOKEN", "env-token");
+        expect(yield* explicitOf(env.layer, null)).toBe(true);
+      });
+    },
+  );
+
+  it.effect("others spawns gh auth status once per host per minute", () => {
+    const { layer, ghCalls } = harness({}, [], {}, {}, { stored: ["bob"] });
+    const statusRuns = () => ghCalls.filter((call) => call.args[1] === "status").length;
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      yield* credentials.others("github.com", null);
+      yield* credentials.others("github.com", null);
+      yield* credentials.others("github.com", null);
+      expect(statusRuns()).toBe(1);
+      yield* TestClock.adjust("61 seconds");
+      yield* credentials.others("github.com", null);
+      expect(statusRuns()).toBe(2);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("others asks gh again after a failed listing, and keeps each host's own", () => {
+    const { layer, ghCalls } = harness({}, [], {}, {}, { stored: ["bob"], statusFailures: 1 });
+    const statusRuns = (host: string) =>
+      ghCalls.filter((call) => call.args[1] === "status" && call.args.includes(host)).length;
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      const failure = yield* credentials.others("github.com", null).pipe(Effect.flip);
+      expect(failure._tag).toBe("GitHubCliFailedError");
+      const second = yield* credentials.others("github.com", null);
+      expect(second.map((credential) => credential.account)).toEqual(["bob"]);
+      expect(statusRuns("github.com")).toBe(2);
+      yield* credentials.others("ghe.example.com", null);
+      expect(statusRuns("ghe.example.com")).toBe(1);
+    }).pipe(Effect.provide(layer));
   });
 });

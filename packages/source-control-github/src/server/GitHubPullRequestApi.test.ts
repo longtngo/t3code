@@ -9,6 +9,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Redacted from "effect/Redacted";
+import * as Tracer from "effect/Tracer";
 
 import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -112,9 +113,14 @@ const mockedStackMemberships = vi.fn<(call: ApiCall) => ApiAnswer>(() =>
 const mockApi = Layer.succeed(
   GitHubRest.GitHubRest,
   GitHubRest.GitHubRest.of({
-    rest: (input) => mockedExecute({ kind: "rest", ...input }),
+    // The folder's account sees every repository here; the account route has its own tests.
+    rest: (input) =>
+      input.operation === "resolveRepositoryAccount"
+        ? Effect.succeed(output("{}"))
+        : mockedExecute({ kind: "rest", ...input }),
     credential: (host) =>
       Effect.map(mockedCredential(host), (held) => ({ ...held, source: "gh" as const })),
+    account: () => Effect.die("unused"),
     others: () => Effect.succeed([]),
     withDirectory: () => (effect) => effect,
   }),
@@ -185,6 +191,7 @@ const layer = it.layer(
             host,
             source: "gh" as const,
           })),
+        account: () => Effect.die("unused"),
         others: () => Effect.succeed([]),
         invalidate: () => Effect.void,
       }),
@@ -649,6 +656,7 @@ it.effect(
               source: "gh" as const,
               fingerprint: `${host}:${activeToken.length}${activeToken.at(-1)}`,
             })),
+          account: () => Effect.die("unused"),
           others: () => Effect.succeed([]),
           invalidate: () => Effect.void,
         }),
@@ -1134,7 +1142,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
       const first = yield* read;
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("", false, false, {}, 304)));
       const second = yield* read;
-      mockedCredential.mockImplementationOnce(() =>
+      mockedCredential.mockImplementation(() =>
         Effect.succeed({ token: Redacted.make("other"), fingerprint: "github.com:other" }),
       );
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(listing)));
@@ -4015,6 +4023,8 @@ describe("per-folder account", () => {
       readonly run?: SourceControlHost.SourceControlHost["Service"]["process"]["run"];
       /** Credentials GitHub refuses with a 401. */
       readonly refused?: ReadonlyArray<string>;
+      /** Account-route probes are recorded and refused like any request, not answered visible. */
+      readonly realProbes?: boolean;
     } = {},
   ) => {
     const { credentials } = options;
@@ -4022,6 +4032,13 @@ describe("per-folder account", () => {
     const http = Layer.succeed(
       HttpClient.HttpClient,
       HttpClient.make((request) => {
+        // Every folder's account sees the repository; the account route has its own tests.
+        if (
+          options.realProbes !== true &&
+          /^\/repos\/[^/]+\/[^/]+$/u.test(new URL(request.url).pathname)
+        ) {
+          return Effect.succeed(HttpClientResponse.fromWeb(request, new Response("{}")));
+        }
         const { query = "", variables = {} } = bodyOf(request);
         sent.push({
           url: request.url,
@@ -4165,6 +4182,7 @@ describe("per-folder account", () => {
                 fingerprint: `${host}:${token}`,
               });
         },
+        account: () => Effect.die("unused"),
         others: () => Effect.succeed([]),
         invalidate: () => Effect.void,
       }),
@@ -4232,6 +4250,45 @@ describe("per-folder account", () => {
         "Bearer token-v2",
       ]);
     }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a probe refused on a cold cache lets the read go out with gh's newer token", () => {
+    let handedOut = 0;
+    const run: SourceControlHost.SourceControlHost["Service"]["process"]["run"] = (input) =>
+      Effect.sync(() =>
+        TestSourceControlHost.processOutput(
+          input.command === "git" ? "" : `token-v${++handedOut === 1 ? 1 : 2}\n`,
+        ),
+      );
+    const { layer, sent } = stack({ run, refused: ["Bearer token-v1"], realProbes: true });
+    const routes: Array<unknown> = [];
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        const attribute = span.attribute.bind(span);
+        span.attribute = (key, value) => {
+          if (key === "github.account_route") routes.push(value);
+          attribute(key, value);
+        };
+        return span;
+      },
+    });
+    return Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const read = yield* cli
+        .getPullRequestSummary({ cwd: "/a", repository: "acme/web", host: "github.com", number: 1 })
+        .pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      expect((yield* Fiber.join(read)).number).toBe(1);
+      expect(sent.map((request) => [new URL(request.url).pathname, request.authorization])).toEqual(
+        [
+          ["/repos/acme/web", "Bearer token-v1"],
+          ["/graphql", "Bearer token-v2"],
+        ],
+      );
+      // A refusal says nothing about the repository, so no other login is tried.
+      expect(routes).toEqual(["unchanged"]);
+    }).pipe(Effect.provide(layer), Effect.withTracer(tracer));
   });
 
   it.effect("revalidates a polled read as each folder's account, never with another's tag", () => {
