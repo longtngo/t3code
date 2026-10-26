@@ -9,14 +9,9 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as ReviewService from "./ReviewService.ts";
 
 /**
- * Deliberately does NOT provide `ServerConfig`.
- *
- * That omission is the regression guard. Review reads used to be refused unless
- * the cwd sat under the server's own `config.cwd`, which is wherever the
- * process happens to be launched — so every repository the user reviews was out
- * of bounds. Re-introducing any config-derived bound makes `ReviewService.layer`
- * require `ServerConfig` again and breaks this file at build time, before any
- * assertion runs.
+ * Deliberately does NOT provide `ServerConfig`: that omission is the regression guard. A
+ * config-derived bound on review reads (which refused every repository outside the server's cwd)
+ * would make `ReviewService.layer` require it again and break this file at build time.
  */
 function makeLayer(input: { readonly detectCalls: Array<{ readonly cwd: string }> }) {
   return ReviewService.layer.pipe(

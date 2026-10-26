@@ -772,11 +772,9 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
-  // A second prompt sent while one is running parks on the runtime's prompt
-  // serialization semaphore, having executed none of the body that registers it
-  // as the active prompt. Cancelling therefore cannot see it, and interrupting
-  // the running prompt releases the permit and sends the parked one to the
-  // agent — the user presses Stop and their held message runs anyway.
+  // A second prompt parks on the prompt semaphore before registering as active, so cancel
+  // cannot see it, and interrupting the running prompt releases the permit and sends it: the
+  // user presses Stop and their held message runs anyway.
   it.effect("cancels a prompt still waiting behind the running one", () => {
     const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {

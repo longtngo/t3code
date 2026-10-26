@@ -632,14 +632,9 @@ describe("reserved theme ids", () => {
     invalidateCustomThemes();
   };
 
-  // A literal definition, NOT parseThemeFile: that helper rejects reserved ids
-  // itself, so building fixtures with it made these tests pass even with
-  // installCustomTheme's own gate removed. `canvas` is required or the theme is
-  // rejected for colour reasons before the id is ever examined.
-  // Borrow a real built-in's colours and change only the id, so nothing can be
-  // rejected for being an incomplete palette. Built explicitly rather than via
-  // parseThemeFile: that helper rejects reserved ids itself, so fixtures made
-  // with it passed even with installCustomTheme's own gate removed.
+  // Borrow a real built-in's colours and change only the id, so nothing fails as an incomplete
+  // palette. Built explicitly, NOT via parseThemeFile: that helper rejects reserved ids itself, so
+  // fixtures made with it passed even with installCustomTheme's own gate removed.
   const baseTheme = BUILT_IN_THEMES[0]!;
   const themeWithId = (id: string) => ({
     ...baseTheme,

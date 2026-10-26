@@ -16,11 +16,9 @@ import {
 } from "./sidebarResourceQueue.logic";
 
 /**
- * Links the trigger to the panel it expands. This is a disclosure, not a
- * dialog: it opens on hover and closes on a mouse-leave timer, so the focus
- * move, focus trap and restore-on-close that `role="dialog"` promises a screen
- * reader would all be wrong here — you cannot trap focus in something that
- * vanishes when the pointer drifts one button to the left.
+ * Links the trigger to the panel it expands. A disclosure, not a dialog: it opens on hover and
+ * closes on a mouse-leave timer, so the focus trap and restore `role="dialog"` promises would
+ * be wrong.
  */
 const RESOURCE_QUEUE_PANEL_ID = "sidebar-resource-queue-panel";
 
@@ -244,11 +242,9 @@ function QueueRow({
 }
 
 /**
- * Sidebar quick-glance for the local resource broker (`resctl`). Renders as one control in the
- * sidebar footer row: a gauge icon plus two badges — running (green) and waiting (yellow) — and,
- * on hover or click, a popover with the live queue drawn above the row. Polls at 60s in the
- * background and 5s while the popover is open. The advisory RAM pool is intentionally omitted
- * (it is tracked but never reserved).
+ * Sidebar quick-glance for the local resource broker (`resctl`): a gauge with running and
+ * waiting badges and a hover/click popover of the live queue. Polls at 60s, 5s while open.
+ * The advisory RAM pool is omitted (tracked, never reserved).
  */
 export function SidebarResourceQueue({
   isOpen,
@@ -331,13 +327,9 @@ export function SidebarResourceQueue({
 
   return (
     /*
-     * `static` opts out of `SidebarMenuItem`'s baked-in `relative` so the
-     * popover below anchors to the footer row's wrapper rather than to this
-     * ~70px trigger — footer-width on every sidebar size, no width arithmetic.
-     *
-     * No Tooltip on this one, unlike its neighbours in the row: hovering it
-     * already opens the panel, which names itself and says strictly more than a
-     * tooltip could. The `aria-label` carries the name for screen readers.
+     * `static` opts out of `SidebarMenuItem`'s `relative` so the popover anchors to the footer
+     * row (footer-width everywhere). No Tooltip: hovering already opens the self-naming panel,
+     * and `aria-label` names it for screen readers.
      */
     <SidebarMenuItem className="static shrink-0" onMouseEnter={onEnter} onMouseLeave={onLeave}>
       <button

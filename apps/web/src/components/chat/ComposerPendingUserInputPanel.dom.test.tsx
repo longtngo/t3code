@@ -71,13 +71,8 @@ describe("ComposerPendingUserInputPanel", () => {
     const view = await renderPanel(12);
     const list = optionsList(view);
 
-    // Written out rather than read from PENDING_OPTIONS_MAX_HEIGHT_CLASS: a
-    // test that sources the value from the implementation cannot detect that
-    // value being emptied or wrong.
-    //
-    // The bound must be against viewport HEIGHT. A width breakpoint
-    // (`sm:max-h-[22rem]`) leaves a short, wide window uncapped in the only
-    // dimension that matters — measured at 112% of the viewport before this.
+    // Written out, not read from PENDING_OPTIONS_MAX_HEIGHT_CLASS, so an emptied value fails.
+    // The bound must be on viewport HEIGHT: a width breakpoint left a short window at 112%.
     expect([...list.classList]).toContain("max-h-[min(22rem,40dvh)]");
     expect([...list.classList].filter((name) => name.startsWith("sm:max-h-"))).toEqual([]);
     expect([...list.classList]).toContain("overflow-y-auto");

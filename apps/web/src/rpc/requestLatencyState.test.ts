@@ -48,14 +48,10 @@ describe("requestLatencyState", () => {
     expect(getSlowRpcAckRequests()).toEqual([]);
   });
 
-  // The pair above and below is the whole point of the change: quiet at 15s
-  // because fanning out across every server legitimately takes that long, but
-  // still audible at 120s, because by then the call has not been slow, it has
-  // wedged.
-  // Subscriptions are excluded here rather than from the leash: a subscribe call
-  // is a long-lived stream, so `isTrackedRpcAck` drops every method whose name
-  // contains "subscribe" before the leash is consulted. Upstream #9496 added
-  // `pullRequests.subscribeRefreshes`, which this enumeration would otherwise pick up.
+  // Quiet at 15s because fanning out across every server takes that long, still audible at 120s
+  // because by then the call has wedged. Subscriptions are excluded by `isTrackedRpcAck` (every
+  // method containing "subscribe" is a long-lived stream), so `pullRequests.subscribeRefreshes` is
+  // left out of this enumeration.
   it.each(
     Object.values(WS_METHODS).filter(
       (method) => method.startsWith("pullRequests.") && !method.includes("subscribe"),

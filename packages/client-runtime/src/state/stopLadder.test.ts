@@ -50,11 +50,9 @@ describe("nextStopAction", () => {
   });
 
   it("still escalates an arming whose turn already ended, so callers must clear it", () => {
-    // The module sees a thread and a clock, never a turn. Inside the window an
-    // arming left over from a finished turn is indistinguishable from a live
-    // one, so both clients clear it when the session leaves "running"
-    // (ChatView.tsx and ThreadRouteScreen.tsx). This pins WHY: without that
-    // reset, the next turn's first Stop force-stops the session.
+    // The module sees a thread and a clock, never a turn, so a leftover arming looks live; both
+    // clients clear it when the session leaves "running" (ChatView.tsx, ThreadRouteScreen.tsx).
+    // Without that reset the next turn's first Stop force-stops the session.
     expect(
       nextStopAction({
         threadId: "thread-1",

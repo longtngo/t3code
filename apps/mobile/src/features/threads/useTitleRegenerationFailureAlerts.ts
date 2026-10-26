@@ -1,15 +1,6 @@
 /**
- * Tells the user when a title regeneration they asked for failed.
- *
- * The mobile counterpart of the web toast hook. Regeneration runs in a server
- * reactor, so the request is accepted long before the work happens and the
- * calling screen cannot learn the outcome; the server records
- * `titleRegenerationFailedAt` on the thread and this hook watches it change.
- *
- * An alert matches what this action already does for a dispatch failure
- * (`useThreadListActions`), so the two failure modes read the same way rather
- * than one being loud and the other silent.
- *
+ * Alerts when a requested title regeneration failed. The server runs it in a reactor, so
+ * the caller cannot see the outcome; this watches `titleRegenerationFailedAt` instead.
  * Mount once at the app root.
  */
 import { useEffect, useRef } from "react";
@@ -20,13 +11,10 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useThreadShells } from "../../state/entities";
 
 export function useTitleRegenerationFailureAlerts(): void {
-  // A thread missing from this map has never been observed, which is what
-  // keeps a persisted failure from alerting on first load.
-  // Never pruned, deliberately, and the same on web. Absence means "never
-  // observed" and suppresses the alert, so dropping a thread that left the shell
-  // list — which happens whenever an environment drops out of the catalog — would
-  // silently swallow a failure landing in that window. The growth avoided is one
-  // string per thread ever seen; a missed failure alert is not recoverable.
+  // Absence means "never observed" and suppresses the alert, so a persisted failure does
+  // not alert on first load. Never pruned (same on web): dropping a thread that left the
+  // list, e.g. when an environment leaves the catalog, would swallow a failure landing in
+  // that window. One string per thread is cheaper than an unrecoverable missed alert.
   const seenFailedAt = useRef(new Map<string, string | null>());
   const threads = useThreadShells();
 

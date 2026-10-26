@@ -155,13 +155,9 @@ export const VcsCreateWorktreeInput = Schema.Struct({
   baseRefName: Schema.optional(TrimmedNonEmptyStringSchema),
   path: Schema.NullOr(TrimmedNonEmptyStringSchema),
   /**
-   * Take over a path git still has an admin entry for but whose directory is
-   * gone (`git worktree list` calls it `prunable`).
-   *
-   * Only for recreating a worktree the caller has already found missing. Drops
-   * git's admin entry for that path when the directory is absent and the entry
-   * is not locked, then adds normally, so a path that exists or a branch checked
-   * out in another worktree is still refused. Never touches a working tree.
+   * Recreate a worktree whose directory is gone but still registered (`prunable`). Drops the admin
+   * entry only when the directory is absent and unlocked, then adds normally, so an existing path or a
+   * branch checked out elsewhere is still refused. Never touches a working tree.
    */
   reuseRegisteredPath: Schema.optional(Schema.Boolean),
 });
@@ -311,11 +307,7 @@ export const GitPreparePullRequestThreadResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,
   branch: TrimmedNonEmptyStringSchema,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
-  /**
-   * False when the checkout could not be brought to the pull request head — a reused worktree
-   * holding local commits or uncommitted changes keeps its own state, so the code being handed
-   * over is older than the pull request.
-   */
+  /** False when local commits or edits prevented a reused worktree from reaching the PR head. */
   isOnPullRequestHead: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
 });
 export type GitPreparePullRequestThreadResult = typeof GitPreparePullRequestThreadResult.Type;

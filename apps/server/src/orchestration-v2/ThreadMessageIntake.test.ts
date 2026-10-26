@@ -1,3 +1,4 @@
+import * as DocumentText from "../provider/DocumentText.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -7,6 +8,7 @@ import {
   ChatAttachmentId,
   CommandId,
   EventId,
+  GuestMessageId,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -22,7 +24,11 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
+import {
+  createAttachmentId,
+  createPendingAttachmentId,
+  resolveAttachmentPath,
+} from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -39,23 +45,26 @@ import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
 const layerIntakeTest = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-question-intake-",
 }).pipe(
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   Layer.provideMerge(creditSpendIntakeAllowAll),
   Layer.provideMerge(ServerSettings.layerTest()),
 );
 
+const layerFailingDispatchHandler =
+  (captured: OrchestrationV2ServerCommand[]) => (command: OrchestrationV2ServerCommand) => {
+    captured.push(command);
+    return Effect.fail(
+      new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Stop after intake",
+      }),
+    );
+  };
+
 const layerFailingDispatch = (captured: OrchestrationV2ServerCommand[]) =>
   Layer.mock(ThreadManagementService.ThreadManagementService)({
-    dispatch: (command) => {
-      captured.push(command);
-      return Effect.fail(
-        new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: "Stop after intake",
-        }),
-      );
-    },
+    dispatch: layerFailingDispatchHandler(captured),
   });
 
 const NOW = DateTime.makeUnsafe("2026-09-13T00:00:00.000Z");
@@ -394,7 +403,7 @@ describe("credit spend gate at client intake", () => {
           Effect.succeed(input.receiptExists === true ? Option.some({} as never) : Option.none()),
       }),
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-credit-intake-" }).pipe(
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
       ),
     );
 
@@ -508,3 +517,59 @@ describe("credit spend gate at client intake", () => {
     }).pipe(Effect.provide(gateLayer())),
   );
 });
+
+it.effect("sends a guest message with the guest's files, never ones the client names", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const guestFile = {
+      type: "image" as const,
+      id: ChatAttachmentId.make(createAttachmentId("thread-guest")!),
+      name: "screen.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+    };
+    NodeFS.writeFileSync(
+      NodePath.join(config.attachmentsDir, `${guestFile.id}.png`),
+      new Uint8Array([1, 2, 3]),
+    );
+    const guestMessageId = GuestMessageId.make("guest-message:files");
+    const captured: OrchestrationV2ServerCommand[] = [];
+    const layerGuestShare = Layer.mock(ThreadManagementService.ThreadManagementService)({
+      dispatch: layerFailingDispatchHandler(captured),
+      // FORK: the credit gate reads the shell for a send without a model selection.
+      getThreadShell: () => Effect.succeed(null),
+      // Only the share is read.
+      getThreadSnapshotWindow: () =>
+        Effect.succeed({
+          projection: {
+            thread: {
+              guestShare: {
+                messages: [{ id: guestMessageId, status: "pending", attachments: [guestFile] }],
+              },
+            },
+          },
+        } as unknown as Effect.Success<
+          ReturnType<
+            ThreadManagementService.ThreadManagementServiceShape["getThreadSnapshotWindow"]
+          >
+        >),
+    });
+    yield* dispatchCommand({
+      type: "message.dispatch",
+      commandId: CommandId.make("send-guest-message"),
+      threadId: ThreadId.make("thread-guest"),
+      messageId: MessageId.make("message-guest"),
+      guestMessageId,
+      text: "",
+      attachments: [{ ...guestFile, id: ChatAttachmentId.make("thread-guest-owner-file") }],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "user",
+      creationSource: "web",
+    }).pipe(Effect.provide(layerGuestShare), Effect.result);
+    const command = captured[0];
+    if (command?.type !== "message.dispatch") throw new Error("Expected a message dispatch.");
+    expect(command.attachments).toHaveLength(1);
+    // The guest's file, which is already the thread's.
+    expect(command.attachments).toEqual([guestFile]);
+  }).pipe(Effect.provide(layerIntakeTest)),
+);

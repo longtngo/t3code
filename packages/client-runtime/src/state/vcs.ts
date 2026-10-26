@@ -323,11 +323,9 @@ export function createVcsEnvironmentAtoms<R, E>(
       onSettled: invalidateRefs,
     }),
     memberBranches,
-    // Commands, not queries: both write. The prepare step moves a branch in the
-    // user's checkout, so it runs when an action is about to, never on a timer.
-    // Serialized per member rather than per path: a member id still maps to one
-    // checkout, and `memberActionPrepare` cuts and checks out a branch there,
-    // which two concurrent calls must not do at once.
+    // Commands, not queries: both write, and prepare moves a branch in the user's checkout, so it
+    // runs only when an action is about to. Serialized per member (one checkout each): two concurrent
+    // `memberActionPrepare` calls must not cut and check out a branch there at once.
     memberActionPrepare: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:workspace:member-action-prepare",
       tag: WS_METHODS.workspaceMemberActionPrepare,
@@ -412,3 +410,4 @@ export function createVcsEnvironmentAtoms<R, E>(
 export * from "./gitActions.ts";
 export * from "./vcsAction.ts";
 export * from "./vcsRef.ts";
+export * from "./vcsStatusRevalidation.ts";

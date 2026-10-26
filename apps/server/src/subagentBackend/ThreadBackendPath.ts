@@ -1,11 +1,7 @@
 /**
- * Where a thread's subagent-offload flag file lives. Pure path arithmetic so the
- * Claude adapter can compute the same path it points `SUBAGENT_BACKEND_STATE` at
- * without importing the writer module.
- *
- * The file name is `encodeBase64Url(threadId)` — the same encoding checkpoint refs and
- * terminal logs use for thread ids — so a client-supplied id with `/` or `..` cannot
- * escape the directory, and two distinct ids never share a file.
+ * Where a thread's subagent-offload flag file lives; pure so the Claude adapter can share it.
+ * The name is `encodeBase64Url(threadId)`, so an id containing `/` or `..` cannot escape the
+ * directory and two distinct ids never share a file.
  */
 import * as Base64Url from "effect/encoding/Base64Url";
 import type { ThreadId } from "@t3tools/contracts";

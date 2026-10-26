@@ -109,12 +109,9 @@ describe("resolveChatFilePathMention", () => {
   });
 
   it("only links file kinds the viewer can render", () => {
-    // Extension-less paths and secrets are deliberately excluded — the curated
-    // allow-list in lib/codeFileTypes.ts is the gate.
-    // /etc/hosts and .env now chip: they are real absolute paths under known
-    // roots, and the widened gate deliberately admits those. The read RPC has no
-    // sandbox and the address bar already accepts any path, so this exposes
-    // nothing new — it removes a formatting requirement, not a check.
+    // /etc/hosts and .env chip: they are real absolute paths under known roots. The read RPC has no
+    // sandbox and the address bar already accepts any path, so this removes a formatting
+    // requirement, not a check.
     expect(resolveChatFilePathMention("/etc/hosts", { cwd: CWD })).toBe("/etc/hosts");
     expect(resolveChatFilePathMention("/Users/dev/project/.env", { cwd: CWD })).toBe(
       "/Users/dev/project/.env",

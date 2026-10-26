@@ -110,7 +110,7 @@ describe("live provider-turn usage (#8144)", () => {
       autoCompactThreshold: 967_000,
       autoCompactSource: "settings",
     });
-    // A report that names its own threshold (upstream #18332) wins over the carried one.
+    // A report that names its own threshold wins over the carried one.
     const ownThreshold = deriveLatestContextWindowSnapshot(
       [],
       decodeTokenUsage({

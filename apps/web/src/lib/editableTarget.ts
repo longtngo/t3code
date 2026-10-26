@@ -1,10 +1,7 @@
 /**
- * Whether a keyboard event landed inside something the user is typing into.
- *
- * Window-level shortcuts have to ask this before acting, or they steal keys from
- * whatever has focus. `SettingsSidebarNav` and `KeybindingsSettings` carry
- * near-copies of this test, each with an extra clause of its own, so this stays
- * local to the settings-page rule rather than pretending to be the one version.
+ * Window-level shortcuts must ask this before acting, or they steal keys from the focused field.
+ * `SettingsSidebarNav` and `KeybindingsSettings` carry near-copies with extra clauses of their
+ * own, so this stays local to the settings-page rule.
  */
 function isEditableTarget(target: EventTarget | null): boolean {
   return (

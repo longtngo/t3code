@@ -1,12 +1,8 @@
 import { SEVERITY_BG, type Severity } from "~/lib/vitals";
 
 /**
- * The count badge shared by the sidebar footer's status controls.
- *
- * Resource Queue and Local models sit side by side in one ~16rem row, so a count that is a
- * pill on one and a bare number beside a dot on the other reads as two unrelated widgets. The
- * geometry and the tone vocabulary live here rather than in either component, which is what
- * keeps them the same shape as controls are added and restyled.
+ * The count badge shared by the sidebar footer's status controls, so side-by-side controls in
+ * one ~16rem row read as one family; geometry and tone vocabulary live here, not in either.
  */
 export type SidebarFooterBadgeTone = "idle" | "active" | "pending";
 

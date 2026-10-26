@@ -120,7 +120,6 @@ describe("GitHubRest", () => {
         "http.response.status_code": 200,
         "github.ratelimit.remaining": 4800,
       });
-      // Nothing recorded carries the query string or the token.
       const everything = spans
         .flatMap((span) => [...span.attributes].map(([key, value]) => `${key}=${String(value)}`))
         .join("\n");
@@ -371,6 +370,7 @@ describe("GitHubRest", () => {
       HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, json({})))),
     );
     const layer = GitHubRest.layerWithDependencies.pipe(
+      Layer.provide(SourceControlRateLimit.layer),
       Layer.provide(http),
       Layer.provide(TestSourceControlHost.layer({ process: { run } })),
       Layer.provide(Layer.succeed(HostProcess.Environment, {})),

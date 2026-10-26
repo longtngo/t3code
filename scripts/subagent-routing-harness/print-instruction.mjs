@@ -1,11 +1,7 @@
 /**
- * Prints the dispatch instruction exactly as shipped, so the harness measures the live text
- * instead of a copy. A copy is what went wrong before: the instruction was edited twice after it
- * was measured, and nobody noticed until a reviewer compared the two.
- *
- * `.mjs`, not `.ts`, on purpose. `scripts/tsconfig.json` includes every `.ts` under this tree in
- * its own project, and a `.ts` file here that imports `apps/server` source makes `pnpm typecheck`
- * fail with TS6307 on every transitive import. No other script in this repo imports app source.
+ * Prints the shipped instruction so the harness measures the live text, not a drifting copy.
+ * `.mjs` on purpose: a `.ts` here importing `apps/server` source fails `pnpm typecheck` with
+ * TS6307, since `scripts/tsconfig.json` includes every `.ts` in this tree.
  */
 const adapter =
   await import("../../apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2Fork.ts");

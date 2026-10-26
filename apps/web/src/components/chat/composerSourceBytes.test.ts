@@ -5,16 +5,9 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 /**
- * A raw NUL byte in a source file is legal TypeScript and survives every normal
- * review, but it makes the file opaque to the tools we audit merges with: BSD
- * `sed` aborts mid-file and returns a plausible truncated answer, and `grep`
- * reports `Binary file … matches` and prints nothing. Both have already misled
- * a reconcile on this fork — once faking 130 phantom deletions, once hiding a
- * whole report from a follow-up sweep.
- *
- * `ChatComposer.tsx` used them as dedup-key delimiters and was cleaned up to
- * `\0` escapes, which produce the identical string. This guard is what stops
- * the next one, since nothing else in the toolchain objects.
+ * A raw NUL byte in a source file is legal TypeScript but makes BSD `sed` truncate and `grep`
+ * report "Binary file matches", which has misled reconcile audits on this fork twice. Use `\0`
+ * escapes instead (identical string); this guard is the only thing that objects.
  */
 const SOURCE_ROOT = NodePath.join(import.meta.dirname, "..", "..");
 

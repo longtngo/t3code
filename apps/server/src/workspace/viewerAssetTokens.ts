@@ -1,31 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - token minting is synchronous on the request path.
 /**
- * Short-lived capability tokens that let a SANDBOXED viewer document load its own
- * relative assets.
- *
- * The problem this exists for: `/viewer` serves `.html` under a CSP `sandbox`
- * directive, which gives the document an **opaque origin**. An opaque-origin
- * document has a null "site for cookies", so the `SameSite=Lax` session cookie is
- * not sent on any subresource it requests — every relative `<script>`, `<link>`
- * and `<img>` 401s and a multi-file prototype renders blank. The document's own
- * navigation still authenticates (it inherits the top-level site), which is why an
- * inline script runs but an external one does not.
- *
- * Cookies cannot be recovered without giving up the sandbox, and giving up the
- * sandbox means untrusted HTML runs at the app's origin — it could read the
- * session from storage and act as the user. So the credential moves into the URL
- * **path**: a document served from `/viewer-asset/<token>/<dir>/index.html`
- * resolves `app.js` to `/viewer-asset/<token>/<dir>/app.js`, carrying the token
- * without the document doing anything. A query string would not survive relative
- * resolution; a path segment does.
- *
- * Deliberately NOT the session token. A token here grants read-only access to one
- * directory subtree for a few minutes, and the sandboxed document can read it out
- * of `document.location` — so it must be worth as little as possible. The document
- * can already read its own directory by fetching those files itself, so the token
- * mainly bounds what leaks if the document is hostile and exfiltrates it.
- *
- * @module viewerAssetTokens
+ * Short-lived tokens letting a sandboxed `/viewer` document load relative assets: its opaque origin
+ * gets no session cookie, so they 401. The token rides in the URL PATH, which relative resolution
+ * preserves (a query string would not). Never the session token: the document can read it, so it
+ * grants only read access to one directory subtree for a few minutes.
  */
 import * as NodeCrypto from "node:crypto";
 

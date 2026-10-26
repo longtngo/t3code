@@ -1,14 +1,7 @@
 /**
- * MarkdownHtmlRenderer - renders markdown to a standalone HTML document, preferring
- * the user's `uni-md2html` CLI (UniUni-branded "report" theme) and degrading to the
- * in-process `marked` renderer when the tool is unavailable or fails.
- *
- * The resolved command is a file-based console script, so it is driven through a
- * temp-file round-trip rather than stdin. `render` never fails — any failure of the
- * tool (not installed, non-zero exit, timeout, empty output) falls back to
- * `renderMarkdownDocument`, so the file viewer always gets a document.
- *
- * @module markdownHtmlRenderer
+ * Renders markdown to standalone HTML via the user's `uni-md2html` CLI, falling back to the
+ * in-process `marked` renderer. The CLI is file-based, so it runs through a temp file. `render`
+ * never fails: any tool failure falls back, so the viewer always gets a document.
  */
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -38,13 +31,8 @@ class MarkdownToolUnavailable extends Data.TaggedError("MarkdownToolUnavailable"
 }> {}
 
 /**
- * Where the branded CLI was found, or null when it was not.
- *
- * The install is machine-local, so a fresh machine silently gets the `marked`
- * fallback and every report comes out unbranded. That is the intended
- * degradation, but it used to be observable only by inspecting output bytes:
- * the fallback was logged at debug level, per render. Resolving once at startup
- * makes "why is my report unbranded?" answerable from the server log.
+ * Where the branded CLI was found, or null. The install is machine-local, so a fresh machine
+ * silently renders unbranded; resolving once at startup makes that visible in the server log.
  */
 export const resolveRendererCommand = Effect.fn("resolveRendererCommand")(function* (input: {
   readonly command: string;
@@ -118,11 +106,9 @@ export const make = Effect.fn("makeMarkdownHtmlRenderer")(function* () {
         // diagnostics rather than let them trip the output-size limit.
         const result = yield* processRunner.run({
           command,
-          // `--self-contained` drops the tool's Google Fonts <link>, so the document
-          // reaches the network for nothing. The viewer renders it in a `sandbox=""`
-          // iframe (scripts inert) and is served over Tailscale to devices that may
-          // have no internet; the app itself loads no external resources either.
-          // The UniUni identity is carried by the CSS tokens, not the webfonts.
+          // `--self-contained` drops the Google Fonts <link>: the viewer is served over Tailscale
+          // to devices that may lack internet, and the app loads no external resources. Identity
+          // lives in CSS tokens.
           args: [inputPath, "--theme", "report", "--self-contained", "-o", outputPath],
           timeout: RENDER_TIMEOUT,
           // Surface a timeout as a value (`timedOut`) rather than a failure, so the

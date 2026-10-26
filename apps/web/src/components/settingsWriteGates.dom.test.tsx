@@ -52,8 +52,8 @@ vi.mock("./ui/tooltip", async () => {
 import ProjectScriptsControl from "./ProjectScriptsControl";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { SourceControlHostSettings } from "./settings/SourceControlHostSettings";
-import { GitHubAccountSettings } from "./settings/GitHubAccountSettings";
-import { GitHubTokenSettings } from "./settings/GitHubTokenSettings";
+import { SourceControlAccountSettings } from "./settings/SourceControlAccountSettings";
+import { SourceControlTokenSettings } from "./settings/SourceControlTokenSettings";
 import { CursorEnableButton } from "./usage/UsagePage";
 
 const SENTENCE = "This connection does not have permission to change environment settings.";
@@ -101,6 +101,9 @@ const projectActions = (onAddScript: () => Promise<unknown>, withFileScript: boo
   />
 );
 
+const github = sourceControlClients.get("github");
+if (!github.credentials) throw new Error("GitHub client definition declares no credentials");
+const githubCredentials = github.credentials;
 const bitbucket = sourceControlClients.find("bitbucket");
 if (!bitbucket?.settings) throw new Error("Bitbucket client definition declares no settings");
 const bitbucketDefinition = { ...bitbucket, settings: bitbucket.settings };
@@ -108,7 +111,14 @@ const bitbucketDefinition = { ...bitbucket, settings: bitbucket.settings };
 describe.each(logins)("settings write gates, %s login", (_name, grant, denied) => {
   it("GitHub token", async () => {
     fixture.grant = grant;
-    const dom = await renderDom(<GitHubTokenSettings environmentId={env} onSaved={() => {}} />);
+    const dom = await renderDom(
+      <SourceControlTokenSettings
+        environmentId={env}
+        definition={github}
+        credentials={githubCredentials}
+        onSaved={() => {}}
+      />,
+    );
     expect(isDisabled(dom.find("#github-token-env-1"))).toBe(denied);
     expect(dom.text().includes(SENTENCE)).toBe(denied);
   });
@@ -133,7 +143,9 @@ describe.each(logins)("settings write gates, %s login", (_name, grant, denied) =
       { host: "github.com", account: "bot", active: false, authenticated: true },
     ];
     const dom = await renderDom(
-      <GitHubAccountSettings
+      <SourceControlAccountSettings
+        definition={github}
+        credentials={githubCredentials}
         environmentId={env}
         onSaved={() => {}}
         auth={{ status: "authenticated", accounts } as never}

@@ -135,7 +135,6 @@ it.live.each([
             };
           }),
       };
-      const now = yield* DateTime.now;
       const layer = layerWithRegistry({ name }, ProviderAdapterRegistry.layerSingle(adapter), {
         runEffectWorker: false,
       });

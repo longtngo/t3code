@@ -6,14 +6,9 @@ import { logWsReconnectPhase } from "../rpc/wsReconnectLog";
 import { useEnvironments } from "../state/environments";
 
 /**
- * Observation-only wiring for the opt-in WS reconnect timeline logger.
- *
- * Watches every environment's presentation phase (the supervisor's connection
- * state, surfaced through the presentation atoms) and feeds each transition to
- * `Connection.logWsReconnectPhase`. It never touches the supervisor or reconnect
- * behavior — it is a passive subscriber to phase changes. The logger itself is a
- * no-op unless `localStorage["t3.wsReconnect"] === "1"`, so this hook is cheap to
- * mount unconditionally.
+ * Observation-only wiring for the opt-in WS reconnect timeline logger: feeds every environment's
+ * presentation-phase transitions to `Connection.logWsReconnectPhase`, never touching the
+ * supervisor. The logger is a no-op unless `localStorage["t3.wsReconnect"] === "1"`.
  */
 export function useWsReconnectTimelineLog(): void {
   const { presentationById } = useEnvironments();

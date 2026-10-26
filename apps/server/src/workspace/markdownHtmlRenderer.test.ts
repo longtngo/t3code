@@ -173,11 +173,9 @@ describe("MarkdownHtmlRenderer", () => {
 
       const input = captured[0];
       expect(input).toBeDefined();
-      // Without this flag the tool emits a Google Fonts <link>, which would make
-      // the viewer's iframe reach the network for a local file — the app itself
-      // loads no external resources, and the viewer must work offline. (A doc
-      // containing a mermaid fence still carries the tool's mermaid CDN <script>;
-      // that one is inert because the viewer's iframe disables scripting.)
+      // Without this flag the tool emits a Google Fonts <link>, making the viewer reach the network
+      // for a local file; the viewer must work offline. A mermaid fence still carries the tool's
+      // CDN <script>, which is inert because the viewer's iframe disables scripting.
       expect(input?.args).toContain("--self-contained");
     }),
   );

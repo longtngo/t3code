@@ -36,11 +36,8 @@ describe("trustedReadErrorMessage", () => {
     );
   });
 
-  // The three tagged errors below carry NO `cause`, so a mapper that only reads
-  // `cause.code` sends every one of them to the generic fallback. That is not
-  // hypothetical: one NUL byte in a report made the viewer answer
-  // "Failed to read '<path>'", which read as a server regression and cost a
-  // full RCA before the file turned out to be the problem.
+  // These tagged errors carry NO `cause`, so a mapper reading only `cause.code` sends them to the
+  // generic fallback. One NUL byte in a report once made that look like a server regression.
   it("names a binary file instead of reporting a generic read failure", () => {
     const message = trustedReadErrorMessage(
       PATH,

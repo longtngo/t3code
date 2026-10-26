@@ -1,24 +1,8 @@
 // Crew orchestration was removed; kept so migration ids stay contiguous. Its tables are unused.
 /**
- * Adds `crew_tasks` and `crew_reports`: the durable record of crew orchestration.
- *
- * A *bridge* thread dispatches *crewmate* threads, each into its own git worktree.
- * `crew_tasks` is the one row per dispatch that outlives the process — the worktree
- * path and branch it must tear down, the crew thread whose provider session must be
- * exempted from the reaper, and the parent it reports back to. Without it a restart
- * leaks a worktree and a branch with nothing left that knows they exist.
- *
- * `crew_reports` is the outbox. A crewmate writes a report; the delivery sweep hands
- * it to the bridge and stamps `noted_at`. A NULL `noted_at` *is* the queue, so the
- * sweep's selection is `WHERE noted_at IS NULL` and delivery is idempotent across a
- * restart: an undelivered report is still undelivered when the process comes back.
- *
- * `ix_crew_tasks_crew` is UNIQUE, not merely an index. One crew thread belongs to at
- * most one task; two tasks pointing at the same thread would make teardown ambiguous
- * about which worktree it owns.
- *
- * `base_ref` is nullable: a task may be rooted at the project's current HEAD rather
- * than at a named ref. `reply_to` is nullable because most reports are not answers.
+ * `crew_tasks`: one row per dispatch that outlives a restart, so worktrees and branches are not
+ * leaked; `ix_crew_tasks_crew` is UNIQUE so teardown is never ambiguous. `crew_reports` is the
+ * outbox: a NULL `noted_at` IS the queue, so delivery is idempotent across restarts.
  */
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Effect from "effect/Effect";

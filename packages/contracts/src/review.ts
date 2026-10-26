@@ -4,14 +4,9 @@ import { GitCommandError } from "./git.ts";
 import { VcsError } from "./vcs.ts";
 
 /**
- * A git revision supplied by a client.
- *
- * Refs reach `git diff` / `git show` positionally, with no `--` separator, so an
- * option-shaped value is parsed as an option rather than a revision. That is not merely a
- * bad diff: `git diff --output=<path>` creates and truncates `<path>` while parsing its
- * arguments, before it ever fails — turning read-only-looking review RPCs into a file
- * clobber primitive anywhere the server can write. A real ref can never begin with `-`
- * (git refuses to create one), so rejecting the shape costs nothing legitimate.
+ * Refs reach `git diff`/`git show` positionally with no `--`, and `--output=<path>` truncates a
+ * file before git fails, making review RPCs a file-clobber primitive. Real refs never start with
+ * `-`, so rejecting that shape costs nothing.
  */
 const GitRevision = TrimmedNonEmptyString.pipe(
   Schema.check(

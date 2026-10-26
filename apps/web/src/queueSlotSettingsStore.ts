@@ -1,11 +1,7 @@
 /**
- * How many threads the sidebar Queue lets be busy before it sends, overall or per provider
- * instance. This is the device's copy, shared by its tabs: read when there is no primary
- * environment (or before it has a value), and sent to the primary as a one-time import.
- * `queueSlotSettings.ts` picks the effective value.
- *
- * Stored under its own key, not the queue's: a tab still running a build from before these
- * settings existed writes the whole queue state, and would drop them from a shared key.
+ * The device's copy of the Queue's busy-thread limits: read when the primary has no value, and
+ * sent to it as a one-time import (`queueSlotSettings.ts` picks the effective value). Own key, not
+ * the queue's: an older build writes the whole queue state and would drop these from a shared key.
  */
 import {
   normalizeQueueSlots,

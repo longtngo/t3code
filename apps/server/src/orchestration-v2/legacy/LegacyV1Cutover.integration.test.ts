@@ -73,12 +73,9 @@ const codexModelSelection = {
 };
 
 /**
- * A V1 database as it exists on disk before a V2 server first opens it: schema
- * through fork migration 58 (upstream's 049). Fork ids diverge from upstream's
- * (registry section 1), so a site-local `ThreadSummaryTimeline` row is recorded at
- * id 34 in place of the fork's `PushSubscriptions`, matching databases where local
- * builds recorded other names under the shared id sequence. The cutover then applies fork ids 59-65, ending in
- * OrchestrationV2 (64), on top of the untouched copy.
+ * A V1 database through fork migration 58 (upstream's 049). Fork ids diverge (registry
+ * section 1), so slot 34 models a site-local migration sharing an id; the V2 runner then
+ * applies only fork ids above the recorded maximum, 59-65, ending in OrchestrationV2 (64).
  */
 const seedV1Database = (fixturePath: string, workspace: string) =>
   Effect.scoped(

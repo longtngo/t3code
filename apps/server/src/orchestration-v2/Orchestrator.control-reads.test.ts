@@ -23,12 +23,17 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as Result from "effect/Result";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
+import {
+  orchestrationCommandDuration,
+  orchestrationCommandsTotal,
+} from "../observability/Metrics.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as DelegatedTaskQuestionReactor from "./DelegatedTaskQuestionReactor.ts";
@@ -42,6 +47,8 @@ import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const instanceId = ProviderInstanceId.make("codex");
+const isEventSinkStreamError = Schema.is(EventSink.EventSinkStreamError);
+const isLiveStreamBufferError = Schema.is(LiveStreamBufferError);
 const modelSelection = { instanceId, model: "gpt-5.1-codex" };
 const adapter = {
   instanceId,
@@ -861,8 +868,7 @@ it.live("fails a streamStoredEventsFrom reader that stops taking live events", (
         if (result.failure._tag === "OrchestratorDomainEventStreamError") {
           const sinkError = result.failure.cause;
           assert.isTrue(
-            Schema.is(EventSink.EventSinkStreamError)(sinkError) &&
-              Schema.is(LiveStreamBufferError)(sinkError.cause),
+            isEventSinkStreamError(sinkError) && isLiveStreamBufferError(sinkError.cause),
           );
         }
       }
@@ -1375,7 +1381,8 @@ it.effect("replays a thread.create receipt without changing the thread", () =>
     const before = yield* projections.getThread(threadId);
     const replayed = yield* orchestrator.dispatch(create);
     assert.equal(replayed.sequence, original.sequence);
-    assert.deepEqual(replayed, original);
+    // Marked so client analytics do not count the retry again.
+    assert.deepEqual(replayed, { ...original, replayed: true });
     assert.deepEqual(yield* projections.getThread(threadId), before);
     assert.equal(yield* orchestrator.getThreadEventSequence(threadId), original.sequence);
   }).pipe(Effect.provide(layerTest)),
@@ -1455,5 +1462,40 @@ it.effect("explicit settle clears snooze atomically and stays idempotent after r
     } as const;
     assert.deepInclude(yield* projections.getThreadShell(threadId), active);
     assert.deepInclude((yield* projections.getThreadProjection(threadId)).thread, active);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("dispatch records the command outcome and its duration", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const successes = Metric.value(
+      Metric.withAttributes(orchestrationCommandsTotal, {
+        commandType: "thread.create",
+        outcome: "success",
+      }),
+    );
+    const durations = Metric.value(
+      Metric.withAttributes(orchestrationCommandDuration, { commandType: "thread.create" }),
+    );
+    const successesBefore = (yield* successes).count;
+    const durationsBefore = (yield* durations).count;
+
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-dispatch-metrics"),
+      threadId: ThreadId.make("thread:dispatch-metrics"),
+      projectId: ProjectId.make("project:dispatch-metrics"),
+      title: "Dispatch metrics",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+
+    assert.strictEqual((yield* successes).count - successesBefore, 1);
+    assert.strictEqual((yield* durations).count - durationsBefore, 1);
   }).pipe(Effect.provide(layerTest)),
 );

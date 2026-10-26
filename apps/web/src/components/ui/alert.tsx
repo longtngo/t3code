@@ -58,11 +58,9 @@ function Alert({
 }: React.ComponentProps<"div"> &
   VariantProps<typeof alertVariants> & {
     controlAlignment?: "center" | "first-line";
-    // Let a wide control drop below the message on a phone instead of squeezing
-    // it into a ribbon. Opt-in, because it is only correct in a container that
-    // fills the viewport: under a shrink-to-fit ancestor (`w-fit`) the content's
-    // mobile flex-basis becomes a floor the container never grows to meet, and
-    // even a lone dismiss button ends up wrapped.
+    // Let a wide control drop below the message on a phone. Opt-in: only correct in a container
+    // that fills the viewport; under a `w-fit` ancestor the mobile flex-basis becomes a floor
+    // and even a lone dismiss button wraps.
     stackControlOnNarrow?: boolean;
   }) {
   const icon: React.ReactNode[] = [];
@@ -118,24 +116,10 @@ function Alert({
           <div
             className={cn(
               "flex min-w-0 flex-1 flex-col gap-0.5",
-              // This is what makes the wrap self-selecting: `flex-1` is
-              // `flex: 1 1 0%`, so the row's hypothetical size always fits and
-              // it would never wrap. Claiming 12rem on a phone means only a
-              // control that cannot sit beside a readable message drops below —
-              // a lone dismiss button still fits. `flex-1` regrows the content
-              // to the full line once the control has moved.
-              //
-              // Order-sensitive: `basis-48` and the `flex-1` shorthand both set
-              // flex-basis at equal specificity, so this relies on Tailwind
-              // emitting `.max-sm\:basis-48` after `.flex-1` (verified on 4.2.1
-              // and 4.3.0). If that ever inverts, the basis stays 0 and the row
-              // silently stops wrapping.
-              //
-              // At the composer's 338px phone row the threshold is a control
-              // wider than 112px. Today only the connection banner (190px)
-              // crosses it; the next widest is the update offer at 96px, so
-              // there is ~16px of headroom before a second banner starts
-              // stacking.
+              // `flex-1` (basis 0%) never wraps; claiming 12rem on a phone drops only a control that
+              // cannot sit beside a readable message (>112px at the 338px composer row). Order-sensitive:
+              // relies on Tailwind emitting `.max-sm\:basis-48` after `.flex-1` (verified 4.2.1, 4.3.0);
+              // inverted, the basis stays 0 and the row silently stops wrapping.
               stackControlOnNarrow && action.length > 0 && "max-sm:basis-48",
             )}
           >

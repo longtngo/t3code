@@ -250,18 +250,10 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   readonly retryExpectedFailureAfter?: Duration.Input;
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
   /**
-   * When set, a subscription stream that the SERVER ends NORMALLY (a clean
-   * completion, not a failure) is automatically re-subscribed after this delay,
-   * instead of stalling until the next session change.
-   *
-   * The server ends a live subscription cleanly when a bounded per-subscription
-   * buffer overflows (a slow/stalled consumer fell too far behind): the completion
-   * is the signal to reconnect and resync. Because `makeInput` is re-evaluated on
-   * each (re)subscribe, the reconnect carries the latest resume cursor
-   * (`afterSequence`), so the server replays exactly what was missed — lossless.
-   * A client tears the whole stream down by SCOPE CLOSE (interruption), which is
-   * NOT a normal completion, so unsubscribing never triggers a resubscribe. The
-   * small delay guards against a hot loop if the server keeps ending immediately.
+   * Re-subscribe after this delay when the SERVER ends the stream normally (it does so on per-sub
+   * buffer overflow, as a resync signal). `makeInput` re-runs, so the latest `afterSequence` makes it
+   * lossless. Unsubscribing is interruption, not completion, so it never resubscribes; the delay
+   * guards a hot loop.
    */
   readonly resubscribeOnCompletionAfter?: Duration.Input;
 }
@@ -274,14 +266,9 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
 const SUBSCRIPTION_RETRY_CEILING = Duration.seconds(30);
 
 /**
- * Consecutive expected failures before the subscription gives up on this
- * session. Something the server answers with a permanent "no" — a thread it has
- * never heard of, or one that is archived — is not going to start succeeding on
- * attempt 500, and the retry is invisible to the user, so it has to end itself.
- *
- * Ending is safe because it is not permanent: the counter resets on the next
- * emitted value and on every new session, so a reconnect, a refresh or a
- * remount all re-arm it.
+ * Consecutive expected failures (a permanent "no", e.g. an unknown or archived thread) before the
+ * subscription gives up on this session, since the retry is invisible to the user. Safe: the counter
+ * resets on the next value and every new session, so reconnect, refresh or remount re-arm it.
  */
 const EXPECTED_FAILURE_RETRY_LIMIT = 12;
 
@@ -300,14 +287,9 @@ export function subscriptionRetryDelay(base: Duration.Input, attempt: number): D
 }
 
 /**
- * How long a subscription has to last before its completion counts as healthy
- * and clears the resubscribe budget.
- *
- * Elapsed time is the signal, not whether values arrived. An overflowing stream
- * emits its whole buffer before the server ends it, so "did it emit anything"
- * is true in exactly the runaway case this is meant to bound; how long it
- * survived is what actually separates an occasional resync from a client that
- * cannot keep up and re-overflows on every attempt.
+ * How long a subscription must last for its completion to clear the resubscribe budget. Time, not
+ * "did it emit": an overflowing stream emits its whole buffer before ending, so emission is true in
+ * exactly the runaway case this bounds.
  */
 const HEALTHY_SUBSCRIPTION_MILLIS = 10_000;
 
@@ -380,18 +362,10 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         method: tag,
                         input,
                       });
-                      // Each subscription's observation completes when that
-                      // subscription ends, so a resubscribe below is observed as a
-                      // fresh subscription rather than one long-running span.
-                      // A value proves the subscription works, so the failure budget
-                      // starts over. Without this a subscription that flaps once an
-                      // hour would eventually exhaust its cap.
-                      //
-                      // Recorded synchronously and flushed in `catchCause` below, NOT
-                      // with `Stream.tap`: an Effect boundary per element makes
-                      // `switchMap` drop a value the old session had already buffered
-                      // when the session changes - which is why upstream's `mapStream`
-                      // tag is a plain `Stream.map` too.
+                      // A value proves the subscription works, so the failure budget starts over. Recorded
+                      // synchronously and flushed in `catchCause`, NOT with `Stream.tap`: an Effect boundary per
+                      // element makes `switchMap` drop a value the old session had buffered (why upstream's
+                      // `mapStream` tag is a plain `Stream.map` too).
                       const liveOnce = mapStream(session, method(input)).pipe(
                         Stream.map((value) => {
                           producedValue = true;
@@ -399,12 +373,8 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         }),
                         Stream.ensuring(completeObservation),
                       );
-                      // When enabled, a NORMAL completion of the live stream (the
-                      // server ended it cleanly, e.g. a bounded-buffer overflow →
-                      // resync) re-subscribes with fresh input rather than stalling.
-                      // Failures still flow to `catchCause` below; interruption
-                      // (client unsubscribe / scope close) is not a completion, so it
-                      // never resubscribes.
+                      // A NORMAL completion (server ended cleanly, e.g. overflow -> resync) re-subscribes with
+                      // fresh input. Failures go to `catchCause`; interruption (unsubscribe) never resubscribes.
                       const resubscribeAfter = options?.resubscribeOnCompletionAfter;
                       const live =
                         resubscribeAfter === undefined
@@ -413,13 +383,9 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                               Stream.concat(
                                 Stream.unwrap(
                                   Effect.gen(function* () {
-                                    // Backed off, but never given up on. A capped
-                                    // failure budget is safe because the server said
-                                    // a permanent "no"; a clean completion is a
-                                    // resync request, and abandoning it freezes the
-                                    // thread silently — the exact failure this
-                                    // option exists to prevent. So the delay grows
-                                    // to the ceiling and stays there.
+                                    // Backed off but never given up: a clean completion is a
+                                    // resync request, and abandoning it silently freezes the
+                                    // thread. The delay grows to the ceiling and stays there.
                                     const elapsed =
                                       (yield* Clock.currentTimeMillis) - startedAtMillis;
                                     const attempt =
@@ -488,11 +454,9 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         if (retryAfter === undefined || isAuthorizationFailure) {
                           return handled;
                         }
-                        // Backed off and capped. A permanent "no" from the
-                        // server — a thread it has never heard of, or an
-                        // archived one — used to retry every 250ms forever,
-                        // re-issuing the snapshot fetch each time, because
-                        // an expected failure was read as a transient one.
+                        // Backed off and capped: a permanent "no" (unknown or
+                        // archived thread) otherwise retried every 250ms forever,
+                        // re-fetching the snapshot each time.
                         const giveUp: Stream.Stream<
                           A,
                           EnvironmentRpcStreamFailure<TTag>

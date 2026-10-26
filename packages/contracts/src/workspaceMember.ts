@@ -4,13 +4,9 @@ import * as Schema from "effect/Schema";
 import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
- * An additional repository a project's threads operate on, beyond `workspaceRoot`.
- *
- * `integrationBranch` is per member and concrete rather than nullable: once a feature
- * branch is cut, the "current branch" IS the feature branch, so an auto-detected value
- * would be ambiguous exactly when it matters. It is resolved once at attach time and
- * stored. A member whose stored branch no longer matches the checkout is treated as
- * unmanaged.
+ * A repository beyond `workspaceRoot`. `integrationBranch` is resolved once at attach and stored:
+ * once a feature branch is cut, the current branch IS that branch, so auto-detecting is ambiguous
+ * exactly when it matters. A member whose checkout no longer matches it is treated as unmanaged.
  */
 export const WorkspaceMember = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -125,12 +121,9 @@ export const WorkspaceMemberPrBaseWriteResult = Schema.Struct({
 export type WorkspaceMemberPrBaseWriteResult = typeof WorkspaceMemberPrBaseWriteResult.Type;
 
 /**
- * Where a workspace member repository stood when a checkpoint was captured.
- *
- * Checkpoints snapshot the thread's own checkout only. This records enough about
- * each member to tell, at rollback time, whether restoring that checkout alone
- * would still produce the tree the checkpoint describes — no snapshot, no objects
- * written, one `git rev-parse HEAD` and the dirty flag.
+ * Checkpoints snapshot only the thread's own checkout; this records enough per member (HEAD and a
+ * dirty flag, nothing written) to tell at rollback whether restoring that checkout alone still
+ * produces the checkpointed tree.
  */
 export const CheckpointMemberState = Schema.Struct({
   memberId: TrimmedNonEmptyString,

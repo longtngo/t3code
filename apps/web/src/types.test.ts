@@ -17,15 +17,9 @@ const asAttachment = (name: string): ChatFileAttachment => ({
 });
 
 /**
- * Two tables name video extensions for two different jobs: this file's table
- * answers "is this attachment a video the composer should render", and the shared
- * one answers "what Content-Type does the viewer serve this file as". They are
- * deliberately NOT one table — the attachment set is a superset (`.avi`, `.mkv`)
- * of formats no browser can decode from a <video>, so merging either direction
- * breaks one of the two jobs.
- *
- * What must hold is that they never disagree where they overlap. Review already
- * caught them disagreeing once, on `.m4v`.
+ * Two video tables, two jobs: this one ("render as a composer video") is a superset (`.avi`,
+ * `.mkv`) of the shared one ("which Content-Type the viewer serves"), so they must NOT merge. They
+ * must only agree where they overlap; review once caught them disagreeing on `.m4v`.
  */
 describe("video extension tables", () => {
   it("agrees with the shared viewer table on every extension both name", () => {

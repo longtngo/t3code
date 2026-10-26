@@ -35,26 +35,10 @@ export default function WorkspaceMembersControl({
   const [editingId, setEditingId] = useState<string | null>(null);
 
   /**
-   * The list the last write submitted, held until the server echoes it back.
-   *
-   * Every write is computed from the current list, and the `members` prop is only
-   * refreshed by the shell stream's `project-upserted`, which the server coalesces
-   * on a 50ms window (`ws.ts`, SHELL_COALESCE_WINDOW). The dispatch RPC acks well
-   * before that lands, so a second write issued in between would be computed from
-   * the pre-write list and silently undo the first — two quick detaches left the
-   * first repository attached. Rendering and writing through this value closes
-   * that window and lets the second write land correctly.
-   *
-   * Keyed on the CONTENTS of the lists it supersedes, never on array identity.
-   * `shell.ts` replaces the whole snapshot on every `snapshot` item — sent on each
-   * (re)subscribe, so on every WS reconnect — with a freshly decoded, equal-content
-   * array. Keying on identity would therefore drop the submitted list on any
-   * reconnect mid-write and reopen this bug.
-   *
-   * `stale` holds every list this write supersedes: the one it was computed from,
-   * plus any it already replaced. An arriving list inside that set is older than
-   * what is in flight — the echo of an EARLIER write of ours, which would otherwise
-   * flash the removed row back and have the next click computed from it.
+   * The list the last write submitted, held until the server echoes it: the RPC acks before the
+   * 50ms-coalesced shell update, so a second write computed from the prop would undo the first.
+   * Keyed on list CONTENTS, not identity: every reconnect replaces the snapshot with equal arrays.
+   * `stale` holds every list this write supersedes, so an earlier write's echo is ignored.
    */
   const [pending, setPending] = useState<{
     readonly list: ReadonlyArray<WorkspaceMember>;

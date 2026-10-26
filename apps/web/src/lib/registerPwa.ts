@@ -6,12 +6,9 @@ import { stackedThreadToast, toastManager } from "../components/ui/toast";
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
- * Registers the production service worker (installability + app-shell precache) and
- * surfaces a user-controlled "Reload" prompt when a new build is available.
- *
- * Call only from a secure context outside Electron and only in production builds —
- * the desktop app loads from a file:// shell where service workers don't apply, and
- * the dev server intentionally ships no service worker (devOptions.enabled is false).
+ * Registers the production service worker and surfaces a "Reload" prompt for new builds. Call only
+ * from a secure context outside Electron in production: desktop loads a file:// shell where service
+ * workers don't apply, and dev intentionally ships none (devOptions.enabled is false).
  */
 export async function registerPwa(): Promise<void> {
   const { registerSW } = await import("virtual:pwa-register");

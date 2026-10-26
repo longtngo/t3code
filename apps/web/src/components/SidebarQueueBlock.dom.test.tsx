@@ -76,18 +76,10 @@ describe("SidebarQueueBlock", () => {
     expect(markup).toContain("border-dashed");
     // The count shows whether or not the rows do.
     expect(markup).toContain("Queue (1/2)");
-    // This is the state the header gets covered in - no slack to collapse into, so the sorting
-    // preview shifts a row onto it. BOTH classes are load-bearing and neither is cosmetic: z-20
-    // wins the hit test against the transformed row, and the background is what stops the row's
-    // title rendering through. Measured live with a sentinel background on the rows: with both,
-    // 0 of 6480 band pixels show row ink; with z-20 alone, 5953; with neither, 6088.
-    //
-    // Two traps, both of which a real mutation walked through:
-    //  - read the HEADER's own class attribute, not the whole markup - a plain
-    //    `toContain("bg-sidebar")` matches other elements in this tree and stayed green with the
-    //    background deleted;
-    //  - match `bg-sidebar` as a WHOLE token - as a substring it also accepts `bg-sidebar/50`, a
-    //    half-transparent header you can read the row's title straight through.
+    // No slack to collapse into, so the preview shifts a row onto the header. BOTH classes are
+    // load-bearing: z-20 wins the hit test, the background hides the row's ink (measured: 0 of
+    // 6480 band pixels with both, 5953 with z-20 alone). Read the HEADER's own class (other
+    // elements match), and match `bg-sidebar` as a WHOLE token (`bg-sidebar/50` is see-through).
     expect(headerClass(markup).split(/\s+/)).toContain("z-20");
     expect(headerClass(markup).split(/\s+/)).toContain("bg-sidebar");
   });

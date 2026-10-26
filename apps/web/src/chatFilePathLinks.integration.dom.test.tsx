@@ -1,16 +1,7 @@
 /**
- * Integration test for the PROSE file-path linking pipeline.
- *
- * The unit tests cover resolution and the hast rewrite in isolation. This one
- * runs the real react-markdown pipeline — the same remark/rehype plugin array
- * and `urlTransform` ChatMarkdown uses — to prove an anchor with the resolved
- * absolute href actually survives sanitisation and URL transformation and
- * reaches the anchor renderer. That last hop is where the feature would silently
- * become inert (a blanked href still renders, just as dead text).
- *
- * Rendered into a real DOM rather than to a markup string: the question is what
- * the browser ends up with, and an `href` read back off a mounted anchor is the
- * value a click would follow.
+ * Integration test for prose file-path linking through the real react-markdown pipeline
+ * (ChatMarkdown's plugins and `urlTransform`), proving the resolved href survives sanitising to a
+ * mounted anchor. That last hop is where the feature would silently go inert.
  */
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";

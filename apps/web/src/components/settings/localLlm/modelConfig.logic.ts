@@ -24,13 +24,10 @@ export function visibleProviders(
 ): ProviderCatalogEntry[] {
   return LOCAL_LLM_PROVIDERS.filter(
     (p) =>
-      // A provider the model catalog has nothing compatible for cannot produce a valid
-      // config: it yields `modelId: ""`, which `LocalLlmModelConfig` rejects. Because the
-      // panel saves `localLlm` as one whole object, that rejection discards the entire
-      // settings patch — every unrelated edit with it — and reports nothing. Several
-      // catalog providers (vllm, llamacpp, lmstudio, ollama) are in exactly that state.
-      // The current provider stays listed regardless, so an existing config never
-      // silently loses its own selection.
+      // A provider with no compatible catalog model yields `modelId: ""`, which
+      // `LocalLlmModelConfig` rejects; since `localLlm` saves as one object, that silently discards
+      // the whole settings patch (vllm, llamacpp, lmstudio and ollama are such providers). The
+      // current provider stays listed so an existing config keeps its own selection.
       (compatibleModels(p.id).length > 0 && providerVisible(settings, p.id)) ||
       p.id === currentProviderId,
   );

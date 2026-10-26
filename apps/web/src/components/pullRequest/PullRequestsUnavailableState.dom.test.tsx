@@ -23,7 +23,7 @@ describe("PullRequestsUnavailableState", () => {
       <PullRequestsUnavailableState
         error="GitHub did not answer."
         onRetry={() => {}}
-        gitHubUrl="https://github.com/pingdotgg/t3code/pull/42"
+        host={{ url: "https://github.com/pingdotgg/t3code/pull/42", openLabel: "Open on GitHub" }}
       />,
     );
 
@@ -39,7 +39,7 @@ describe("PullRequestsUnavailableState", () => {
     const view = await renderDom(
       <PullRequestsUnavailableState
         error="This server cannot read the pull request."
-        gitHubUrl="https://github.com/pingdotgg/t3code/pull/9"
+        host={{ url: "https://github.com/pingdotgg/t3code/pull/9", openLabel: "Open on GitHub" }}
       />,
     );
 

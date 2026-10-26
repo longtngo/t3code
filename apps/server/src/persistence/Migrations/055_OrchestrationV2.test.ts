@@ -13,8 +13,8 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        // Fork ids: upstream's 055-068 apply as 64-77 (registry section 1).
-        Array.from({ length: 77 }, (_, index) => index + 1),
+        // Fork ids: upstream's 055-069 apply as 64-78 (registry section 1).
+        Array.from({ length: 78 }, (_, index) => index + 1),
       );
     }),
   );
@@ -41,6 +41,7 @@ layer("055_OrchestrationV2", (it) => {
         [75, "RepairClientSettlementTimestamps"],
         [76, "WebhookDedupe"],
         [77, "ShellStopRequestIndex"],
+        [78, "ThreadMessageSearch"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -75,6 +76,7 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 75, name: "RepairClientSettlementTimestamps" },
         { migration_id: 76, name: "WebhookDedupe" },
         { migration_id: 77, name: "ShellStopRequestIndex" },
+        { migration_id: 78, name: "ThreadMessageSearch" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

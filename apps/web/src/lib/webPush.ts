@@ -1,10 +1,7 @@
 /**
- * Client helpers for Web Push subscription (the per-device notification toggle).
- *
- * The delivery + display side lives in the service worker (`public/push-sw.js`);
- * this module only manages the browser `PushManager` subscription and shapes it for
- * the `pushSubscriptions.register` RPC. Web Push works only in the deployed web PWA
- * (secure context, service worker present) — not Electron or dev.
+ * Web Push subscription for the per-device notification toggle. Delivery and display live in
+ * `public/push-sw.js`; this only manages the `PushManager` subscription for the
+ * `pushSubscriptions.register` RPC. Works only in the deployed web PWA, not Electron or dev.
  */
 
 /** The subscription fields the server needs (matches contracts' PushSubscriptionInput). */
@@ -80,11 +77,9 @@ export async function hasValidPushSubscription(vapidPublicKey: string): Promise<
 }
 
 /**
- * Subscribe this device to Web Push and return the server-shaped payload, or `null`
- * if the browser produced an incomplete subscription. Reuses an existing subscription
- * ONLY when it is bound to the current server key; a stale/foreign-keyed subscription
- * (e.g. left over from an earlier key or a rotated endpoint still bound to the old
- * key) is dropped and replaced, so we never register a dead endpoint.
+ * Null if the browser produced an incomplete subscription. Reuses an existing subscription ONLY
+ * when bound to the current server key; a stale or foreign-keyed one is dropped and replaced, so a
+ * dead endpoint is never registered.
  */
 export async function subscribeToPush(
   vapidPublicKey: string,

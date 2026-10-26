@@ -1,14 +1,7 @@
 /**
- * Shared Web Push subscription registration, used by BOTH the WS RPC handler
- * (`ws.ts`) and the HTTP route (`http.ts`, hit by the service worker's
- * `pushsubscriptionchange` background re-register). Single-sourcing keeps the
- * SSRF guard (`isAllowedPushEndpoint`) from drifting between the two entry points.
- *
- * Returns a discriminated outcome rather than throwing so neither caller's error
- * channel widens: a persistence failure is caught HERE and mapped to "error", the
- * disallowed-endpoint case to "rejected". The WS handler collapses both non-success
- * outcomes to `{ ok: false }` (its historical contract); the HTTP route maps
- * registered→204, rejected→403, error→500.
+ * Web Push registration shared by the WS handler and the HTTP route, so the SSRF guard
+ * (`isAllowedPushEndpoint`) cannot drift. Returns an outcome instead of throwing so neither
+ * caller's error channel widens.
  */
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";

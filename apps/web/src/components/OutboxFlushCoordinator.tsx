@@ -44,13 +44,9 @@ export function OutboxFlushCoordinator() {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const retryAttemptRef = useRef(0);
 
-  // Retire turns that have aged out, and tell the user which text was dropped.
-  //
-  // Deliberately age-based rather than "prune turns whose environment is absent
-  // from the catalog": the catalog reports ready as soon as persisted targets
-  // load, while platform-managed environments (including the primary) arrive
-  // later, so absence cannot be told apart from not-loaded-yet — and pruning on
-  // it would delete live queued messages on every cold start.
+  // Retire aged-out turns and tell the user which text was dropped. Age-based, not "environment
+  // absent from the catalog": platform-managed environments load after the catalog reports ready,
+  // so pruning on absence would delete live queued messages on every cold start.
   const retireExpiredTurns = useCallback(() => {
     for (const turn of expireQueuedTurns()) {
       toastManager.add(

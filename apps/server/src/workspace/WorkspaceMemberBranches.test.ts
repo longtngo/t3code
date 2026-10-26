@@ -119,11 +119,8 @@ describe("WorkspaceMemberBranches", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
-  // Checkpoint states are read concurrently, so the answer must still line up
-  // with the members that were asked for. A member that cannot be read is
-  // recorded with no head rather than dropped: dropping it used to shift the
-  // question onto whether it was ever attached, which the comparison answers
-  // with "no drift".
+  // States are read concurrently, so the answer must line up with the members asked for. An
+  // unreadable member is recorded with no head rather than dropped, which read as "no drift".
   it.effect("reads checkpoint states in member order, recording ones it cannot read", () =>
     Effect.gen(function* () {
       const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
@@ -158,11 +155,8 @@ describe("WorkspaceMemberBranches", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
-  // The defect lives in the COMPOSITION of capture and comparison, which is why
-  // neither half's own tests can see it: capture drops a member it could not
-  // read, and the comparison only walks what was recorded, so that member can
-  // never drift. A transient git failure at capture therefore disarms the
-  // revert guard for that member, for that checkpoint, permanently.
+  // The defect is in the COMPOSITION: capture dropped an unreadable member and the comparison only
+  // walks what was recorded, so one transient git failure disarmed the guard for that checkpoint.
   it.effect(
     "reports drift for a member that could not be read when the checkpoint was captured",
     () =>
@@ -465,11 +459,8 @@ describe("WorkspaceMemberBranches", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
-  // `git switch -c` records `Created from HEAD`, so two branches cut without
-  // moving off the same commit are indistinguishable from a parent and its
-  // child. Answering `hotfix` here would base a pull request on another
-  // in-flight feature branch; the declared integration branch is the honest
-  // fallback.
+  // `git switch -c` records `Created from HEAD`, so siblings at one commit look like parent and
+  // child. Answering `hotfix` would base a PR on another feature branch; fall back to integration.
   it.effect("falls back to the integration branch when siblings share a commit", () =>
     Effect.gen(function* () {
       const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
@@ -526,16 +517,9 @@ describe("WorkspaceMemberBranches", () => {
   );
 });
 
-// The whole pull request story rests on the base resolving to the integration
-// branch. `resolveBaseBranch` reads exactly one thing before anything else
-// (GitManager.ts:1341):
-//
-//   const configured = yield* gitCore.readConfigValue(cwd, `branch.${branch}.gh-merge-base`);
-//   if (configured) return configured;
-//
-// It is only reachable from inside a pull request step that needs a remote and
-// the `gh` CLI, so these assert the exact read it performs, through the same
-// driver call, rather than mocking a network round trip.
+// The PR story rests on the base resolving to the integration branch, and `resolveBaseBranch`
+// first reads `branch.<branch>.gh-merge-base` via `gitCore.readConfigValue`. That path needs a
+// remote and `gh`, so these assert the same driver read instead of mocking the network.
 describe("the base GitManager will read", () => {
   it.effect("is the integration branch for a branch this cut", () =>
     Effect.gen(function* () {

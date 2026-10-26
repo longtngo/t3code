@@ -5,14 +5,9 @@ import { ATTACHMENT_UPLOAD_MAX_BYTES, AttachmentUploadInput } from "./attachment
 import { ThreadId } from "./baseSchemas.ts";
 
 /**
- * These bounds are the only thing standing between a remote client and an
- * unbounded string arriving over the websocket, so they are worth pinning at the
- * contract level rather than trusting the server-side decode to notice.
- *
- * Asserted through `decode`, not `Schema.is`: `TrimmedNonEmptyString` TRIMS and
- * then checks, and `Schema.is` only tests the decoded type, so it never runs the
- * trim and reports a whitespace-only name as valid. The sibling contract tests
- * use decode for the same reason.
+ * These bounds are all that stops an unbounded string from a remote client, so pin them here.
+ * Asserted via `decode`, not `Schema.is`: `TrimmedNonEmptyString` trims then checks, and `is` never
+ * runs the trim, so it calls a whitespace-only name valid.
  */
 const decodeUploadInput = Schema.decodeUnknownSync(AttachmentUploadInput);
 const accepts = (input: unknown): boolean => {

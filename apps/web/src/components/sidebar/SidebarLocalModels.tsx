@@ -149,12 +149,9 @@ export function SidebarLocalModels({
 
   return (
     /*
-     * `static` is load-bearing, not cosmetic. `SidebarMenuItem` bakes in
-     * `relative`; leaving it would anchor the panel below to this ~40px
-     * trigger. Opting out lets the panel resolve against the footer row's
-     * `relative` wrapper instead, so it draws at exactly footer width on both
-     * the 16rem desktop sidebar and the wider mobile drawer, with no width
-     * arithmetic to drift.
+     * `static` is load-bearing: it opts out of `SidebarMenuItem`'s baked-in `relative` so the
+     * panel anchors to the footer row's wrapper and draws at footer width on every sidebar size,
+     * not at this ~40px trigger's width.
      */
     <SidebarMenuItem className="static shrink-0">
       <Tooltip>

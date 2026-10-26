@@ -1,5 +1,5 @@
 import { InfoIcon } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { observeResize } from "~/lib/observeResize";
@@ -46,19 +46,10 @@ export function ComposerBannerStack({ className, items, attachedAbove }: Compose
   const peekRef = useRef<HTMLButtonElement>(null);
   const expandedItemsId = useId();
   const [requestedExitingItemId, setExitingItemId] = useState<string | null>(null);
-  const dismissTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exitingItemId =
     requestedExitingItemId !== null && items.some((item) => item.id === requestedExitingItemId)
       ? requestedExitingItemId
       : null;
-
-  useEffect(() => {
-    return () => {
-      if (dismissTimeoutRef.current) {
-        clearTimeout(dismissTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const {
     front: frontItem,
@@ -89,13 +80,9 @@ export function ComposerBannerStack({ className, items, attachedAbove }: Compose
       return;
     }
     setExitingItemId(item.id);
-    if (dismissTimeoutRef.current) {
-      clearTimeout(dismissTimeoutRef.current);
-    }
-    dismissTimeoutRef.current = setTimeout(() => {
-      dismissTimeoutRef.current = null;
-      item.onDismiss?.();
-    }, DISMISS_TRANSITION_MS);
+    // A timer, not transitionend: the dismissal must commit even when the stack unmounts
+    // (thread switch) or a collapsed composer hides it mid-exit, and transitionend never fires then.
+    setTimeout(() => item.onDismiss?.(), DISMISS_TRANSITION_MS);
   };
 
   return (
@@ -124,6 +111,7 @@ export function ComposerBannerStack({ className, items, attachedAbove }: Compose
           onKeyDown={(event) => {
             if (event.key !== "Escape") return;
             event.stopPropagation();
+            // Focus first: focusing the peek re-expands through onFocusCapture, and the collapse wins.
             peekRef.current?.focus({ preventScroll: true });
             setStackExpanded(false);
           }}
@@ -150,8 +138,7 @@ export function ComposerBannerStack({ className, items, attachedAbove }: Compose
               stackExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
             )}
           >
-            {/* Clip only the collapsing axis: at fractional widths a horizontal clip
-                shaves the notice's right border. */}
+            {/* Horizontal clipping shaves the right border at fractional widths. */}
             <div className="min-h-0 overflow-y-clip">
               <div
                 className={cn(

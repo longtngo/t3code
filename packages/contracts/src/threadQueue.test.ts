@@ -24,12 +24,12 @@ const entry = {
   ownerId: "device-a",
   label: "Fix the build",
 };
-const entryDecodes = (value: unknown) =>
-  Exit.isSuccess(Schema.decodeUnknownExit(ThreadQueueEntry)(value));
-const inFlightDecodes = (value: unknown) =>
-  Exit.isSuccess(Schema.decodeUnknownExit(ThreadQueueInFlight)(value));
-const setInputDecodes = (value: unknown) =>
-  Exit.isSuccess(Schema.decodeUnknownExit(ThreadQueueSetInput)(value));
+const decodeEntryExit = Schema.decodeUnknownExit(ThreadQueueEntry);
+const entryDecodes = (value: unknown) => Exit.isSuccess(decodeEntryExit(value));
+const decodeInFlightExit = Schema.decodeUnknownExit(ThreadQueueInFlight);
+const inFlightDecodes = (value: unknown) => Exit.isSuccess(decodeInFlightExit(value));
+const decodeSetInputExit = Schema.decodeUnknownExit(ThreadQueueSetInput);
+const setInputDecodes = (value: unknown) => Exit.isSuccess(decodeSetInputExit(value));
 
 describe("ThreadQueueEntry", () => {
   it("requires the device that queued it", () => {

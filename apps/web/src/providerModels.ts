@@ -38,8 +38,8 @@ function getProviderSnapshot(
   return providers.find((candidate) => candidate.instanceId === defaultInstanceId);
 }
 
-// FORK-ONLY: upstream #9150 deleted this as unused there. The composer's provider
-// label still reads through it.
+// FORK-ONLY: upstream deleted this as unused there. The composer's provider label still reads
+// through it.
 export function getProviderDisplayName(
   providers: ReadonlyArray<ServerProvider>,
   provider: ProviderDriverKind,

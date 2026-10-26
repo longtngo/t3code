@@ -21,11 +21,9 @@ function logPathHydrationWarning(message: string, error?: unknown): void {
 }
 
 /**
- * Well-known user/tool bin directories a login shell normally adds to PATH but
- * a minimal launchd/systemd PATH omits. Used only as a last resort when the
- * login-shell read fails and no cached PATH is available, so binaries installed
- * here (e.g. `claude` in `~/.local/bin`) stay reachable. Only directories that
- * actually exist are returned.
+ * Existing user/tool bin dirs a login shell adds but a launchd/systemd PATH omits. A last
+ * resort when the login-shell read fails and nothing is cached, so e.g. `~/.local/bin/claude`
+ * stays reachable.
  */
 function existingUserBinDirs(
   platform: NodeJS.Platform,
@@ -87,11 +85,9 @@ function hydratePosixPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): vo
   const shellPath = shellEnvironment.PATH;
   const launchctlPath = platform === "darwin" && !shellPath ? readPathFromLaunchctl() : undefined;
 
-  // A fresh login-shell read is authoritative. When it (and launchctl) fail —
-  // e.g. the `zsh -ilc` probe times out under load while a service restarts —
-  // fall back to the last PATH we successfully hydrated, then to well-known
-  // user bin dirs, instead of collapsing to the minimal launchd PATH (which
-  // would drop ~/.local/bin and make CLIs like `claude` look "not on PATH").
+  // A fresh login-shell read is authoritative. When it and launchctl fail (e.g. `zsh -ilc`
+  // times out under load), fall back to the last hydrated PATH, then well-known bin dirs,
+  // never the minimal launchd PATH that hides CLIs like `claude`.
   const discoveredPath = shellPath ?? launchctlPath;
   const cachedPath = !discoveredPath ? defaultReadCachedPath(cachePath) : undefined;
   const fallbackDirs =
@@ -140,8 +136,7 @@ export const fixPath = Effect.fn("fixPath")(function* (options?: {
   const env = yield* HostProcess.Environment;
 
   if (platform === "win32") {
-    // The desktop already ran both PowerShell probes into the env this child
-    // extends. Repeating them here costs seconds of startup on Windows.
+    // Desktop already populated the child env; repeating PowerShell probes costs seconds.
     if (options?.shellEnvironmentPrepared === true) return;
     const repairedEnvironment = yield* resolveWindowsEnvironment(env).pipe(
       Effect.catchDefect((defect) =>

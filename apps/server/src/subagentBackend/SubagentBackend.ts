@@ -1,21 +1,7 @@
 /**
- * SubagentBackend — the machine-level switch deciding whether coding agents on this
- * host dispatch their subagents through Cursor or fall back to the default route.
- *
- * The state is one small JSON file at a fixed absolute path. It deliberately does
- * NOT live under T3 home: in a worktree that resolves to `<worktree>/.t3`, so a dev
- * server would write the toggle somewhere `~/bin/subagent-dispatch` never looks.
- *
- * Per-thread files DO live under T3 home (`ServerConfig.subagentThreadsDir`): the server
- * itself points each subprocess at its file via `SUBAGENT_BACKEND_STATE`, so the wrapper's
- * fixed default path is irrelevant for them. Every writer here resolves the same
- * `resolveThreadBackend` table and takes the same `backendWriteSemaphore` permit.
- *
- * Everything here fails safe toward "default". Defaulting to Cursor on an unreadable
- * file would silently spend the wrong quota, so an unparseable file, a missing file
- * and an explicit "default" all produce the same dispatch outcome — while still being
- * distinguishable through `degraded`, so a corrupt file can be surfaced rather than
- * looking like a deliberate Off forever.
+ * SubagentBackend - the machine switch for Cursor subagent dispatch. The global file is at a
+ * fixed path, NOT under T3 home (the wrapper cannot see a worktree's `.t3`). Fails safe toward
+ * "default"; `degraded` keeps a corrupt file distinguishable from a deliberate Off.
  *
  * @module SubagentBackend
  */
@@ -157,13 +143,9 @@ export const subagentBackendFilePath = Effect.fn("subagentBackend.filePath")(fun
 });
 
 /**
- * Classified from the read alone, with no `fs.exists` probe in front of it: `exists` only
- * maps NotFound to `false` and fails the effect on anything else (a parent directory the
- * server cannot traverse), which would take down every writer that reads the global record
- * first. Here NotFound is absence and reads as a clean Off (`absentDegraded`), while any
- * other failure is damage and surfaces through `degraded` rather than reading as an empty
- * file, which `parsePersistedBackend` maps to a clean Off, indistinguishable from a
- * deliberate one — the fail-safe this module promises.
+ * Classified from the read alone: `fs.exists` fails on anything but NotFound (e.g. an
+ * untraversable parent) and would take down every writer. NotFound is a clean Off; any other
+ * failure surfaces through `degraded` instead of reading as a deliberate Off.
  */
 const readBackendFileAt = Effect.fn("subagentBackend.readAt")(function* (
   filePath: string,
@@ -187,11 +169,9 @@ export const readBackendFile = Effect.fn("subagentBackend.read")(function* () {
 });
 
 /**
- * One permit for every mutation of the flag file. `set` and the settings-change
- * reconciler are independent writers, and without ordering a `set` landing after a
- * reconciliation resurrects a backend for an instance that was just disabled —
- * exactly the hole reconciliation exists to close. Atomicity alone does not fix it;
- * the writes are individually atomic and still arrive in the wrong order.
+ * One permit for every flag-file mutation. `set` and the reconciler are independent writers,
+ * and a `set` landing after a reconciliation would resurrect a just-disabled instance; atomic
+ * writes alone do not fix ordering.
  */
 export const backendWriteSemaphore = Semaphore.makeUnsafe(1);
 
@@ -243,11 +223,9 @@ export const writeBackendFile = Effect.fn("subagentBackend.write")(function* (
 
 const decodeCursorSettings = Schema.decodeUnknownSync(CursorSettings);
 
-/** Best-effort decode: an instance already gated on `driver === "cursor"` should always
- * conform, but a hand-edited settings file should degrade rather than throw. Returns null
- * on a config that will not decode, because the alternative — Cursor's schema defaults —
- * silently yields `binaryPath: "cursor-agent"`, a binary the user never configured and
- * which need not be the one they run. Refusing to dispatch beats dispatching to a guess. */
+/** Best-effort decode: a hand-edited settings file degrades rather than throws. Null on
+ * failure, because Cursor's schema defaults would yield `binaryPath: "cursor-agent"`, a binary
+ * the user never configured. Refusing to dispatch beats dispatching to a guess. */
 function decodeCursorInstanceConfig(config: unknown): CursorSettings | null {
   try {
     return decodeCursorSettings(config ?? {});
@@ -318,11 +296,9 @@ export const cursorCliBinaryPath = (config: CursorSettings): string =>
     : CURSOR_CLI_DEFAULT_BINARY;
 
 /**
- * Turns a validated Cursor instance into the record the flag file stores. Resolves the
- * binary on the server's PATH (`resolveCommandPath` never spawns a subprocess: it stats
- * an explicit path on every call, and memoises only bare command names, for 30s) and
- * degrades — writes the configured string as-is with a reason — when that fails, because
- * the wrapper's own shell PATH may still find it.
+ * A validated Cursor instance as the flag-file record. Resolves the binary on the server's
+ * PATH (no subprocess); on failure stores the configured string with a `degraded` reason,
+ * since the wrapper's own PATH may still find it.
  */
 const resolveCursorTarget = Effect.fn("subagentBackend.resolveCursorTarget")(function* (
   validated: ValidCursorInstance,
@@ -353,12 +329,9 @@ const resolveCursorTarget = Effect.fn("subagentBackend.resolveCursorTarget")(fun
 export const MASTER_OFF_REASON = "Subagent offload is switched off in Settings.";
 
 /**
- * Why Cursor offload is withheld for spending, or `null` when it is not: "Allow to spend
- * credits" is off and Cursor's overall window reads 100% with its reset still ahead.
- *
- * Read live from the provider registry, as on the fork. That adds no layer edge between
- * the registry and this module: Claude adapters reach `prepareThreadBackend` through the
- * module-level registration in `SubagentLiveThreads`, not through the layer graph.
+ * Why Cursor offload is withheld for spending (credits off and Cursor's window at 100% before
+ * reset), or `null`. Read live from the registry; no layer edge, since Claude adapters reach
+ * `prepareThreadBackend` through `SubagentLiveThreads`' module-level registration.
  */
 const readCreditsBlockedReason = Effect.fn("subagentBackend.creditsBlocked")(function* (
   settings: ServerSettings,
@@ -372,13 +345,9 @@ const readCreditsBlockedReason = Effect.fn("subagentBackend.creditsBlocked")(fun
 });
 
 /**
- * The one truth table every per-thread writer uses. Master off beats everything;
- * `"inherit"` and an absent entry are the same thing; `"on"` reuses the global Cursor
- * target when there is one and otherwise resolves the remembered instance, else the first enabled one,
- * so a thread can offload without the user first flipping the machine-wide toggle.
- *
- * Only an explicit `"on"` may enable offload — see `subagentBackendThreadMode` for why the
- * lookup cannot be a plain `?? "inherit"`.
+ * The truth table every per-thread writer uses. Master off beats everything; `"inherit"` and
+ * absent are equal; `"on"` reuses the global Cursor target, else the remembered or first
+ * enabled instance. Only an explicit `"on"` enables (see `subagentBackendThreadMode`).
  */
 export const resolveThreadBackend = Effect.fn("subagentBackend.resolveThread")(function* (input: {
   readonly settings: ServerSettings;
@@ -447,13 +416,9 @@ export const writeThreadBackendFile = Effect.fn("subagentBackend.writeThread")(f
   yield* fs.chmod(filePath, 0o600).pipe(Effect.ignore);
 });
 
-/** Reads a thread's file with the same fail-safe parse as the global one: missing or
- * malformed yields `default` with a `degraded` reason — so no read failure can turn into a
- * failed session start, only into a session that is not told to offload.
- *
- * The wrapper is no longer the only production reader: `ClaudeAdapter` reads this at session
- * start to decide whether to append the dispatch instruction, because nothing else reaches the
- * agent's choice between the wrapper and its native `Agent` tool. */
+/** Reads a thread's file with the global file's fail-safe parse: missing or malformed is
+ * `default` with a `degraded` reason, never a failed session start. `ClaudeAdapter` also reads
+ * it at session start to decide whether to append the dispatch instruction. */
 export const readThreadBackendFile = Effect.fn("subagentBackend.readThread")(function* (
   threadsDir: string,
   threadId: ThreadId,
@@ -466,12 +431,9 @@ export const readThreadBackendFile = Effect.fn("subagentBackend.readThread")(fun
 });
 
 /**
- * Rewrites every live thread's file from `settings` and the global record. No locking —
- * callers hold the permit. The threads are the ones whose Claude process opened in this
- * server process (`SubagentLiveThreads`, fed by `prepareThreadBackend`): those are the only
- * subprocesses whose `SUBAGENT_BACKEND_STATE` points into this directory. Each write is
- * isolated: one over-long or unwritable thread id is logged, not fatal, so it cannot stop the
- * other threads from being reconciled.
+ * Rewrites every live thread's file (`SubagentLiveThreads`: the only subprocesses pointed into
+ * this directory). Callers hold the permit. Each write is isolated, so one bad thread id is
+ * logged and cannot stop the rest.
  */
 const reconcileThreadBackendsBody = Effect.fn("subagentBackend.reconcileThreads")(function* (
   settings: ServerSettings,
@@ -512,19 +474,10 @@ export const reconcileAllBackends = Effect.fn("subagentBackend.reconcileAll")(fu
 });
 
 /**
- * Resolves and writes one thread's flag file for the current settings. Called by
- * `prepareThreadBackend` immediately before a Claude process is spawned, so the file the
- * new subprocess's `SUBAGENT_BACKEND_STATE` points at exists before the first subagent
- * could be dispatched.
- *
- * `removeOnFailure` (default true): a failure is logged and the thread's file REMOVED
- * rather than left alone, because nothing else ever deletes one, so the previous process's
- * record — possibly a Cursor target this call could no longer confirm — would otherwise be
- * what the new subprocess dispatches on. An absent file makes the wrapper refuse, which is
- * the safe direction, and a session must never be blocked from starting over this.
- *
- * `false` keeps a file an earlier good write left, for a caller rewriting the file of a
- * process that is already running on it.
+ * Writes one thread's flag file just before its Claude process spawns. `removeOnFailure`
+ * (default true) deletes the file on failure, since nothing else does and a stale Cursor
+ * target would be dispatched on; absent makes the wrapper refuse. `false` keeps a prior good
+ * file for a process already running on it. Never blocks a session start.
  */
 export const writeThreadBackendForSession = Effect.fn("subagentBackend.writeForSession")(function* (
   threadId: ThreadId,
@@ -583,14 +536,9 @@ export interface PreparedThreadBackend {
 }
 
 /**
- * The one call a Claude adapter makes before it spawns a process for `threadId`: registers
- * the thread as live (so later settings changes rewrite its file), writes its file for the
- * current settings, and reads back what was written. Never fails — every failure reads as
- * `default` through `readThreadBackendFile`'s fail-safe parse, which appends no instruction.
- *
- * Writing and reading in the same call that spawns the process is what closes the window
- * the v1 provider service needed a second, post-start write for: a reconcile that runs
- * after this call already sees the thread in `SubagentLiveThreads`.
+ * Called by a Claude adapter before spawning for `threadId`: registers it live, writes its file,
+ * and reads it back. Never fails (failures read as `default`). Registering before the spawn
+ * means any later reconcile already sees the thread, so no post-start write is needed.
  */
 export const prepareThreadBackend = Effect.fn("subagentBackend.prepareThread")(function* (
   threadId: ThreadId,
@@ -607,20 +555,10 @@ export const prepareThreadBackend = Effect.fn("subagentBackend.prepareThread")(f
 });
 
 /**
- * Validates a subagent-backend selection, resolves the Cursor binary, persists it, and
- * fans the result out to every live thread's file — all under one permit, from one
- * settings read, so a disable or a master-off that lands mid-call is seen by every write
- * or by none.
- *
- * Under master-off only a selection of Cursor is refused, without writing: the file the
- * user set last stays as it was and the returned `refused` says why nothing changed. A
- * selection of "default" is still admitted, so the master switch is not a one-way door
- * that strands the global file on a Cursor target with no way to clear it.
- *
- * A selection that names no instance or model uses the ones already remembered in the
- * file. A model belongs to its instance: naming a different instance without a model drops
- * the remembered one, and a refused Cursor pick keeps a remembered instance with its model.
- * `targetOnly`: see `SubagentBackendSetInput`.
+ * Validates, resolves, persists and fans out a selection under one permit and one settings
+ * read. Under master-off only a Cursor pick is refused (unwritten); "default" is admitted so
+ * the switch is not a one-way door. Omitted instance or model reuse the remembered ones; a
+ * different instance without a model drops the old model. `targetOnly`: see the input type.
  */
 /** What `setBackend` returns: the record now on disk, plus `refused` when nothing was written. */
 export type SetBackendResult = PersistedBackend & { readonly refused?: string };
@@ -700,13 +638,9 @@ export function buildState(
 }
 
 /**
- * Resolves the Cursor CLI model list for a persisted backend state.
- * `refresh: false` — what `subagentBackend.get` defaults to and what
- * `subagentBackend.set` now always passes — never spawns a probe, only
- * reporting whatever `listCursorModels` already has cached (via
- * `peekCursorModels`). `get` runs on every client mount and `set` sits on the
- * toggle's critical path, so neither can afford a subprocess. `refresh: true`
- * is now reached only by `get` once the panel opens and asks for it.
+ * Cursor model list for a persisted backend. `refresh: false` (the `get` default, and always
+ * on `set`) only peeks the cache: `get` runs on every mount and `set` is on the toggle's
+ * critical path. `refresh: true` probes, reached only by `get` once the panel opens.
  */
 export const modelsForPersistedBackend = (persisted: PersistedBackend, refresh: boolean) => {
   if (persisted.backend !== SUBAGENT_BACKEND_CURSOR || persisted.binaryPath === null) {
@@ -718,19 +652,9 @@ export const modelsForPersistedBackend = (persisted: PersistedBackend, refresh: 
 };
 
 /**
- * The whole `subagentBackend.set` RPC: validate and persist the selection, then assemble the
- * wire state around it.
- *
- * It lives here rather than inline in `ws.ts` so the no-probe property is **structural**. The
- * regression this guards against is someone passing a truthy `refresh` on this path again — the
- * probe is a Cursor subprocess measured at 0.7s idle and a 3.8s median under load, and it used to
- * be spent with the toggle still showing its pre-save label, which read as a failed save. With
- * the call site here there is no boolean at the RPC boundary to get wrong, and
- * `SubagentBackend.set.test.ts`'s `listCursorModels` mock — which dies if it ever runs — reaches
- * it. Through `ws.ts` it could not.
- *
- * `get` deliberately keeps its `refresh` flag: a panel-open `get` is exactly the caller that
- * SHOULD probe.
+ * The whole `subagentBackend.set` RPC, here rather than in `ws.ts` so no-probe is structural:
+ * no `refresh` flag at the boundary to get wrong (the probe is 0.7-3.8 s with a stale label),
+ * and `SubagentBackend.set.test.ts`'s dying mock reaches it. `get` keeps `refresh` on purpose.
  */
 export const setBackendState = Effect.fn("subagentBackend.setState")(function* (
   input: SubagentBackendSetInput,
@@ -756,18 +680,10 @@ function haveReconcilableFieldsChanged(next: PersistedBackend, current: Persiste
 }
 
 /**
- * Re-checks the currently flagged Cursor instance against fresh settings and
- * rewrites the file when it drifts: gone/disabled/wrong-driver downgrades to
- * `default`, and a still-valid instance gets its `binaryPath`/`apiEndpoint`
- * re-resolved, because a reconciler that only downgrades would otherwise leave
- * the file pointing at a binary the user has since moved or reconfigured.
- *
- * A no-op when the file is already `default`: with no flagged Cursor target (Default only remembers one) there is
- * nothing here to check against `settings`, and a lazy check inside `read`/`set`
- * was considered and rejected — the wrapper reads the file directly, never
- * `read`, so a lazy path would never run where it matters.
- *
- * The reconcile itself, no locking; returns the global record now on disk (rewritten or not).
+ * Re-checks the flagged Cursor instance against settings: gone/disabled/wrong-driver
+ * downgrades to `default`, a valid one gets its binary and endpoint re-resolved. No-op when
+ * already `default`. Not lazy in `read`/`set`: the wrapper reads the file directly. No locking;
+ * returns the global record now on disk.
  */
 export const reconcileBackendBody = Effect.fn("subagentBackend.reconcileBody")(function* (
   settings: ServerSettings,
@@ -800,26 +716,10 @@ export const reconcileBackendBody = Effect.fn("subagentBackend.reconcileBody")(f
 export const CREDIT_BLOCK_RECONCILED = "subagentBackend.credit-block-reconciled";
 
 /**
- * Subscriber body meant to be forked once at server startup: reconciles the flag
- * file once against whatever settings are current, then keeps reconciling for the
- * process lifetime as they change. A subscriber rather than a hook inside
- * `updateSettings` — `serverSettings.ts` stays unaware of this feature, and any
- * other writer of `ServerSettings` is covered too. Reconcile failures are logged
- * and swallowed so one bad settings snapshot cannot take the subscription down.
- *
- * Uses `subscribeChanges`, not `streamChanges`: the latter is a bare
- * `Stream.fromPubSub` with no initial emission and no subscriber until the stream
- * is run, so a settings change between server start and the first emission would
- * be lost, and — with nothing to reconcile against at startup — an instance
- * disabled or deleted, or a settings.json hand-edited, while the server was down
- * would leave the flag file dispatching to Cursor indefinitely, until some
- * unrelated settings write happened to occur. `subscribeChanges` acquires the
- * subscription synchronously in this fiber before the explicit startup reconcile
- * below reads a snapshot, so nothing in between can be missed either.
- *
- * Provider changes are watched too, for the credit block (see `onProvidersChanged`). The
- * registry only offers `streamChanges`, so a flip landing between the startup reconcile and
- * that stream's first pull waits for the next provider change; probes refresh periodically.
+ * Forked once at startup: reconciles now, then on every settings change (logging failures).
+ * `subscribeChanges`, not `streamChanges`, so the subscription exists before the startup read
+ * and no change is lost. Provider changes are watched for the credit block, via the registry's
+ * `streamChanges`, so a flip right after startup waits for the next provider change.
  */
 export const subagentBackendReconciler = Effect.gen(function* () {
   const serverSettings = yield* ServerSettingsService;

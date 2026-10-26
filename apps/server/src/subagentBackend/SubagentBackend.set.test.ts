@@ -27,13 +27,9 @@ import {
   writeBackendFile,
 } from "./SubagentBackend.ts";
 
-// vi.mock is hoisted above every import, so the `listCursorModels` binding above
-// already resolves to this mock — letting individual tests override its behavior
-// for one call via `vi.mocked(listCursorModels).mockImplementationOnce(...)`.
-// Nothing on the `set` path may warm the model cache: not `setBackend`, and not
-// `setBackendState`, the RPC body around it. Both peek instead of probing. A probe
-// on either would put back the multi-second wait the toggle-latency fix removed,
-// which is why this mock dies rather than returning a value.
+// vi.mock is hoisted, so tests can override `listCursorModels` per call with
+// `mockImplementationOnce`. Nothing on the `set` path (`setBackend`, `setBackendState`) may
+// probe: that would restore the multi-second toggle wait, so this mock dies.
 vi.mock("./cursorModels.ts", () => ({
   listCursorModels: vi.fn(() => Effect.die("listCursorModels must never run on the set path")),
   // The cache peek is the path `set` is supposed to take. Empty is the honest cold-cache

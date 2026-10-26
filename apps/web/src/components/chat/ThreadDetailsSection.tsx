@@ -32,7 +32,8 @@ export function ThreadDetailsSection({
     false,
     Schema.Boolean,
   );
-  const folded = collapseKey !== undefined && collapsed;
+  // A hidden heading cannot unfold, so the stored choice applies only while it shows.
+  const folded = collapseKey !== undefined && showHeading && collapsed;
   return (
     <section
       {...props}
@@ -42,7 +43,7 @@ export function ThreadDetailsSection({
     >
       <div
         className={cn(
-          "flex min-h-8 min-w-0 items-center justify-between gap-2 px-1.5",
+          "flex min-h-8 min-w-0 items-center justify-between gap-2 px-2.5",
           !folded && "mb-1",
           !showHeading && "hidden",
         )}

@@ -58,21 +58,15 @@ export type RightPanelSurface =
       kind: "file";
       relativePath: string;
       /**
-       * The repository root the path is relative to, when it is not the
-       * project's own. A path means nothing without the root it belongs to, so
-       * a file opened from a workspace member carries that root here instead of
-       * being re-resolved against whatever root a panel happens to be showing.
-       * Absent on surfaces persisted before workspace members existed, which is
-       * exactly the project root they were opened from.
+       * The repository root the path is relative to, when not the project's own: a file opened from
+       * a workspace member keeps its root instead of resolving against the panel's. Absent means the
+       * project root, including surfaces persisted before workspace members existed.
        */
       repoCwd?: string;
       revealLine: number | null;
       revealRequestId: number;
       attachment?: ChatFileAttachment;
-      /**
-       * Set when breadcrumbs moved a folder browser up from a deeper path: the
-       * deepest workspace path the breadcrumbs keep offering on the way back down.
-       */
+      /** Deepest workspace path retained for navigating back down after moving up. */
       folderTrail?: string;
     }
   // A file addressed by ABSOLUTE path, outside the workspace, read through the
@@ -86,10 +80,7 @@ export type RightPanelSurface =
   | {
       id: `pull-request:${string}`;
       kind: "pull-request";
-      /**
-       * The list spans every connected one, so two of them can hold the same project id; a
-       * panel beside a thread leaves this out and takes the environment from its own ref.
-       */
+      /** Cross-environment lists can repeat project ids; thread panels inherit their ref's environment. */
       environmentId?: string;
       projectId: string;
       host?: string;
@@ -101,11 +92,8 @@ export type RightPanelSurface =
   | { id: "pull-requests"; kind: "pull-requests" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-// v14 adds the tasks surface.
-// v15 adds the background surface.
-// v16 removes the agents surface; lineage lives in the thread title bar. (Upstream removed it
-// at its own v14; the fork was already past 14, so the removal needs a version of its own.)
-// v17 removes the tasks and background surfaces; they live in the thread details card.
+// v14/v15 added the tasks and background surfaces; v16 removed agents (upstream's own v14, which
+// the fork was already past); v17 removed tasks and background for the thread details card.
 const RIGHT_PANEL_STORAGE_VERSION = 17;
 
 // Removed surfaces: plans render inline, agents in thread lineage, tasks and background in the
@@ -142,10 +130,7 @@ interface RightPanelStoreState {
   userActionRevisionByThreadKey: Record<string, number>;
   closeRevisionByThreadKey: Record<string, number>;
   getUserActionRevision: (ref: ScopedThreadRef) => number;
-  /**
-   * Refused when the user made a panel choice after
-   * `expectedUserActionRevision` was read.
-   */
+  /** Refused if the user chose a panel after expectedUserActionRevision was read. */
   openProactive: (
     ref: ScopedThreadRef,
     request:
@@ -161,19 +146,11 @@ interface RightPanelStoreState {
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
-  /**
-   * `repoCwd` names the repository the path is relative to, for a file opened
-   * from a workspace member. Omit it for the project's own repository.
-   */
+  /** `repoCwd` is the workspace member the path is relative to; omit it for the project's repo. */
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number, repoCwd?: string) => void;
   /** Open a read-only view of an absolute path outside the workspace. */
   openTrustedFile: (ref: ScopedThreadRef, absolutePath: string) => void;
-  /**
-   * Moves the folder browser in `surfaceId` to `relativePath` in place, so walking
-   * the breadcrumbs does not leave a tab behind per folder. `""` is the workspace
-   * root, which is the files explorer. `folderTrail` is kept for the way back down.
-   * `keepSource` opens the folder beside the source tab instead, for a file preview.
-   */
+  /** Moves in place; "" opens the root explorer. folderTrail keeps the return path; keepSource opens beside the source. */
   navigateFolder: (
     ref: ScopedThreadRef,
     surfaceId: string,
@@ -854,7 +831,6 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 ? { ...singletonSurface("files"), ...trail }
                 : { ...fileSurface(relativePath, null, 1), ...trail };
             const source = current.surfaces[index]!;
-            // A tab already showing the target wins, so its state is never replaced.
             const existing = current.surfaces.some(
               (surface, i) => i !== index && surface.id === target.id,
             );
@@ -863,7 +839,6 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 const kept = keepSource ? [source] : [];
                 return existing ? kept : [...kept, target];
               }
-              // Like openFile: a file surface replaces the standalone explorer.
               return !existing && target.kind === "file" && surface.kind === "files"
                 ? []
                 : [surface];
@@ -1045,12 +1020,9 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       reconcileBrowserSurfaces: (ref, tabIds, previewSupported, hiddenTabIds) =>
         set((state) =>
           automaticUpdate(state, scopedThreadKey(ref), (current) => {
-            // Preview is a desktop Chromium <webview>. The server keeps per-thread
-            // tab metadata for every client so it survives reconnects, so a browser
-            // reaching a thread that was previewed on desktop would otherwise
-            // rebuild tab chrome it can never render - and could land on it, since
-            // the fallback below picks a preview surface. Drop them instead, the
-            // same way reconcileFileSurfaces drops file surfaces with no workspace.
+            // A browser that cannot render previews would rebuild tab chrome from the server's
+            // per-thread tab metadata (and could land on it via the fallback below). Drop them,
+            // as reconcileFileSurfaces drops file surfaces with no workspace.
             if (!previewSupported) {
               const withoutPreview = current.surfaces.filter(
                 (surface) => surface.kind !== "preview",

@@ -155,12 +155,9 @@ export const readResourceQueue: Effect.Effect<
   const text = yield* runResctl;
   if (text == null) return unavailable(nowMs);
   // JSON.parse throws on malformed output; fall back to an unavailable snapshot.
-  // (try/catch here is intentional — Effect.try would leave the error channel untyped.)
-  try {
-    return parseResourceQueue(text, nowMs);
-  } catch {
-    return unavailable(nowMs);
-  }
+  return yield* Effect.try(() => parseResourceQueue(text, nowMs)).pipe(
+    Effect.orElseSucceed(() => unavailable(nowMs)),
+  );
 });
 
 /**

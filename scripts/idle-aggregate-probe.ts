@@ -1,16 +1,9 @@
 #!/usr/bin/env node --expose-gc
 
 /**
- * Measures whether `Stream.aggregateWithin`'s idle schedule loop retains fiber
- * continuation frames, and prints the heap growth in MB.
- *
- * This runs as its own process on purpose: separating retained frames from
- * ordinary garbage needs a forced GC, and `--expose-gc` cannot be turned on
- * from inside an already-running process.
- *
- * Calibration on the two known builds, 1000 idle ticks/second:
- *   effect 4.0.0-beta.102 (leaking)  ~3.8 MB over the window
- *   effect 4.0.0-beta.103 (fixed)    ~0.02 MB over the window
+ * Prints heap growth (MB) from `Stream.aggregateWithin`'s idle loop. Own process because
+ * `--expose-gc` cannot be enabled at runtime. Calibration at 1000 idle ticks/s: beta.102 (leaking)
+ * ~3.8 MB, beta.103 (fixed) ~0.02 MB.
  */
 
 import * as Console from "effect/Console";

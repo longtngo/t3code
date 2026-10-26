@@ -4,13 +4,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { renderDom } from "../testing/renderDom";
 
 /**
- * The chip on a client with NO shell actions — a browser or the mobile app.
- *
- * `ChatMarkdown.test.tsx` mocks `remote-links`' sibling `local-exec`, which hands the
- * chip an editor action and so a primary action no matter what else is false. Every
- * gate below is therefore unreachable from that file, and a defect that only bites
- * without shell actions renders correctly there. This file exists to hold that arm;
- * the mock is the whole point of the separate file.
+ * The chip on a client with NO shell actions (browser or mobile). `ChatMarkdown.test.tsx` mocks
+ * `local-exec`, which always gives the chip a primary action, so these gates are unreachable there;
+ * the mock is why this file is separate.
  */
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
 const atomReader = vi.hoisted(() => ({
@@ -94,13 +90,9 @@ const chipLink = (view: View) => view.find("a[data-markdown-copy]");
 
 describe("file chips without shell actions", () => {
   it("keeps the open affordance for a file outside the workspace root", async () => {
-    // `handleOpenInFilePreview` opens any absolute path a thread owns: outside the
-    // workspace it falls back to the read-only trusted view (a report under ~/reports,
-    // a temp file). Upstream #7140's `canOpenInPanel` did not know that and demanded a
-    // workspace-relative path, which is null out here -- so the chip lost its primary
-    // action and a tap opened the context menu, which carries neither "View in side
-    // panel" nor "Open in new tab". With shell actions the editor item hides this; on
-    // web and mobile it left only the two copy entries.
+    // `handleOpenInFilePreview` opens any absolute path a thread owns, falling back outside the
+    // workspace to the read-only trusted view. Demanding a workspace-relative path cost the chip
+    // its primary action, leaving web and mobile only the two copy entries.
     const view = await renderChip("/tmp/reports/2026-08-29-followup-catalog.md");
 
     expect(rendersAsMenuOnlyButton(view)).toBe(false);
@@ -117,14 +109,9 @@ describe("file chips without shell actions", () => {
   });
 
   it("stays a menu-only button when no thread owns the path", async () => {
-    // The negative arm, and what stops the fix from being "always render a link".
-    // `openTrustedFile` needs a thread to open against; without one the chip genuinely
-    // has no primary action. This is the pull-request-body surface.
-    //
-    // A relative path is NOT the negative case, which is worth recording because it
-    // was the first thing tried here: `resolveMarkdownFileLinkTarget` resolves
-    // relatives against `cwd`, so "./notes.md" lands inside the workspace and is a
-    // link already.
+    // The negative arm: without a thread `openTrustedFile` has nothing to open against, so the chip
+    // has no primary action (the pull-request-body surface). A relative path is NOT the negative
+    // case: it resolves against `cwd` and is already a link.
     const view = await renderDom(
       <ChatMarkdown cwd="/tmp/project" text="[Link](/tmp/reports/out-of-tree.md)" />,
     );
@@ -158,13 +145,9 @@ describe("file chips without shell actions", () => {
 });
 
 describe("browser-vs-panel primary action outside the workspace", () => {
-  // The chip's affordance and this choice need DIFFERENT questions answered.
-  // "Can anything open this?" must count the read-only trusted view, or the chip
-  // loses its primary action out of tree. "Should the browser win over the panel?"
-  // must not, because out here the panel only offers a read-only source view and
-  // the rendered browser view is better. Feeding the widened flag to both flips
-  // out-of-workspace .html from the integrated browser to the source view -- a
-  // regression a review caught before this shipped.
+  // The chip's affordance must count the read-only trusted view; "should the browser win over the
+  // panel?" must not, because out of tree the panel is only a source view. Feeding one flag to both
+  // flipped out-of-workspace .html from the browser to the source view.
   const htmlOutsideWorkspace = {
     iconPath: "/tmp/reports/coverage.html",
     canOpenInEditor: false,

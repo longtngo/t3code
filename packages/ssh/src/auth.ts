@@ -48,7 +48,9 @@ export class SshPasswordPrompt extends Context.Service<SshPasswordPrompt, SshPas
     SshPasswordPrompt,
     SshPasswordPrompt.of({
       isAvailable: false,
-      request: () => Effect.succeed(null),
+      request: Effect.fn("SshPasswordPrompt.request")(function () {
+        return Effect.succeed(null);
+      }),
     }),
   );
 }
@@ -100,28 +102,10 @@ exit 1\r
 `;
 
 /**
- * One askpass directory per process, not per ssh invocation.
- *
- * The helper scripts this holds are byte-identical every time, so minting a fresh
- * `mkdtemp` directory per call only ever produced work and litter: after the first
- * password is cached, EVERY ssh invocation for a remote environment takes this path
- * (`tunnel.ts` passes `interactiveAuth: true`), and nothing in the product removes
- * them. macOS reaps its per-user temp dir after three days, so the growth is bounded
- * there and nowhere else - on Windows `%TEMP%` is never swept, and a long-uptime
- * Linux host accumulates until reboot.
- *
- * Still `makeTempDirectory` rather than a fixed name: `mkdtemp` creates 0700 and
- * unique, so on a shared `/tmp` no other user can pre-create the path and hand us
- * the script we are about to execute with the auth secret in its environment. A
- * predictable name would trade this leak for that.
- *
- * Only a SUCCESS is remembered. Caching a failure would latch one transient EACCES
- * into "ssh auth is broken for the life of this process". A lost race costs one
- * spare directory, which is bounded by concurrency rather than by invocation count.
- *
- * Self-heals if the directory is swept out from under a long-lived process:
- * `ensureSshAskpassHelpers` recreates it with `makeDirectory({ recursive: true })`
- * and rewrites the scripts it then finds missing.
+ * One askpass dir per process: every remote ssh call takes this path and nothing removes the dirs
+ * (Windows `%TEMP%` is never swept). Still `mkdtemp` (0700, unique) so no user on a shared `/tmp`
+ * can plant the script we execute with the secret. Only success is cached, so one EACCES does not
+ * latch; `ensureSshAskpassHelpers` recreates a swept dir.
  */
 let processAskpassParentDirectory: string | undefined;
 

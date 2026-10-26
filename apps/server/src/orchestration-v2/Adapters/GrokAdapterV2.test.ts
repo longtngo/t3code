@@ -25,7 +25,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -341,7 +340,7 @@ describe("Grok launch permission mode", () => {
               Layer.mock(ProjectStore.ProjectStoreV2)({
                 // Fork: the policy reads the project for its workspace members even
                 // for a worktree thread; a missing row still resolves from the worktree.
-                get: () => Effect.succeed(Option.none()),
+                get: () => Effect.succeedNone,
               }),
             ),
             Layer.provide(

@@ -20,8 +20,7 @@ export const FILESYSTEM_BROWSE_MAX_ENTRIES = 10_000;
 export const FILESYSTEM_METADATA_BATCH_LIMIT = 64;
 
 export const FilesystemGetMetadataInput = Schema.Struct({
-  // Absolute host paths, including ~/ paths. Relative paths need a workspace
-  // anchor on the client; the server never resolves them against its own cwd.
+  // Absolute host paths, including ~/; clients must anchor relative paths.
   paths: Schema.Array(
     TrimmedNonEmptyString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH)),
   ).check(Schema.isMinLength(1), Schema.isMaxLength(FILESYSTEM_METADATA_BATCH_LIMIT)),
@@ -35,8 +34,7 @@ export const FilesystemEntryMetadata = Schema.Struct({
 });
 export type FilesystemEntryMetadata = typeof FilesystemEntryMetadata.Type;
 
-// Results follow request order so paths do not have to travel back over the wire.
-// A null entry means the path is missing, unreadable, or unsupported.
+// Entries follow request order; null means missing, unreadable, or unsupported.
 export const FilesystemGetMetadataResult = Schema.Struct({
   entries: Schema.Array(Schema.NullOr(FilesystemEntryMetadata)),
 });
@@ -79,15 +77,9 @@ export const FilesystemBrowseResult = Schema.Struct({
   parentPath: FilePathString,
   entries: Schema.Array(FilesystemBrowseEntry),
   /**
-   * The server confirming it understood `includeFiles`, so every entry carries
-   * a `kind` and files are present.
-   *
-   * A server that predates the flag drops it on decode and answers with the
-   * legacy directories-only listing, which is byte-for-byte a plausible answer
-   * to the new question: a client with no way to tell would render every
-   * subdirectory as a file and call a folder holding only files empty. Absent
-   * therefore means "this server cannot list a folder", not "the folder had no
-   * files".
+   * Confirms the server understood `includeFiles`. An older server drops the flag and returns the
+   * directories-only listing, a plausible answer to the new question, so absent means "this server
+   * cannot list files", not "the folder had none".
    */
   listedFiles: Schema.optional(Schema.Boolean),
   /** Set when the directory held more than `FILESYSTEM_BROWSE_MAX_ENTRIES`. */

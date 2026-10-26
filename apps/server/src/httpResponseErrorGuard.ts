@@ -4,38 +4,15 @@ import type * as NodeHttp from "node:http";
 import type * as NodeStream from "node:stream";
 
 /**
- * An "error" event without a listener escalates into an uncaught exception and
- * terminates the whole server process, taking every other client and all
- * in-flight provider work with it.
- */
-/**
  * Statuses and methods that carry no body, so a zero-length write against a
  * declared `Content-Length` is correct rather than truncated.
  */
 const BODILESS_STATUSES = new Set([204, 304]);
 
 /**
- * Destroy the connection when a response delivers fewer bytes than it declared.
- *
- * A body can end short without the response failing: a file that shrinks while it
- * is being streamed stops at EOF, and the server considers the response complete.
- * Node then returns the connection to the keep-alive pool, and the NEXT response
- * on it is written into what the client is still counting as the previous body —
- * measured directly, a second response's bytes appearing inside body #1. The
- * client is left parsing a response it never asked for.
- *
- * Destroying the connection is the whole fix. It cannot make the declared length
- * honest — the file really did shrink, and by then the headers are long gone —
- * but it converts a silent cross-response desync into the transport error this
- * actually is, and the client retries. Measured: a 6-second stall (the keep-alive
- * reaper, not an infinite hang as first assumed) becomes 6 milliseconds, and the
- * desync disappears.
- *
- * Deliberately NOT fixed by re-stat: the race window is the entire body-streaming
- * duration, not the gap between two stats, so a late re-stat measures identically
- * to doing nothing (73.3% vs 73.7% under-delivery under a 1.5 ms flap). Buffering
- * the range instead is the only way to never lie, and costs 8 MB of heap per
- * in-flight response in a server with a documented OOM history.
+ * Destroy the connection when a body ends short of its declared length (a file shrank mid-stream):
+ * keep-alive would write the NEXT response into what the client still counts as this body. Not
+ * fixed by re-stat (the race spans the whole stream) or by buffering (8 MB heap per response).
  */
 function guardShortResponseBody(
   request: NodeHttp.IncomingMessage,

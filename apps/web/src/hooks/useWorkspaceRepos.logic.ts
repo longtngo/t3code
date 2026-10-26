@@ -39,19 +39,10 @@ function normalizeCwd(cwd: string): string {
 }
 
 /**
- * The repositories a thread can read, primary first.
- *
- * Members whose path repeats one already in the list are dropped: the same
- * checkout appearing twice would run every query twice and render two groups
- * that can never disagree.
- *
- * Comparison is a trailing-separator-insensitive string match, which is enough
- * because both sides arrive canonical: the server expands `~` and resolves
- * every member path — and the workspace root — before either is persisted, so
- * a member spelled `~/x` is already stored as `/Users/me/x` by the time it
- * reaches here. `Normalizer.members.test.ts` pins that. What this still cannot
- * see through is a symlink, since the server resolves paths without following
- * one; two spellings of one directory across a symlink would show twice.
+ * The repositories a thread can read, primary first, with repeated paths dropped. Matching
+ * ignores trailing separators only, which suffices because the server canonicalizes members
+ * and the root before persisting (`Normalizer.members.test.ts`); two spellings across a
+ * symlink still show twice.
  */
 export function resolveWorkspaceRepos(input: WorkspaceReposInput): ReadonlyArray<WorkspaceRepo> {
   const { project } = input;
@@ -83,13 +74,9 @@ export function resolveWorkspaceRepos(input: WorkspaceReposInput): ReadonlyArray
 }
 
 /**
- * The repository a panel should show for a stored selection.
- *
- * Falling back to the primary repository rather than holding the stale id is
- * what lets a panel keep the selection in plain `useState`: switching threads
- * or detaching a member simply stops matching, and the panel lands on the
- * staging repository instead of rendering an empty view for a repository that
- * is no longer attached.
+ * The repository a panel should show for a stored selection. Falling back to the primary
+ * rather than holding a stale id lets panels keep the selection in plain `useState`: a thread
+ * switch or detach just stops matching instead of rendering an empty view.
  */
 export function resolveActiveRepo(
   repos: ReadonlyArray<WorkspaceRepo>,

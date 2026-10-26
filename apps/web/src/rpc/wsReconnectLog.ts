@@ -1,31 +1,8 @@
 /**
- * Opt-in, stateless timeline logger for connection reconnects.
- *
- * OFF by default; flip on via `localStorage["t3.wsReconnect"] = "1"` in the
- * browser console. When on, each connection-phase transition emits one
- * `console.info` line carrying an ABSOLUTE `performance.now()` timestamp, the
- * connection label, and the observed phase. Deltas are computed by the reader
- * (subtraction), and multiple connections are de-interleaved by label — so this
- * module holds NO shared "previous timestamp" state that could cross-contaminate
- * two connections reconnecting at once (a mobile Tailscale drop takes every
- * connection down together). See the 2026-07-11 ws-reconnect-latency design.
- *
- * The phases are the presentation phases surfaced by the connection supervisor
- * (`@t3tools/client-runtime/connection` `EnvironmentConnectionPhase`), replacing
- * the fork's raw socket-lifecycle events. The mapping from the fork's names is:
- *   attempt → connecting / reconnecting
- *   open    → connected
- *   error   → error
- *   close   → offline / available
- *
- * Reading a repro: `connected`→`reconnecting` gap ≈ dead-connection detection
- * latency; each `reconnecting`→previous gap ≈ backoff gap; last
- * `reconnecting`→`connected` gap ≈ connect time (tunnel wait + capability probe).
- *
- * This logger is diagnostic and observation-only: it never changes reconnect
- * behavior. It is fed by `useWsReconnectTimelineLog` (see
- * `../connection/wsReconnectTimeline`), which passively observes the supervisor's
- * presentation-phase changes without modifying the supervisor.
+ * Opt-in reconnect timeline (`localStorage["t3.wsReconnect"] = "1"`): one `console.info` per
+ * supervisor phase change with an ABSOLUTE `performance.now()` and the connection label. No shared
+ * "previous timestamp" state, since every connection drops together on mobile; the reader computes
+ * deltas. Observation-only: it never changes reconnect behavior.
  */
 
 const RECONNECT_LOG_STORAGE_KEY = "t3.wsReconnect";

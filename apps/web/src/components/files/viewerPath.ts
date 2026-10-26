@@ -1,9 +1,7 @@
 /**
- * Pure path helpers for the standalone `/viewer/$` route. TanStack Router's
- * splat param (`_splat`) is the URL-decoded path *after* `/viewer/`, with the
- * leading slash consumed by the route prefix — so an absolute path like
- * `/Users/foo/x.md` arrives as `Users/foo/x.md`. These helpers convert between
- * that splat form and the absolute path the trusted-read RPC expects.
+ * Path helpers for the `/viewer/$` route. `_splat` is the decoded path after `/viewer/` with
+ * the leading slash consumed, so `/Users/foo/x.md` arrives as `Users/foo/x.md`; these convert
+ * between that form and the absolute path the trusted-read RPC expects.
  */
 
 /** Rebuild the absolute path from the router splat, or null when there is none. */
@@ -38,27 +36,10 @@ export function isViewerRoutePath(pathname: string): boolean {
 }
 
 /**
- * URL of the server's raw `/viewer` route for an absolute path — the byte source
- * behind `<img>` and the rendered-HTML `<iframe>`.
- *
- * Built against the ENVIRONMENT's http base url, never `window.location.origin`.
- * An origin-relative URL always points at whichever server served the app, which
- * for a remote environment is the wrong machine: it would 404, or silently serve a
- * same-named local file. It is also what makes this work on packaged desktop
- * (renderer origin is `t3code://app`) and in dev (Vite does not proxy `/viewer`).
- *
- * Each segment is encoded separately so a path containing a space, `#` or `%`
- * survives, while the separators stay real separators.
- *
- * The `raw=1` marker is load-bearing, not decoration. `/viewer` is deliberately
- * absent from the PWA's `navigateFallbackDenylist` so a top-level "Open in new tab"
- * gets the app shell — but an `<iframe src>` is *also* a `mode: "navigate"` request,
- * so without a marker the service worker would answer the frame with `index.html`
- * and render the app inside the viewer. The denylist matches `pathname + search`
- * (workbox `NavigationRoute._match`), so this marker sends the frame to the network.
- * An `<img>` is `mode: "no-cors"` and was never at risk; it carries the marker only
- * so both raw reads look the same on the wire. The server classifies on `pathname`
- * alone, so the query is inert there.
+ * URL of the server's raw `/viewer` route for an absolute path. Built on the ENVIRONMENT's base
+ * url, never `window.location.origin` (the wrong machine for a remote environment; also breaks
+ * packaged desktop and dev). Segments are encoded one by one. `raw=1` is load-bearing: an
+ * `<iframe src>` is a navigate request, and without it the service worker serves the app shell.
  */
 export function viewerHttpUrl(baseUrl: string | null, absolutePath: string | null): string | null {
   if (baseUrl === null || absolutePath === null || !absolutePath.startsWith("/")) return null;
@@ -67,13 +48,9 @@ export function viewerHttpUrl(baseUrl: string | null, absolutePath: string | nul
 }
 
 /**
- * What the address bar should do when an edit ends.
- *
- * Enter, focus loss and Escape all end an edit through the same blur, so this
- * is the single place that decides between them. Kept out of the component
- * because the decision is the part worth pinning: submitting an unchanged path
- * re-navigates to where the user already is, and submitting an emptied field
- * would ask the viewer to open nothing.
+ * What the address bar should do when an edit ends. Enter, focus loss and Escape all end
+ * through the same blur, so this decides between them: an unchanged path must not
+ * re-navigate, and an emptied field must not ask the viewer to open nothing.
  */
 export function resolveAddressBarCommit(input: {
   /** What the field currently holds. */

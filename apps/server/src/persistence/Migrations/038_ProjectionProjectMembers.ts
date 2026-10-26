@@ -1,14 +1,7 @@
 /**
- * Adds `members_json` to `projection_projects`: the JSON-encoded array of
- * `WorkspaceMember` entries (additional git repositories a project's threads
- * operate on, beyond `workspaceRoot`), mirroring how `scripts_json` already
- * persists `ProjectScript[]`.
- *
- * The column is `NOT NULL DEFAULT '[]'` because, unlike `scripts_json`, it is
- * being added to a table that already has live rows: existing rows must
- * decode as an empty member list (`'[]'` is what
- * `Schema.fromJsonString(Schema.Array(WorkspaceMember))` decodes to `[]`)
- * rather than failing to decode a NULL/missing column.
+ * Adds `members_json` (JSON `WorkspaceMember[]`) to `projection_projects`. `NOT NULL DEFAULT
+ * '[]'` because the table already has live rows, which must decode as an empty list rather
+ * than fail on a NULL column.
  */
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Effect from "effect/Effect";

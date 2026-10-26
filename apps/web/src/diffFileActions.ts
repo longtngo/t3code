@@ -99,13 +99,9 @@ export function openDiffFilePrimaryAction({
   if (!workspaceFilePath) return;
 
   if (threadRef) {
-    // Both halves are needed and they fix different things: upstream's
-    // workspaceFilePath resolves a diff path that is relative to the REPOSITORY
-    // root when the project root is a nested subdirectory of it (#6174), while
-    // the fork's repoCwd records WHICH repository the surface belongs to so a
-    // multi-repo workspace resolves against the right one. Passing the raw
-    // filePath here would reintroduce the nested-project bug; dropping repoCwd
-    // would re-bind every member repo's diff to the project root.
+    // Both halves are needed: `workspaceFilePath` resolves a repository-relative diff path when
+    // the project root is nested inside the repository, and `repoCwd` records WHICH repository
+    // the surface belongs to in a multi-repo workspace. Dropping either reintroduces its bug.
     useRightPanelStore.getState().openFile(threadRef, workspaceFilePath, undefined, repoCwd);
     return;
   }

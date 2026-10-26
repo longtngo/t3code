@@ -176,15 +176,9 @@ const CLAUDE_UNARMED_COMPACTION_MODELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The `autoCompactWindow` handed to Claude Code, or undefined to send none.
- *
- * The user's setting (tokens or a percentage) resolves against the window the
- * CLI will actually use. When it resolves to nothing, unarmed models get their
- * own window and any >= 1M window gets 1M: an older CLI refuses to compact a
- * >= 1M window it holds no default for (`claude-opus-4-6` at 1M still reports
- * `"auto"` on 2.1.288). Models 2.1.288 arms itself (`"model-default"`, 967,000)
- * get 1M anyway: the threshold comes out the same there, and the CLI on the
- * user's PATH has no minimum version.
+ * The `autoCompactWindow` for Claude Code, or undefined. The user's setting resolves against
+ * the CLI's real window; when unset, any >= 1M window gets 1M, because an older CLI refuses to
+ * compact a >= 1M window it has no default for (and the CLI on PATH has no minimum version).
  */
 export function claudeQueryAutoCompactWindow(
   setting: string | undefined,
@@ -208,15 +202,9 @@ function finitePositiveInteger(value: unknown): number | undefined {
 }
 
 /**
- * A `getContextUsage` answer as the thread's context snapshot. It is the only
- * source of the compaction facts the Vitals gauge's note and marker render
- * from (invariant 12). `autocompactSource` (lower-case `c`) is absent from the
- * SDK's declared type and read off the raw object; it, not
- * `isAutoCompactEnabled`, says whether compaction is armed.
- *
- * `maxTokens` is the model's window: the response's own `maxTokens` is the
- * window the CLI compacts against, which made a configured budget the meter's
- * denominator ("541k / 600k, 90%" on a 1M thread).
+ * A `getContextUsage` answer as the context snapshot, the only source of compaction facts
+ * (invariant 12). `autocompactSource` is untyped in the SDK and says whether compaction is
+ * armed. `maxTokens` is the model's window, not the response's compaction budget.
  */
 export function claudeContextUsageSnapshot(
   response: SDKControlGetContextUsageResponse,

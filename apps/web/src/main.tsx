@@ -1,31 +1,16 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { createHashHistory, createBrowserHistory } from "@tanstack/react-router";
 
+import "@fontsource-variable/inter";
 import "./index.css";
 
-import { prepareProviderAuthDelivery } from "./providerAuthDelivery";
-import { isElectron } from "./env";
 import { hasCloudPublicConfig } from "./cloud/publicConfig";
-import { getRouter } from "./router";
-import {
-  syncDocumentElectronPlatformClasses,
-  syncDocumentWindowControlsOverlayClass,
-} from "./lib/windowControlsOverlay";
+import { isElectron } from "./env";
+import { startAppServices } from "./appInit";
 import { AppRoot } from "./AppRoot";
 import { clearChunkReloadGuard, reloadOnceForChunkLoadError } from "./lib/chunkReloadGuard";
 
-prepareProviderAuthDelivery();
-
-// Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
-const history = isElectron ? createHashHistory() : createBrowserHistory();
-
-const router = getRouter(history);
-
-if (isElectron) {
-  syncDocumentElectronPlatformClasses(navigator.platform);
-  syncDocumentWindowControlsOverlayClass();
-}
+const router = startAppServices();
 
 // Register the PWA service worker for the installable web app. Skipped in Electron
 // (file:// shell) and in dev (no service worker is generated there).
@@ -35,8 +20,6 @@ if (!isElectron && import.meta.env.PROD) {
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
-// A failed split-chunk fetch usually means the hashed assets went stale under
-// a deploy; one guarded reload picks up the fresh index.html.
 let chunkLoadFailed = false;
 let reloadScheduled = false;
 window.addEventListener("vite:preloadError", (event) => {
@@ -49,9 +32,7 @@ window.addEventListener("vite:preloadError", (event) => {
 
 const app = <AppRoot router={router} />;
 
-// Loading only the selected runtime as a split chunk keeps every Clerk byte out
-// of the startup graph for local-mode users, and keeps the bundled clerk-js out
-// of the browser build entirely.
+// Split by runtime to keep Clerk out of local startup and clerk-js out of browser builds.
 const managedAuthShellModule =
   clerkPublishableKey && hasCloudPublicConfig()
     ? isElectron
@@ -64,8 +45,7 @@ export const startup = Promise.all([
   router.load(),
 ])
   .then(([ManagedAuthShell]) => {
-    // A route chunk failure still resolves router.load(): the error is parked in
-    // the lazy component and surfaces through the route error boundary.
+    // Route chunk failures resolve router.load() and surface later through the error boundary.
     if (reloadScheduled) return;
     if (!chunkLoadFailed) clearChunkReloadGuard();
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

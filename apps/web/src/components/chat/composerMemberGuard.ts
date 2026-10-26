@@ -3,13 +3,9 @@ import type { WorkspaceMemberBranchReport } from "@t3tools/contracts";
 import type { WorkspaceRepo } from "~/hooks/useWorkspaceRepos";
 
 /**
- * A member repository sitting on a branch some other thread cut.
- *
- * See docs/design/2026-08-04-multi-repo-workspace-design.md, "The guard runs
- * pre-turn". One shared checkout per member means two threads writing to the
- * same repository cannot be isolated — this warning is the whole protection
- * available, so it has to reach the user *before* they send rather than in the
- * post-turn log where the damage is already done.
+ * A member repository sitting on a branch some other thread cut. One shared checkout per
+ * member means two threads writing to it cannot be isolated, so this warning is the only
+ * protection and must reach the user before they send, not in the post-turn log.
  */
 export interface ContestedMember {
   readonly memberId: string;
@@ -27,19 +23,10 @@ function basenameOf(path: string): string {
 }
 
 /**
- * The member repositories a turn would write into behind another thread's back.
- *
- * Only `owned-by-other` qualifies. `unmanaged` is a checkout the user pinned by
- * hand, `owned-by-self` is this thread's own branch, and `unavailable` is
- * already visible as an unplug icon on the repository bar — none of them are a
- * reason to interrupt someone who is typing.
- *
- * The server reports on every member the project lists, while the repository
- * list drops members whose path collides with the primary checkout or with an
- * earlier member. A report with no matching repository therefore falls back to
- * the path's last segment rather than being dropped: the two lists are built by
- * different rules, and a divergence between them has to fail loudly here rather
- * than turn into silence.
+ * The member repositories a turn would write into behind another thread's back; only
+ * `owned-by-other` qualifies. A report with no matching repository falls back to the path's
+ * last segment rather than being dropped: the server and the repository list dedupe members by
+ * different rules, and a divergence must fail loudly, not turn into silence.
  */
 export function selectContestedMembers(input: {
   readonly reports: ReadonlyArray<WorkspaceMemberBranchReport>;
@@ -64,18 +51,10 @@ export function selectContestedMembers(input: {
 }
 
 /**
- * Identity of one repository's warning, for remembering that the user
- * dismissed *it*.
- *
- * Per member rather than per warning. Keying on the whole set means resolving
- * one repository re-raises a warning about the others the user dismissed a
- * moment ago, because the set — and so the key — changed.
- *
- * The branch is part of the key: a repository that later moves onto a
- * *different* thread's branch is a new fact the user has not seen. So is the
- * thread, because `owned-by-other` is a claim about some *other* thread, which
- * makes the same repository on the same branch a fresh warning to everyone but
- * its owner.
+ * Identity of one repository's warning, so a dismissal sticks per member: keying on the whole
+ * set re-raises dismissed warnings when another member resolves. Branch and thread are in the
+ * key because a move onto a different thread's branch is a new fact, and `owned-by-other` is
+ * a claim relative to the viewing thread.
  */
 export function contestedMemberKey(threadId: string, member: ContestedMember): string {
   return `${threadId}:${member.memberId}@${member.branch}`;
@@ -118,12 +97,9 @@ export function contestedMembersKey(
 }
 
 /**
- * What the guard knows right now.
- *
- * `unknown` exists because the alternative is the exact failure this feature
- * was built around: a check that could not run reading as a check that came
- * back clean. An unanswered query, a disconnected environment and "nothing to
- * warn about" are three different facts, and only the last earns silence.
+ * What the guard knows right now. `unknown` keeps a check that could not run from reading as
+ * one that came back clean: an unanswered query, a disconnected environment and "nothing to
+ * warn about" are different facts, and only the last earns silence.
  */
 export type MemberGuardUnknownReason = "checking" | "offline" | "failed";
 
@@ -156,14 +132,9 @@ export function describeUnknownMemberGuard(reason: MemberGuardUnknownReason): st
 }
 
 /**
- * What the banner says.
- *
- * The single-repository case comes back in parts so the branch name can be set
- * as code and truncated the way the branch-mismatch banner beside it sets its
- * own — `memberFeatureBranchName` builds these from the owning thread's title,
- * so they run long. Several repositories get named up to a point and then
- * counted: the composer is not the place to list seven of them, and the
- * repository bar in the Diff and Files panels marks every one.
+ * What the banner says. The single-repository case comes back in parts so the branch name
+ * (built from the owning thread's title, so it runs long) can be set as code and truncated
+ * like the branch-mismatch banner. Several repositories are named up to a point, then counted.
  */
 const MAX_NAMED_REPOS = 2;
 

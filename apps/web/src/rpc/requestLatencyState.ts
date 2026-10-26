@@ -6,11 +6,8 @@ import { appAtomRegistry } from "./atomRegistry";
 
 export const SLOW_RPC_ACK_THRESHOLD_MS = 15_000;
 /**
- * Some requests are slow by design. Provider and server updates shell out to a
- * package manager and only respond once the install finishes. A VCS status
- * refresh fetches, may auto-pull, looks up the pull request, and first waits for
- * any background refresh of the same repository, which often totals over 15s.
- * Warning about those after 15s is noise, so they get a much longer leash.
+ * Updates wait for package installs; VCS refreshes may wait for background work and network calls.
+ * Give these requests longer than the normal 15s warning threshold.
  */
 export const LONG_RUNNING_RPC_ACK_THRESHOLD_MS = 120_000;
 const MAX_TRACKED_RPC_ACK_REQUESTS = 256;
@@ -43,14 +40,9 @@ const longRunningRpcAckMethods = new Set<string>([
   WS_METHODS.vcsRefreshStatus,
 ]);
 /**
- * Pull request calls fan out across every configured server and shell out to
- * the provider CLI, so 15s is a normal reading for them and warning about it is
- * the noise this leash exists to remove.
- *
- * They belong here rather than in {@link untrackedRpcAckMethods} because "slow
- * by design" and "unobservable" are different claims. Dropping the namespace
- * from tracking altogether also hides a fetch that has genuinely wedged, which
- * is the only case a user wants to be told about.
+ * Pull request calls fan out across every server and shell out to the provider CLI, so 15s is
+ * normal. Kept tracked (not in {@link untrackedRpcAckMethods}) because "slow by design" is not
+ * "unobservable": a genuinely wedged fetch is the one case a user wants to hear about.
  */
 const longRunningRpcAckPrefixes = ["pullRequests."];
 

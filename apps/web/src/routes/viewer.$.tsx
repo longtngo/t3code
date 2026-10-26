@@ -16,11 +16,8 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 /**
- * Editable, URI-like path field for the viewer header. Shows the full resolved
- * path and lets the user retype any absolute path to retarget the viewer. Enter
- * commits, Escape reverts, blur commits. Resyncs to `value` whenever the loaded
- * path changes and the field is not being edited. (Ported from the fork's
- * FileViewerSidebar address bar.)
+ * Editable path field: retype any absolute path to retarget the viewer. Enter and blur commit,
+ * Escape reverts. Resyncs to `value` when the loaded path changes and the field is not being edited.
  */
 function AddressBar({ value, onSubmit }: { value: string; onSubmit: (path: string) => void }) {
   const [draft, setDraft] = useState(value);
@@ -90,19 +87,10 @@ function AddressBar({ value, onSubmit }: { value: string; onSubmit: (path: strin
 function ViewerRouteView() {
   const splat = Route.useParams({ select: (params) => params._splat });
   const absolutePath = absolutePathFromViewerSplat(splat);
-  // An absolute path is only meaningful together with the machine it lives on.
-  // Opening a file from a thread on a remote environment used to read that path
-  // from the PRIMARY one, which 404s or, worse, silently serves a same-named
-  // local file. The opener passes the thread's environment.
-  //
-  // Falling back to primary is right when no environment was ASKED for (older
-  // links, the single-environment case) but wrong when one was asked for and is
-  // not in the connection catalog — reading a stale link's path off this machine
-  // reproduces the bug this fixes. That case says so instead.
-  //
-  // Gated on `isReady` because the catalog starts empty: opening one of these
-  // links directly, which is exactly what the feature adds, would otherwise flash
-  // "not connected" for every environment before the catalog arrives.
+  // A path only means something on its machine; reading it from the primary 404s or serves a
+  // same-named local file. Fall back to primary only when no environment was asked for; one asked
+  // for but missing from the catalog says so. Gated on `isReady` because the catalog starts empty
+  // and a direct link would otherwise flash "not connected".
   const requestedEnvironmentId = Route.useSearch({ select: (search) => search.env });
   const { isReady, presentationById } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();

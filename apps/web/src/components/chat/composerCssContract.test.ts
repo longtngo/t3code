@@ -6,18 +6,10 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 /**
- * Upstream owns the composer chrome's CSS, and it moves. When #8734 relocated the chrome
- * into Tailwind-in-component primitives it deleted all 11 `.chat-composer-*` selectors from
- * `index.css` in one commit. Markup left pointing at them still renders, still typechecks and
- * still passes every other test — it is just unstyled, and no test in this repo could see it.
- *
- * These two checks close that hole in both directions, and they keep gating it on every
- * future reconcile rather than once. Measured when they were written: against upstream's
- * `index.css` the first check reports 13 orphans, and against the fork's source the second
- * reports 11 dead selectors — so both discriminate rather than passing vacuously.
- *
- * Only bare class tokens are checked. `data-chat-composer-*` attributes and
- * `--chat-composer-*` custom properties are a different contract with a different owner.
+ * Upstream owns the composer chrome's CSS and once deleted every `.chat-composer-*` selector in
+ * one commit; markup still pointing at them passes everything but renders unstyled. These two
+ * checks close that in both directions on every reconcile (13 orphans and 11 dead selectors when
+ * written). Only bare class tokens: `data-`/`--chat-composer-*` are a different contract.
  */
 const SOURCE_ROOT = NodePath.join(import.meta.dirname, "..", "..");
 const STYLESHEET = NodePath.join(SOURCE_ROOT, "index.css");

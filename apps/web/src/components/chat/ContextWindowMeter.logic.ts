@@ -1,12 +1,8 @@
-// FORK: the ContextWindowMeter component itself is deleted here — the composer's
-// Vitals gauge replaced it (see docs/fork/README.md invariant 4). Only the Claude
-// resume-compaction helpers survive, because ChatView's compaction banner uses them
-// and is independent of the meter. The filename is kept so upstream edits to these
-// helpers keep merging instead of arriving as a modify/delete every reconcile.
-// resolveContextWindowModelDisplayName / formatContextWindowCompactionMessage are
-// deliberately absent: the first is reimplemented inline in ChatComposer.tsx, the
-// second only ever served the deleted component.
-import type { ModelSelection, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+// FORK: the meter component is deleted (the Vitals gauge replaced it, docs/fork/README.md
+// invariant 4); only the resume-compaction helpers ChatView's banner uses survive. The
+// filename stays so upstream edits keep merging instead of arriving as modify/delete.
+// The model display name is reimplemented inline in ChatComposer.tsx.
+import type { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
   COMPACTION_SUGGESTION_MIN_TOKENS,
@@ -17,7 +13,7 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 
-// Used when the provider did not report its cache TTL: Claude's 1h cache plus slack.
+// Fallback TTL: Claude's 1h cache plus slack.
 const CLAUDE_RESUME_COMPACTION_FALLBACK_MS = 70 * 60_000;
 
 export function providerSupportsManualCompaction(

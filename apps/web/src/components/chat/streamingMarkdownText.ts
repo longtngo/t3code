@@ -1,17 +1,9 @@
 import { useEffect, useReducer, useRef } from "react";
 
 /**
- * Assistant text changes on every token chunk, and ChatMarkdown re-runs the
- * whole remark/rehype pipeline over the entire message body each time.
- *
- * Measured against real assistant messages copied out of a live database: a
- * 1.1 KB reply parses in ~1 ms, but a 19 KB one costs ~21 ms per delta -- more
- * than a 60 Hz frame -- and streaming one to completion burns ~1.9 s of main
- * thread. Cost tracks length at roughly 1 ms per 1,000 characters.
- *
- * So coalesce the long ones and leave the short ones exactly as they were:
- * throttling a message that already parses in a millisecond would only make it
- * arrive in visible steps, which is the stutter this is meant to remove.
+ * ChatMarkdown re-parses the whole message on every token chunk, at ~1 ms per 1,000 characters
+ * (measured on real messages: a 19 KB reply costs ~21 ms per delta, over a 60 Hz frame). So
+ * coalesce long messages only: throttling one that parses in a millisecond just adds stutter.
  */
 
 /** Where a parse first costs about half a frame. Below it there is nothing to save. */

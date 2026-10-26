@@ -1,15 +1,7 @@
 /**
- * Decides whether a settlement-sweep lookup failure is worth logging.
- *
- * The sweep re-enters the failure path every 60 seconds for as long as a group
- * stays a settlement candidate, and the failure below it is already cached and
- * backed off — so every one of those asks re-reported a condition nothing had
- * changed about. Measured on one machine: 472 records and 1.3 MB in 43 minutes,
- * 95% of everything the server logged, which buries every other warning.
- *
- * Only a *change* is news: a different failure, or a recovery. This is the same
- * rule `GitManager`'s `shouldLogPrLookupFailure` applies one layer down, kept
- * deliberately identical in shape so the two read as one idea.
+ * Whether a settlement-sweep lookup failure is worth logging. The sweep re-asks every 60 s,
+ * which was 95% of all server logging. Only a change (a different failure, or a recovery) is
+ * news; same rule and shape as `GitManager`'s `shouldLogPrLookupFailure`.
  */
 export const SETTLEMENT_FAILURE_LOG_CAPACITY = 2_048;
 
@@ -45,18 +37,9 @@ export const makeSettlementFailureLogGate = (
 };
 
 /**
- * The identity of a failure, for both the dedupe key and the log annotations.
- *
- * Two things here were measured wrong before they were measured right, and both
- * are easy to reintroduce:
- *
- * - **The tag chain is walked, not read one hop deep.** A `gh` that hung and a
- *   `gh` that exited 1 both surface as `GitHubCliCommandError`; only the nested
- *   cause tells them apart. Keyed one hop deep, a hang that begins mid-outage is
- *   suppressed as a repeat of the exit it replaced.
- * - **`detail` is annotated but never keyed.** It carries raw command output,
- *   which can differ run to run for one standing condition and would defeat the
- *   dedupe entirely — the same reason `GitManager` keys on tags alone.
+ * A failure's identity, for the dedupe key and log annotations. Walk the whole tag chain: a
+ * hung `gh` and an exit-1 `gh` share the outer tag. Never key on `detail`: it carries raw
+ * output that varies run to run for one standing condition.
  */
 export interface SettlementFailureIdentity {
   /** Stable across repeats of one condition; changes when the condition does. */

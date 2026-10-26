@@ -1,12 +1,8 @@
 import type { OtlpTracer } from "effect/observability";
 
 /**
- * Enough of a rejected OTLP body to debug the decode, without the body itself.
- *
- * Browser span attributes carry request URLs, file paths and occasionally
- * credentials in query strings. The whole payload used to go into the warning,
- * which put it in server.log for anyone who can read the file - a durable copy
- * of data the trace pipeline itself never accepted.
+ * Enough of a rejected OTLP body to debug the decode, without the body itself: span
+ * attributes carry URLs, paths and sometimes credentials, which must not land in server.log.
  */
 export function summarizeOtlpTraceData(bodyJson: OtlpTracer.TraceData): {
   readonly resourceSpanCount: number;

@@ -14,19 +14,10 @@ import {
 export type FileViewerKind = "html" | "markdown" | "code" | "image" | "video" | "audio";
 
 /**
- * Curated allow-list of text/code file extensions that get the clickable-chip +
- * side-panel treatment (alongside the specially-handled `.md`/`.html`). Keep this
- * conservative — it is the single gate for "is this an openable code file", so a
- * loose list means false-positive chips on prose tokens like `example.com`.
- *
- * Deliberately excludes: `.md`/`.html` (handled as their own kinds), binary/media
- * formats, `.env` and extension-less files (secrets / keeps the server `/viewer`
- * unit test valid), and the ambiguous single-letter `.m`/`.mm` (Objective-C vs
- * MATLAB — high prose-false-positive risk).
- *
- * Derived from the shared list the server's `/viewer` route reads too, so the two
- * cannot drift; this side drops the leading dot because it matches on the bare
- * extension {@link extensionOf} produces.
+ * The single gate for "is this an openable code file": keep it conservative, or prose like
+ * `example.com` becomes a chip. Excludes `.md`/`.html` (own kinds), binaries, `.env` and
+ * extension-less files (secrets), and `.m`/`.mm` (prose false positives). Derived from the list
+ * the server's `/viewer` route reads so they cannot drift; dots dropped to match {@link extensionOf}.
  */
 export const TEXT_FILE_EXTENSIONS: ReadonlySet<string> = new Set(
   WORKSPACE_TEXT_VIEWER_EXTENSIONS.map((extension) => extension.slice(1)),
@@ -52,14 +43,9 @@ function extensionOf(path: string): string {
 }
 
 /**
- * Single source of truth mapping a file path to how the viewer should render it,
- * or null when the path is not an openable document. Shared by the in-message chip
- * detector ({@link classifyInlineCodePath}) and the viewer.
- *
- * A null result is NOT "unviewable" — the viewer falls back to its code view, which
- * is how extension-less files (`Makefile`, `Dockerfile`) opened via the address bar
- * still render. Null only means "do not turn this token into a chip", which is the
- * conservative half of the contract described on {@link TEXT_FILE_EXTENSIONS}.
+ * Shared by the chip detector ({@link classifyInlineCodePath}) and the viewer. Null is NOT
+ * "unviewable": the viewer falls back to its code view (how `Makefile` still renders); it only
+ * means "do not turn this token into a chip".
  */
 export function classifyFileViewerKind(path: string): FileViewerKind | null {
   const ext = extensionOf(path);

@@ -88,17 +88,10 @@ function commitReducer(state: HookState, action: CommitAction): HookState {
 }
 
 /**
- * Exposes the generation a `get` query's *current fetch* was issued at (see
- * `observeSubagentBackendQuery`). Driven by `isPending`, not atom identity: `Atom.swr` can
- * re-resolve a query on its own — e.g. after a WebSocket reconnect — with no change to the
- * atom object, so keying the stamp off the object would freeze it at whatever generation was
- * current when the atom first mounted and never update again. The tracker is mutated during
- * render (not in an effect) so a fast-resolving response landing on the very next render still
- * compares against the right value.
- *
- * A switch to another environment restamps to the current generation, which the reset keeps:
- * the new environment's answer, cached or in flight, is not older than anything done there,
- * while a set made there afterwards still outranks it.
+ * The generation a `get` query's current fetch was issued at. Driven by `isPending`, not atom
+ * identity, because `Atom.swr` re-resolves (e.g. on reconnect) without a new atom; mutated
+ * during render so a fast response compares against the right value. An environment switch
+ * restamps to the current generation, which a later set there still outranks.
  */
 function useQueryGeneration(
   environmentId: EnvironmentId | null,
@@ -115,29 +108,10 @@ function useQueryGeneration(
 }
 
 /**
- * Drives the sidebar's subagent-backend row and panel.
- *
- * No optimistic flip: `state` only ever updates from a resolved RPC response — either a
- * `get`, or a `set`'s own response. `set`'s response is authoritative on its own (the
- * flag-file write is atomic and completes before the response returns), so committing there
- * does not need, and must not wait for, a follow-up `get`.
- *
- * Both `get` (with `refreshModels: true`) and `set` spawn the same ~3.4s Cursor model probe
- * server-side, so a panel-open `get` and a `set` triggered by flipping the toggle mid-probe
- * are genuinely concurrent — the `get` can resolve *after* the `set` it raced, carrying data
- * from before the flip. Applying it would silently revert the just-confirmed `set`, which is
- * exactly the failure the no-optimistic-flip rule exists to prevent, reached from the other
- * side. `commitReducer` (see `subagentBackendCommit.ts`) guards against it with a generation
- * counter: every successful `set` bumps it, `useQueryGeneration` stamps each `get`'s current
- * fetch with the generation in effect when that fetch actually started, and a resolution whose
- * issued generation trails the last committed `set` is dropped instead of applied — while a
- * later, genuinely fresh resolution (e.g. a reconnect revalidation with no atom identity
- * change) still gets through, because its own rising edge restamps it.
- *
- * `get` runs twice, by design: once on mount with `refreshModels` omitted (cheap — the server
- * defaults it to false so mounting never spawns the Cursor model probe), and again whenever
- * `panelOpen` flips true with `refreshModels: true` (the panel opting into a fresh probe). The
- * two inputs key distinct query atoms, so opening the panel does not race the mount query.
+ * Drives the sidebar's subagent-backend row and panel. No optimistic flip: `state` updates only
+ * from a resolved `get` or a `set`'s own (authoritative) response. A `get` racing a `set` can
+ * resolve after it with pre-flip data, so `commitReducer` drops a `get` stamped before the last
+ * committed set. `get` runs on mount without `refreshModels`, and again on panel open with it.
  */
 export function useSubagentBackend(
   environmentId: EnvironmentId | null,
@@ -194,11 +168,10 @@ export function useSubagentBackend(
     dispatch({ type: "get", issuedGeneration: panelIssuedGeneration, value: panelState });
   }, [panelState, panelIssuedGeneration]);
 
-  // A `set` answer for an environment no longer shown is dropped. Written in a layout effect, so
-  // it names the new environment as the switch commits, before the reset effect runs: an old
-  // answer landing in that gap would otherwise bump the generation, which the reset carries over,
-  // dropping the new environment's cached answer. Not during render: a render React throws away
-  // would leave it naming an environment that never reached the screen.
+  // A `set` answer for an environment no longer shown is dropped. Tracked in a layout effect so
+  // it names the new environment before the reset effect runs (an old answer in that gap would
+  // bump the generation and drop the new environment's cached answer), and not during render,
+  // where a discarded render could name an environment that never reached the screen.
   const renderedEnvironmentRef = useRef(environmentId);
   useLayoutEffect(() => {
     renderedEnvironmentRef.current = environmentId;

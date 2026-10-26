@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   deriveAuthClientMetadata,
-  isRemoteReachableHost,
   resolveClientIpAddress,
   resolveSessionCookieName,
 } from "./utils.ts";

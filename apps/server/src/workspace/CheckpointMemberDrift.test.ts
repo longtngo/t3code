@@ -65,17 +65,8 @@ describe("resolveCheckpointDrift", () => {
     assert.deepStrictEqual(drift.driftedMembers, []);
   });
 
-  // The case the explicit clause exists for: two unobserved states compare EQUAL,
-  // so without the clause they read as "nothing moved" — the same trap as
-  // comparing two nulls. Every other unobserved row differs from a real sha and
-  // would drift anyway.
-  //
-  // Measured, because an earlier version of this comment claimed this was the
-  // only test that proved it: deleting the clause turns FIVE tests red, and three
-  // of those catch the real missed drift (an empty `driftedMembers`) rather than
-  // just a reason label — this one, "does not read an all-unobserved record as a
-  // claim of no members", and a case in `WorkspaceMemberBranches.test.ts`. The
-  // guarantee holds; the uniqueness claim did not.
+  // Two unobserved states compare EQUAL, so without the explicit clause they read as "nothing
+  // moved". Deleting the clause turns five tests red, three on a truly missed drift.
   it("does not read two unobserved states as evidence nothing moved", () => {
     const drift = resolveCheckpointDrift([unread], [unread]);
     assert.deepStrictEqual(drift.driftedMembers, [{ memberId: "m3", reason: "unobserved" }]);

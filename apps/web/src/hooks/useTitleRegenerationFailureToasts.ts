@@ -1,16 +1,7 @@
 /**
- * Tells the user when a title regeneration they asked for failed.
- *
- * Regeneration runs in a server reactor, so the click that starts it cannot
- * learn the outcome — the request is accepted long before the work happens.
- * The server records `titleRegenerationFailedAt` on the thread instead, and
- * this hook watches every thread shell for that value changing.
- *
- * Shells (not the open thread) are the right source: "Regenerate title" is
- * reachable from the sidebar for threads that are not open, which is the case
- * that most needs the feedback.
- *
- * Mount once near the app root, beside the other thread-wide observers.
+ * Tells the user when a title regeneration they asked for failed. It runs in a server reactor,
+ * so the click cannot learn the outcome; this watches every shell's `titleRegenerationFailedAt`
+ * (shells, because regeneration is reachable for threads that are not open). Mount once at root.
  */
 import { useEffect, useRef } from "react";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -20,15 +11,9 @@ import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { shouldReportTitleRegenerationFailure } from "@t3tools/client-runtime/state/title-regeneration-failures";
 
 export function useTitleRegenerationFailureToasts(): void {
-  // Last value seen per thread. A thread missing from this map has never been
-  // observed, which is what keeps hydration silent.
-  //
-  // Deliberately never pruned, unlike the completion-notification hook. Absence
-  // means "never observed" and suppresses the toast, so dropping a thread that
-  // left the shell list — which happens whenever an environment drops out of the
-  // catalog — would silently swallow a failure that lands in that window. The
-  // growth it avoids is one string per thread ever seen, bounded by the user's
-  // thread count; a missed failure notification is not recoverable.
+  // Last value seen per thread; absence means never observed, which keeps hydration silent.
+  // Never pruned: dropping a thread that left the shell list (an environment dropping out)
+  // would swallow a failure landing then. Growth is one string per thread ever seen.
   const seenFailedAt = useRef(new Map<string, string | null>());
   const threads = useThreadShells();
 

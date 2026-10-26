@@ -6,13 +6,9 @@ import { type StateStorage, createJSONStorage, persist } from "zustand/middlewar
 import { isTransportConnectionErrorMessage } from "./transportError";
 
 /**
- * A turn-start queued while the environment was disconnected.
- *
- * `commandId` is minted once at enqueue time and reused on every replay. The
- * server upserts command receipts by `commandId` and returns the original result
- * for an already-accepted command instead of re-executing it, so re-sending a
- * queued turn is exactly-once even when we cannot tell whether an earlier attempt
- * reached the server.
+ * A turn-start queued while disconnected. `commandId` is minted once and reused on every replay;
+ * the server returns the original result for an already-accepted `commandId`, so a re-send is
+ * exactly-once even when an earlier attempt's fate is unknown.
  */
 export interface QueuedTurn {
   readonly environmentId: EnvironmentId;
@@ -21,27 +17,18 @@ export interface QueuedTurn {
   /** Stable across replays — the server dedupes on it. */
   readonly commandId: CommandId;
   /**
-   * The `startThreadTurn` input, carrying `commandId`. The flusher supplies a
-   * fresh `createdAt` at send time because the field is required on the command
-   * (the server canonicalizes it to its own receive time regardless).
-   *
-   * Typed against the real command input rather than a bag of unknowns: this
-   * payload is written now and sent hours later, so a field renamed in between
-   * would otherwise be a runtime rejection at replay, when the user is no longer
-   * looking.
+   * The flusher supplies a fresh `createdAt` at send time (required; the server overwrites it).
+   * Typed against the real command input: this is sent hours after it is written, so a renamed field
+   * must fail typecheck, not be rejected at replay when nobody is looking.
    */
   readonly input: StartThreadTurnInput;
   readonly enqueuedAt: string;
 }
 
 /**
- * A turn that reached the server but whose echo has not arrived yet.
- *
- * Deliberately NOT part of the persisted queue: the queue's contract is "not
- * yet delivered", and giving it a second lifecycle state would put a durable,
- * cross-tab, replayed structure in charge of a one-round-trip rendering
- * detail. These are ephemeral, capped, and dropped on reload — the worst case
- * is the blink they exist to remove.
+ * A turn that reached the server but whose echo has not arrived. NOT part of the persisted queue,
+ * whose contract is "not yet delivered": these are ephemeral, capped, and dropped on reload, and
+ * the worst case is the blink they exist to remove.
  */
 export interface DeliveredTurn {
   readonly threadId: ThreadId;
@@ -58,11 +45,9 @@ interface OutboxState {
 export const MAX_QUEUED_TURNS = 20;
 
 /**
- * A queued turn older than this is discarded instead of replayed. Sending a
- * day-old message into a thread whose context has moved on is worse than losing
- * it, and the age check also stands in for pruning turns whose environment is
- * gone — the catalog exposes no "reconciliation complete" signal, so absence
- * cannot be distinguished from "not loaded yet" without deleting live messages.
+ * Older queued turns are discarded, not replayed: a day-old message into a moved-on thread is worse
+ * than losing it. The age check also prunes turns whose environment is gone, since the catalog has
+ * no "reconciliation complete" signal to tell absence from "not loaded yet".
  */
 export const MAX_QUEUED_TURN_AGE_MS = 12 * 60 * 60 * 1000;
 
@@ -105,12 +90,9 @@ function isQueuedTurn(value: unknown): value is QueuedTurn {
 }
 
 /**
- * Drop structurally invalid entries on the way back in from storage.
- *
- * Deliberately does NOT drop aged-out entries: rehydrate happens before any UI
- * exists, so a silent drop here would destroy the user's message with no toast
- * and no draft to fall back on (enqueueing already cleared it). Expiry is left
- * to {@link expireQueuedTurns}, which reports what it discarded.
+ * Drops structurally invalid entries but NOT aged-out ones: rehydrate runs before any UI exists,
+ * so a silent drop would destroy the message with no toast and no draft to fall back on. Expiry is
+ * left to {@link expireQueuedTurns}, which reports what it discarded.
  */
 export function sanitizeRehydratedQueue(value: unknown): readonly QueuedTurn[] {
   if (!Array.isArray(value)) return [];
@@ -245,27 +227,18 @@ function errorMessageOf(error: unknown): string {
 }
 
 /**
- * Send queued turns oldest-first.
- *
- * A transport failure blocks only the environment it happened on — its remaining
- * turns stay queued and in order, while turns for other (reachable) environments
- * still drain. Per-environment FIFO is preserved because messages to one thread
- * must arrive in the order they were composed. A terminal (non-transport) failure
- * drops its turn; otherwise one rejected command would wedge the queue forever.
+ * Sends oldest-first. A transport failure blocks only its own environment, keeping per-environment
+ * FIFO (one thread's messages must arrive in order) while others drain. A terminal failure drops
+ * its turn, or one rejected command would wedge the queue forever.
  */
 export async function flushOutbox(
   send: (turn: QueuedTurn) => Promise<unknown>,
   options?: {
     readonly onTerminalError?: (turn: QueuedTurn, error: unknown) => void;
     /**
-     * Checked against freshly-synced thread state immediately before sending.
-     * Return a reason to drop the turn instead.
-     *
-     * The enqueue-time check compared against a thread row that was stale by
-     * definition — the environment was unreachable — so a mode changed from
-     * another device, or changed here after queueing, was invisible. Sending a
-     * turn into a thread whose modes have since moved runs it under settings
-     * the user did not choose for it.
+     * Checked against freshly-synced thread state just before sending; return a reason to drop. The
+     * enqueue-time row was stale by definition, so a mode changed since would run the turn under
+     * settings the user did not choose for it.
      */
     readonly rejectBeforeSend?: (turn: QueuedTurn) => string | null;
     /** Called when a turn is accepted, before it is removed from the queue. */

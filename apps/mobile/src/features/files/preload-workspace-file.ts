@@ -7,7 +7,7 @@ import { projectEnvironment } from "../../state/projects";
 import { rendersFromAssetUrl } from "./filePath";
 import { prepareSourceFileDocument } from "./source-file-document";
 import { sourceHighlightAtom } from "./sourceHighlightingState";
-import type { ReviewDiffTheme } from "../review/shikiReviewHighlighter";
+import type { HighlightScheme } from "../../lib/highlights";
 
 const inFlightPreloads = new Map<string, Promise<void>>();
 const MAX_HIGHLIGHT_PRELOAD_CHARACTERS = 256 * 1024;
@@ -24,7 +24,7 @@ export function preloadWorkspaceFileContents(input: {
   readonly cwd: string;
   readonly environmentId: EnvironmentId;
   readonly relativePath: string;
-  readonly theme: ReviewDiffTheme;
+  readonly theme: HighlightScheme;
 }): void {
   if (
     !readEnvironmentScope(input.environmentId, AuthFilesystemReadScope) ||

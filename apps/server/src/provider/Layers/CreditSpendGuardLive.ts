@@ -1,13 +1,7 @@
 /**
- * CreditSpendGuardLive - the "Allow to spend credits" switch on orchestrator v2.
- *
- * `layer` answers the turn-start gate (`ProviderTurnStartService`, the one place every
- * provider turn starts, and the client intake in `ThreadMessageIntake`). It reads the
- * switch and the instance's published usage live on every call; nothing is cached, so a
- * dead fiber or a failed read can never leave a stale "allowed" behind.
- *
- * `interruptSweeperLive` stops turns already running on an instance at the moment it
- * becomes blocked, which no turn-start gate can see.
+ * CreditSpendGuardLive - "Allow to spend credits" on orchestrator v2. `layer` answers the
+ * turn-start gate, reading live on every call so nothing stale can say "allowed";
+ * `interruptSweeperLive` stops turns already running when an instance becomes blocked.
  *
  * @module provider/Layers/CreditSpendGuardLive
  */
@@ -48,12 +42,9 @@ export const FRESH_READ_TIMEOUT = Duration.seconds(5);
 export const INTERRUPT_DISPATCH_TIMEOUT = Duration.seconds(30);
 
 /**
- * Whether a turn start should re-read this instance's usage before deciding.
- *
- * Published usage only moves while a client watches the provider or a turn reports rate
- * limits, so with no client focused it can be hours old when an MCP, scheduled or
- * other-device turn starts. Re-read only when that age could hide a 100%: an old reading
- * already at or near the cap.
+ * Whether a turn start should re-read usage first. Published usage only moves while a
+ * client watches or a turn reports limits, so it can be hours old; re-read only when that
+ * age could hide a 100% (an old reading already at or near the cap).
  */
 export function needsFreshUsageRead(
   limits: ServerProviderUsageLimits | undefined,
@@ -135,26 +126,10 @@ export const makeCreditSpendGuard = Effect.fn("CreditSpendGuard.make")(function*
   });
 
   /*
-   * The turn-start gate. Known limits, left as they are:
-   * - The shared fresh read has no bound of its own past each caller's timeout; it relies
-   *   on the provider probe's own 25 s timeout to end, and a caller never waits past
-   *   FRESH_READ_TIMEOUT for it.
-   * - A turn that passed this check just before the instance hit 100% still starts; the
-   *   interrupt sweeper then stops it.
-   * - A continuation after a server restart that this refuses fails visibly and is not
-   *   retried (limit auto-resume is: its worker asks `cachedRefusalFor` first).
-   * - A limit resume whose pre-send fresh read fails or times out waits for a later sweep,
-   *   but only 3 times; the 4th is sent on the stale reading and, if this then refuses
-   *   it, its recovery ends. Treating a credit refusal as retryable would close that, but
-   *   would also auto-resume user messages this guard refused.
-   * - A full window with no reset time stays blocked until a probe publishes a new
-   *   reading; nothing else can tell when it ends.
-   * - A shared read that hangs holds its slot until the probe's 25 s timeout ends it;
-   *   callers stop waiting at FRESH_READ_TIMEOUT and keep the reading they had.
-   * - A one-window runtime update with changed numbers stamps the whole reading's
-   *   checkedAt, so another window can look fresh and skip its re-read for up to 60 s; the
-   *   sweeper is the backstop. (checkedAt also orders runtime updates against probes, so
-   *   it cannot stamp less; the fix would be a per-window probe/runtime merge.)
+   * The turn-start gate. Accepted limits: a turn passing just before 100% starts and the
+   * sweeper stops it; a refused post-restart continuation is not retried; a limit resume
+   * goes out on a stale reading after 3 failed fresh reads; and a one-window runtime update
+   * can make another window look fresh for up to 60 s (the sweeper is the backstop).
    */
   const resumeCheck = Effect.fn("CreditSpendGuard.resumeCheck")(function* (
     instanceId: ProviderInstanceId,
@@ -202,13 +177,9 @@ export const makeCreditSpendGuard = Effect.fn("CreditSpendGuard.make")(function*
 export const layer = Layer.effect(CreditSpendGuard, makeCreditSpendGuard());
 
 /**
- * Stops the runs active on an instance when it becomes blocked, the way the user's own
- * Stop does: the cooperative rung (the server escalates if the turn does not settle) with
- * the queue held, so nothing queued behind it is sent into the limit. The reason is the
- * visible interrupt message.
- *
- * Edge-triggered: an instance is swept once per blocked spell. A sweep that could not
- * reach every run is retried on the next provider or settings change.
+ * Stops an instance's active runs when it becomes blocked, like the user's Stop (cooperative
+ * rung, queue held so nothing queued is sent into the limit). Edge-triggered once per blocked
+ * spell; a sweep that missed a run retries on the next provider or settings change.
  */
 export const runCreditSpendSweep = Effect.fn("CreditSpendGuard.sweep")(function* (input: {
   readonly allowSpendingCredits: boolean;

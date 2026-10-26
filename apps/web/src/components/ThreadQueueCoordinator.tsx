@@ -337,10 +337,9 @@ export function ThreadQueueCoordinator() {
       (started) => {
         sendingRef.current = false;
         // After a send, decide again at once: changes that arrived mid-send were skipped. A claim
-        // that never started (refused, unconfirmed, a server that cannot save it, or taken over)
-        // decides again only if a change mid-send already called for a claim of another entry:
-        // re-renders mid-send decide the same entry on an unchanged document, and deciding again
-        // would claim it again and spin.
+        // that never started decides again only if a mid-send change already called for another
+        // entry; otherwise mid-send re-renders decide the same entry on an unchanged document, and
+        // deciding again would claim it again and spin.
         const skipped = skippedClaimRef.current;
         if (started || (skipped !== null && skipped !== action.key)) {
           setTick((value) => value + 1);

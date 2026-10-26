@@ -47,39 +47,20 @@ export function formatProviderDisplayName(provider: string | null | undefined): 
 }
 
 /**
- * Driver kinds that never report context-window usage, so their popover shows
- * a reason instead of an empty space where the context block would be.
- *
- * Measured against `cursor-agent 2026.08.25-3e8eec8`: a raw ACP client saw no
- * `usage_update` notification and a `session/prompt` result with no `usage`
- * member, and the ACP schema defines both — the agent simply does not send
- * them. Grok and OpenCode reach the UI the same way: `context-window.updated`
- * is projected only from `thread.token-usage.updated`, which only the Claude
- * and Codex adapters emit.
- *
- * This is deliberately keyed on the PROVIDER, not on the snapshot being
- * absent. A started Claude thread can have zero context activities too, and
- * telling that user their provider does not report usage would be false.
+ * Fallback for servers that do not advertise `reportsContextUsage`: drivers measured to never
+ * send usage (cursor-agent 2026.08.25 sends neither ACP usage field; Grok and OpenCode never emit
+ * token usage). Keyed on the provider, not an absent snapshot: a new Claude thread has none yet.
  */
-/** Fallback only; the server now advertises this per instance. */
 const PROVIDERS_WITHOUT_CONTEXT_USAGE = new Set(["cursor", "grok", "opencode"]);
 
 /**
- * The one-line explanation for a missing context block, or `null` when the
- * provider does report usage (in which case an absent snapshot just means the
- * thread has not produced one yet, and the popover shows nothing).
- *
- * `provider` must be the driver the thread's SESSION ran on, not the model
- * picker's current selection — the picker moves without the thread following
- * it, and gating on it would blame Cursor for a thread that ran on Claude.
+ * Why the context block is missing, or `null` when the provider reports usage. `provider` is the
+ * driver the thread's SESSION ran on, not the picker's selection: the picker moves without the
+ * thread, and gating on it would blame Cursor for a thread that ran on Claude.
  */
 export function describeMissingContextUsage(
   provider: string | null | undefined,
-  /**
-   * The provider's own answer, from `ServerProvider.reportsContextUsage`.
-   * `undefined` means an older server that does not advertise the capability,
-   * in which case the driver list below is the fallback.
-   */
+  /** `ServerProvider.reportsContextUsage`; `undefined` (older server) falls back to the list. */
   reportsContextUsage?: boolean | undefined,
 ): string | null {
   if (!provider) return null;
@@ -105,8 +86,7 @@ function carriedCompactionFacts(
   };
 }
 
-/** Newest usage report across a thread's provider turns. Snapshots order turns
-    by provider thread, not time, so pick by timestamp. */
+/** Newest report by timestamp; snapshots order turns by provider thread. */
 export function latestProviderTurnTokenUsage(
   turns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "tokenUsage">>,
   projection?: Pick<ThreadStructure, "thread" | "contextTransfers"> | null,
@@ -282,19 +262,9 @@ export function formatContextWindowTokens(value: number | null): string {
 }
 
 /**
- * Where the auto-compaction marker sits on the context bar, and what to call it.
- *
- * Gated on the source being PRESENT and not `"auto"`, not merely `!== "auto"`.
- * Claude Code reports `"auto"` for the windows it refuses to compact, but
- * `autocompactSource` is absent from the SDK's declared response type and
- * survives only because the CLI's object carries an extra key — in live data
- * only 18 of 49 threshold-bearing snapshots have it. A `!== "auto"` test
- * therefore degrades OPEN, drawing "compacts at 967k" on a window that will
- * never compact. Absent means unknown, and unknown draws nothing.
- *
- * The threshold is an absolute count (the compaction window less a fixed
- * ~33,000-token reserve), not a fraction of anything, so it is labelled with
- * the token figure rather than a percentage that would not move proportionally.
+ * The auto-compaction marker on the context bar. Gated on a PRESENT non-`"auto"` source: the key is
+ * undeclared in the SDK and missing from most snapshots, so `!== "auto"` would degrade open. The
+ * threshold is an absolute count (window less a ~33k reserve), so it is labelled in tokens.
  */
 export function deriveCompactionMarker(
   usage: ContextWindowSnapshot,

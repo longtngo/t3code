@@ -123,7 +123,7 @@ it.layer(NodeServices.layer)("queue slot settings writes", (it) => {
       const settings = yield* ServerSettingsModule.ServerSettingsService;
       NodeFS.writeFileSync(settingsPath, BROKEN);
       yield* settings.getRawSettings;
-      // Upstream #18582: a save never replaces a settings file it cannot parse.
+      // A save never replaces a settings file it cannot parse.
       const error = yield* Effect.flip(
         settings.updateSettings({
           queueSlots: { slots: 2 },
@@ -147,7 +147,7 @@ it.layer(NodeServices.layer)("queue slot settings writes", (it) => {
         VALUES ('thread-cursor', 'ready', 'cursor', 'cursor', '2026-08-25T00:00:00.000Z')
       `;
       // History only enables a provider while the file still carries the retired
-      // `providers` map (upstream #17300), so the fixture is such a file.
+      // `providers` map, so the fixture is such a file.
       NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true, "providers": {}}\n');
       yield* settings.getRawSettings;
       // Loading rewrote the file once to drop the retired map; an import holds off until the

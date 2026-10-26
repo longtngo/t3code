@@ -28,13 +28,9 @@ export function commitSubagentBackendSet(
 }
 
 /**
- * A `get` commits only if it was issued at or after the generation currently committed.
- * `get` (with `refreshModels: true`) and `set` both spawn the same multi-second Cursor model
- * probe server-side, so a `get` issued before a `set` can resolve after it — applying that
- * response would silently revert the just-confirmed `set` back to the pre-flip backend. The
- * generation a `get` was issued at is fixed the moment its subscription starts, so it can
- * never retroactively catch up to a `set` that committed later; comparing against it is what
- * drops the stale response instead of applying it.
+ * A `get` commits only if issued at or after the committed generation: `get` and `set` share a
+ * multi-second Cursor probe, so a `get` issued before a `set` can resolve after it and would
+ * revert it. The issued generation is fixed at subscription start, so it never catches up.
  */
 export function commitSubagentBackendGet(
   current: SubagentBackendCommit,
@@ -46,13 +42,9 @@ export function commitSubagentBackendGet(
 }
 
 /**
- * Tracks, across renders, the generation a `get` query's *current in-flight fetch* was
- * issued at — not the generation its atom object was created at. `subagentBackendEnvironment
- * .get` is `Atom.swr`-wrapped over a connection-state-derived source, so it can re-resolve on
- * its own (e.g. after a WebSocket reconnect) with no change to the atom object itself; a stamp
- * keyed on atom identity captures once at mount and then never updates, so every later
- * legitimate re-resolution reads as "issued before" a `set` that came after it and gets
- * dropped forever. `wasPending` makes the stamp track actual fetch-start events instead.
+ * Tracks the generation a `get` query's current in-flight fetch was issued at, not when its
+ * atom was created: the `Atom.swr` query re-resolves (e.g. on reconnect) without a new atom, so
+ * an identity-keyed stamp would drop every later re-resolution. `wasPending` tracks fetch starts.
  */
 export interface SubagentBackendQueryTracker {
   readonly wasPending: boolean;
@@ -65,13 +57,9 @@ export const INITIAL_SUBAGENT_BACKEND_QUERY_TRACKER: SubagentBackendQueryTracker
 };
 
 /**
- * Call once per render with the query's current `isPending` flag and the commit generation in
- * effect at that render. A rising edge — not pending, now pending — is a genuinely new fetch
- * starting, whether that's the first mount or a background `Atom.swr` revalidation with no
- * change to the atom object; it (re)stamps the generation this fetch's eventual resolution
- * will be judged against. Anything else carries the existing stamp forward unchanged, so a
- * resolution that lands after the fetch already finished (isPending back to false) still
- * reads the generation captured when that fetch actually started.
+ * Call once per render with `isPending` and the current commit generation. A rising edge is a
+ * new fetch (first mount or a background `Atom.swr` revalidation) and restamps; anything else
+ * carries the stamp forward, so a late resolution reads the generation its fetch started at.
  */
 export function observeSubagentBackendQuery(
   tracker: SubagentBackendQueryTracker,

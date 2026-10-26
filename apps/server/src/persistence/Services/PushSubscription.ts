@@ -1,10 +1,6 @@
 /**
- * PushSubscriptionRepository - Repository for browser Web Push subscriptions.
- *
- * Owns the durable set of `PushManager` subscriptions the server sends VAPID-signed
- * Web Push messages to, so background thread notifications reach a device with the
- * PWA tab frozen (screen off). See migration 037 for the rationale. Rows are keyed by
- * `endpoint` (idempotent re-register) and pruned when a send returns 404/410.
+ * PushSubscriptionRepository - Web Push subscriptions, keyed by `endpoint` and pruned on a
+ * 404/410 send. See migration 037 for the rationale.
  *
  * @module PushSubscriptionRepository
  */

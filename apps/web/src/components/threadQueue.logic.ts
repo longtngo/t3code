@@ -103,12 +103,10 @@ export function nextThreadQueueAction(input: {
     }
     const sentKey = threadQueueEntryKey(inFlight.entry);
     const sentThread = input.threads.find((thread) => shellKey(thread) === sentKey);
-    // The message showing up is not enough: until the thread reads busy, failed, or on
-    // a new run, the busy count has not caught up and a second send would overshoot.
-    // A failure only counts once the runtime changed: a thread whose previous run failed
-    // still reads failed when the re-sent message lands, before the server starts it.
-    // (`priorTurnId` / `priorSessionUpdatedAt` keep their V1 names because the claim is
-    // persisted; they now hold the latest run id and the runtime's `updatedAt`.)
+    // The message showing up is not enough: until the thread reads busy, failed, or on a new run,
+    // the busy count lags and a second send would overshoot. A failure counts only once the runtime
+    // changed, since a previously failed thread still reads failed when the re-sent message lands.
+    // `priorTurnId`/`priorSessionUpdatedAt` are persisted V1 names for the run id and `updatedAt`.
     const landed =
       sentThread !== undefined &&
       (sentThread.latestUserMessageAt ?? null) !== inFlight.priorUserMessageAt &&

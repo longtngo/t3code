@@ -1,21 +1,17 @@
 import { Check, Copy } from "lucide";
 import { PlayIcon, WrapTextIcon } from "lucide-react";
 import { toHtml } from "hast-util-to-html";
-import React, {
-  Component,
-  Suspense,
-  use,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import React, { Component, Suspense, use, useEffect, useState, type ReactNode } from "react";
 
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { getClientSettings } from "../../hooks/useSettings";
 import { useTheme } from "../../hooks/useTheme";
 import { languageForPath } from "../../lib/codeFileTypes";
 import { resolveDiffThemeName, type DiffThemeName } from "../../lib/diffRendering";
-import { createIncrementalHighlightedDocument } from "../../lib/incrementalHighlighting";
+import {
+  createIncrementalHighlightedDocument,
+  highlightCodeToHast,
+} from "../../lib/incrementalHighlighting";
 import { LRUCache } from "../../lib/lruCache";
 import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
 import { cn } from "../../lib/utils";
@@ -157,9 +153,19 @@ export function MarkdownCodeBlock({
   diagram?: boolean;
   children: ReactNode;
 }) {
-  const [copied, setCopied] = useState(false);
+  const { copyToClipboard, isCopied: copied } = useCopyToClipboard({
+    timeout: 1200,
+    onError: (cause) =>
+      reportMarkdownActionFailure(
+        {
+          operation: "copy-code-block",
+          language,
+          ...(fenceTitle ? { fenceTitle } : {}),
+        },
+        cause,
+      ),
+  });
   const [wrapped, setWrapped] = useState(() => getClientSettings().wordWrap);
-  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapLabel = wrapped ? "Disable line wrap" : "Wrap lines";
   const copyLabel = copied ? "Copied" : "Copy code";
   const command = code.trim();
@@ -174,43 +180,7 @@ export function MarkdownCodeBlock({
     // make the rendered command differ from what the terminal would receive.
     !/[\p{Cc}\p{Cf}]/u.test(code.slice(0, -1));
 
-  const handleCopy = () => {
-    if (typeof navigator === "undefined" || navigator.clipboard == null) {
-      return;
-    }
-    void navigator.clipboard
-      .writeText(code)
-      .then(() => {
-        if (copiedTimerRef.current != null) {
-          clearTimeout(copiedTimerRef.current);
-        }
-        setCopied(true);
-        copiedTimerRef.current = setTimeout(() => {
-          setCopied(false);
-          copiedTimerRef.current = null;
-        }, 1200);
-      })
-      .catch((cause) => {
-        reportMarkdownActionFailure(
-          {
-            operation: "copy-code-block",
-            language,
-            ...(fenceTitle ? { fenceTitle } : {}),
-          },
-          cause,
-        );
-      });
-  };
-
-  useEffect(
-    () => () => {
-      if (copiedTimerRef.current != null) {
-        clearTimeout(copiedTimerRef.current);
-        copiedTimerRef.current = null;
-      }
-    },
-    [],
-  );
+  const handleCopy = () => copyToClipboard(code);
 
   const copyButton = (
     <Tooltip>
@@ -363,33 +333,35 @@ function UncachedShikiCodeBlock({
   const incrementalHighlight = preserveLines
     ? createIncrementalHighlightedDocument(highlighter, language, themeName)
     : null;
+  useEffect(() => () => incrementalHighlight?.dispose(), [incrementalHighlight]);
   const highlighted = (() => {
-    try {
-      if (incrementalHighlight) return incrementalHighlight(code);
-      return preserveLines
-        ? highlighter.codeToHast(code, { lang: language, theme: themeName })
-        : highlighter.codeToHtml(code, { lang: language, theme: themeName });
-    } catch (error) {
-      console.warn(
-        `Code highlighting failed for language "${language}", falling back to plain text.`,
-        error instanceof Error ? error.message : error,
-      );
-      return preserveLines
-        ? highlighter.codeToHast(code, { lang: "text", theme: themeName })
-        : highlighter.codeToHtml(code, { lang: "text", theme: themeName });
-    }
-  })();
-
-  useEffect(() => {
+    const result = (() => {
+      try {
+        if (incrementalHighlight) return incrementalHighlight(code);
+        return preserveLines
+          ? highlightCodeToHast(highlighter, code, language, themeName)
+          : highlighter.codeToHtml(code, { lang: language, theme: themeName });
+      } catch (error) {
+        console.warn(
+          `Code highlighting failed for language "${language}", falling back to plain text.`,
+          error instanceof Error ? error.message : error,
+        );
+        return preserveLines
+          ? highlightCodeToHast(highlighter, code, "text", themeName)
+          : highlighter.codeToHtml(code, { lang: "text", theme: themeName });
+      }
+    })();
+    // A finished block is cached for the next mount; a streaming one is still changing.
     if (!isStreaming) {
-      const highlightedHtml = typeof highlighted === "string" ? highlighted : toHtml(highlighted);
+      const highlightedHtml = typeof result === "string" ? result : toHtml(result);
       highlightedCodeCache.set(
         cacheKey,
         highlightedHtml,
         estimateHighlightedSize(highlightedHtml, code),
       );
     }
-  }, [cacheKey, code, highlighted, isStreaming]);
+    return result;
+  })();
 
   return typeof highlighted === "string" ? (
     <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: highlighted }} />
@@ -401,18 +373,8 @@ function UncachedShikiCodeBlock({
 }
 
 /**
- * Syntax-highlighted read-only view of a code file, for the file viewer.
- *
- * Lives here because it reuses this module's Shiki infrastructure — the shared
- * highlighter promise, the highlighted-HTML LRU, and the streaming-aware block —
- * rather than standing up a second highlighting path. The language comes from
- * `@pierre/diffs` via `languageForPath`, the same resolver diffs use, which
- * falls back to "text" for anything unrecognised.
- */
-/**
- * Shiki highlighting runs in a Suspense boundary and can throw (an unknown
- * language, a highlighter that failed to load). Without this, one bad code
- * block blanks the whole message; with it, that block falls back to plain text.
+ * Highlighting can throw inside its Suspense boundary (an unknown language, a highlighter that
+ * failed to load); this keeps one bad block from blanking the whole message.
  */
 class CodeHighlightErrorBoundary extends Component<
   { fallback: ReactNode; children: ReactNode },
@@ -435,6 +397,7 @@ class CodeHighlightErrorBoundary extends Component<
   }
 }
 
+/** Read-only highlighted code file for the file viewer, on this module's shared highlighter. */
 export function HighlightedCodeView({ code, path }: { code: string; path: string }) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);

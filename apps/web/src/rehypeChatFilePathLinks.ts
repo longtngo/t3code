@@ -1,19 +1,7 @@
 /**
- * Rehype plugin that turns plain-text file paths in a chat message into anchors.
- *
- * The anchors carry the resolved *absolute* path as their href, which is what the
- * file viewer needs. They are ordinary `<a>` elements, so `ChatMarkdown`'s
- * existing anchor renderer picks them up and renders the same file chip it
- * already renders for `[label](path)` links — no second rendering path.
- *
- * Deliberately skipped:
- *  - `pre` subtrees, so fenced code keeps its syntax highlighting untouched
- *  - existing `a` subtrees, so a real markdown link is never nested inside one
- *
- * Inline `code` is NOT linkified here — ChatMarkdown's `code` renderer owns that
- * case and swaps a path-only span for the same chip.
- *
- * @module rehypeChatFilePathLinks
+ * Turns plain-text file paths into ordinary `<a>` elements with the absolute path as href, so
+ * `ChatMarkdown`'s anchor renderer draws the same chip as for `[label](path)`. Skips `pre`
+ * (keeps highlighting) and `a` (no nested links); inline `code` is owned by ChatMarkdown's renderer.
  */
 import { findChatFilePathMentions, type ChatFilePathResolution } from "./chatFilePathLinks";
 
@@ -51,19 +39,9 @@ function anchorNode(href: string, label: string): HastNode {
 }
 
 /**
- * A Codex file-citation directive that survived into a text node.
- *
- * A WELL-FORMED citation is rewritten to a markdown link before this plugin runs,
- * so text still carrying the literal directive is one of the cases the renderer
- * deliberately leaves alone: unfinished mid-stream, malformed, escaped, or a
- * similarly-named directive. Its `path="…"` argument must not be linkified —
- * chipping it makes a half-arrived citation flash a link that then re-renders,
- * and turns text the renderer promised to keep literal into a control.
- *
- * Predates the prose-gate widening: any path with an allow-listed extension
- * inside such a directive already chipped. The widening only made it reachable
- * for extensions the allow-list omits, which is how the existing tests — written
- * against `.xlsx` — passed while the defect was live.
+ * Well-formed Codex citations become links before this plugin runs, so a surviving literal
+ * directive is unfinished, malformed, escaped, or lookalike. Its `path="…"` must not be linkified:
+ * a half-arrived citation would flash a link, and literal text would become a control.
  */
 const CODEX_FILE_CITATION_DIRECTIVE = /:codex-file-citation/;
 

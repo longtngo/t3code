@@ -133,7 +133,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const resetCreditCoordinator = yield* ResetCreditCoordinator.ResetCreditCoordinator;
     const catalogService = yield* ModelCatalog.ModelCatalog;
-    const host = yield* ProviderHost.ProviderHost;
     const modelCatalog = catalogService
       .current(DRIVER_KIND)
       .pipe(Effect.map(resolveClaudeModelCatalog));
@@ -158,11 +157,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       ),
     );
     const continuationGroupKey = yield* makeClaudeContinuationGroupKey(effectiveConfig);
-    // FORK: the login lives where the spawned CLI reads it (registry invariant 40).
-    // `configDirPath` is CLAUDE_CONFIG_DIR, and the CLI then keeps its account
-    // record beside it; blank scrubs any inherited one, so the CLI falls back to
-    // `<HOME>/.claude` and `<HOME>/.claude.json`, with HOME from `homePath`.
-    // Upstream's `resolveClaudeHomePath(config, env)` is the config dir; here it is HOME.
+    // FORK (registry invariant 40): `configDirPath` is CLAUDE_CONFIG_DIR, with the
+    // account record beside it; blank scrubs any inherited one so the CLI falls back
+    // to `<HOME>/.claude` and `<HOME>/.claude.json`, HOME from `homePath`. Upstream's
+    // `resolveClaudeHomePath` returns the config dir; here it returns HOME.
     const claudeHome = yield* resolveClaudeHomePath(effectiveConfig);
     const explicitConfigDir = yield* resolveClaudeConfigDirPath(effectiveConfig);
     const configDir = explicitConfigDir || path.join(claudeHome, ".claude");

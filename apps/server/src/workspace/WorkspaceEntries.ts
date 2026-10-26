@@ -116,13 +116,9 @@ export class WorkspaceEntries extends Context.Service<
 >()("t3/workspace/WorkspaceEntries") {}
 
 /**
- * Classify a directory entry, resolving symlinks.
- *
- * `dirent.isDirectory()` is false for a symlink to a directory — on macOS that
- * includes `/etc`, `/tmp` and `/var` — so trusting it renders those as files
- * nobody can open. Only symlinks pay for the extra `stat`; a link that dangles
- * or points at a fifo, socket or device resolves to `other`, which the viewer
- * refuses to open.
+ * Classify a directory entry, resolving symlinks: `dirent.isDirectory()` is false for a symlink to
+ * a directory (macOS `/etc`, `/tmp`, `/var`). Only symlinks pay for the `stat`; a dangling link or
+ * one to a fifo, socket or device resolves to `other`, which the viewer refuses.
  */
 const direntKind = Effect.fn("WorkspaceEntries.direntKind")(function* (
   dirent: NodeFS.Dirent,
@@ -174,16 +170,12 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
   );
 });
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
-  // A full listing readdirs off-thread, but the libuv pool is four threads by
-  // default and RPC concurrency is unbounded: measured on a 19,477-entry
-  // directory, four concurrent listings take an unrelated file read from 0.05ms
-  // to 23ms and eight take it to 129ms, alongside WebSocket frame compression
-  // for every connected client, which shares the same pool. Two permits leaves
-  // headroom on a four-thread pool; a real directory listing costs single-digit
-  // to low-tens of milliseconds, so nothing queues in practice.
+  // Listings readdir on the four-thread libuv pool, shared with WebSocket compression, and RPC
+  // concurrency is unbounded: on a 19,477-entry directory, eight concurrent listings took an
+  // unrelated read from 0.05ms to 129ms. Two permits leave headroom; real listings rarely queue.
   const listingSemaphore = yield* Semaphore.make(2);
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceSearchIndexes = yield* WorkspaceSearchIndex.WorkspaceSearchIndexMap;
@@ -295,12 +287,9 @@ export const make = Effect.gen(function* () {
     }
 
     const totalCount = matched.length;
-    // Sorted before the cap, not after: slicing raw `readdir` order and sorting
-    // the survivors yields a list that looks alphabetical and is missing names
-    // from the middle of it, under a count that says only the tail was dropped.
-    // Truncating a sorted list drops a contiguous tail, which is what "showing
-    // N of M" claims. Directories are floated to the top afterwards, on the
-    // entries that survived, because that needs a `kind` this stage lacks.
+    // Sort before the cap: slicing raw `readdir` order drops names from the middle while "showing N
+    // of M" claims only the tail went. Directories float to the top afterwards, on the survivors,
+    // because that needs a `kind` this stage lacks.
     const kept = matched
       .toSorted((left, right) => left.name.localeCompare(right.name))
       .slice(0, FILESYSTEM_BROWSE_MAX_ENTRIES);
@@ -414,8 +403,7 @@ export const make = Effect.gen(function* () {
           },
           catch: toError,
         });
-        // Use stdin so large directories cannot exceed the command-line argument limit.
-        // Ignore classification is optional in non-git workspaces or when git is unavailable.
+        // stdin avoids argument limits; ignore classification is optional without git/repositories.
         const checkIgnore = (paths: ReadonlyArray<string>) =>
           vcsProcess
             .run({
@@ -429,13 +417,8 @@ export const make = Effect.gen(function* () {
               maxOutputBytes: 16 * 1024 * 1024,
             })
             .pipe(Effect.orElseSucceed(() => undefined));
-        // Git consults the index for every path it classifies, which costs hundreds of
-        // milliseconds for a `node_modules`-sized folder. Asking about the folder itself answers
-        // for every child: `check-ignore` exits 0 only when the folder is ignored and nothing
-        // under it is tracked, and an ignored folder hides all of its children. Git reads paths as
-        // pathspecs, so a folder whose path has magic (`:foo`) or glob (`[id]`) characters, or
-        // one reached through a symlink, can get a different answer per child and still asks git
-        // about each.
+        // Check ignored folders once to avoid child index lookups; exit 0 guarantees no tracked descendants.
+        // Symlinks and pathspec magic still need per-child checks.
         if (
           entries.length > IGNORE_CHECK_CHUNK_SIZE &&
           target.relativePath !== "" &&

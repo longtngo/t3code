@@ -1,12 +1,7 @@
 /**
- * Pure derivation for the Agents panel's "background processes" (terminal
- * sessions) section, plus the shared status ordering and 6h auto-clear filter.
- *
- * Input comes from data the web client already holds (`useKnownTerminalSessions`),
- * so derivation is client-side with no extra RPC. Agents themselves are no longer
- * derived here: they come from the server-backed subagent runtime model.
- *
- * @module sidebarSections
+ * Pure derivation of the Agents panel's background-process (terminal session) section, plus the
+ * shared status ordering and 6h auto-clear filter. Client-side from `useKnownTerminalSessions`, no
+ * extra RPC; agents themselves come from the server-backed subagent runtime model.
  */
 import { terminalOutputText } from "@t3tools/client-runtime/state/terminal";
 import type { KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";

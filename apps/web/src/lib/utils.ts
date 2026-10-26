@@ -5,9 +5,14 @@ import * as Hex from "effect/encoding/Hex";
 import { extendTailwindMerge } from "tailwind-merge";
 import { DraftId } from "../composerDraftStore";
 
-// The theme's extra font sizes (index.css). Unregistered, tailwind-merge reads
-// text-2xs as a colour and drops it next to text-muted-foreground.
-const twMerge = extendTailwindMerge({ extend: { theme: { text: ["2xs", "3xs", "4xs", "5xs"] } } });
+// Register extra font sizes and background images so tailwind-merge does not
+// treat text-2xs or bg-composer-seam-below as colors.
+const twMerge = extendTailwindMerge({
+  extend: {
+    theme: { text: ["2xs", "3xs", "4xs", "5xs"] },
+    classGroups: { "bg-image": [{ bg: ["composer-seam-below", "composer-seam-above"] }] },
+  },
+});
 
 export function cn(...inputs: CxOptions) {
   return twMerge(cx(inputs));
@@ -47,8 +52,8 @@ export function randomUUID(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-// FORK-ONLY: upstream #9150 deleted this as unused there. ChatView still mints a
-// command id for a queued follow-up turn.
+// FORK-ONLY: upstream deleted this as unused there. ChatView still mints a command id for a
+// queued follow-up turn.
 export const newCommandId = (): CommandId => CommandId.make(randomUUID());
 
 export const newProjectId = (): ProjectId => ProjectId.make(randomUUID());

@@ -25,7 +25,6 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Cookies from "effect/http/Cookies";
 import * as HttpEffect from "effect/http/HttpEffect";
@@ -167,7 +166,7 @@ export const authenticateMediaRequest =
   Effect.fnUntraced(function* (requiredScope: AuthEnvironmentScope) {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
+    const session = yield* serverAuth.authenticateWebSocketUpgrade(request, "media").pipe(
       Effect.catch((error) =>
         Effect.gen(function* () {
           if (EnvironmentAuth.isServerAuthCredentialError(error)) {
@@ -201,14 +200,9 @@ export const failEnvironmentInternal =
   });
 
 /**
- * Upstream #8085's helper, with the fork's `secure` rule folded in.
- *
- * `secure` is set on HTTPS and OMITTED on plaintext: setting it unconditionally
- * makes the browser drop the cookie, so a local HTTP session could never log in.
- * Upstream's helper omits the flag entirely, which would ship session cookies
- * without `secure` over the fork's HTTPS (Tailscale) origin. Folding the rule in
- * here rather than at the call sites also covers BOTH session-cookie paths — the
- * fork previously guarded only one of them.
+ * `secure` is set on HTTPS and OMITTED on plaintext: set unconditionally, the browser drops
+ * the cookie and local HTTP can never log in; omitted always, cookies ship without it over
+ * HTTPS (Tailscale). Kept here so both session-cookie paths get the rule.
  */
 const appendSessionCookie = Effect.fn("environment.auth.appendSessionCookie")(function* (
   cookieName: string,
@@ -435,6 +429,20 @@ export const layer = HttpApiBuilder.group(
             const session = yield* EnvironmentAuthenticatedPrincipal;
             yield* appendCredentialResponseHeaders;
             return yield* serverAuth.issueWebSocketTicket(session);
+          },
+          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+            failEnvironmentInternal("websocket_ticket_issuance_failed", error),
+          ),
+        ),
+      )
+      .handle(
+        "webSocketTicketFor",
+        Effect.fn("environment.auth.webSocketTicketFor")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            const session = yield* EnvironmentAuthenticatedPrincipal;
+            yield* appendCredentialResponseHeaders;
+            return yield* serverAuth.issueWebSocketTicket(session, { use: args.params.use });
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("websocket_ticket_issuance_failed", error),

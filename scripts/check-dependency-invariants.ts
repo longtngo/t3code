@@ -1,23 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Guards the behavior we depend on inside third-party code.
- *
- * Two bugs here are fatal in production and invisible in development: a stack
- * leak that exhausts the heap after hours, and a missing socket listener that
- * ends the process outright. Both live in `effect` packages that are bumped
- * wholesale, and a bump silently drops any hunk upstream does not carry - the
- * install still succeeds, the tests still pass, and the server dies days later.
- *
- * So these are written as claims about the *installed* dependency, not about
- * our patch files: whether the behavior arrives via our patch or because
- * upstream fixed it makes no difference. A failure here means read the entry,
- * decide which it is, and either re-derive the patch or drop it.
- *
- * The beta.103 bump exercised both endings at once. Upstream fixed the leak by
- * refactoring, so that patch is gone and only the measurement remains; the
- * socket listener merged upstream 95 minutes too late for the release, so its
- * patch stays until the next one.
+ * Guards behavior inside `effect` we depend on (a heap-exhausting stack leak, a missing socket
+ * listener that kills the process). Bumps silently drop patch hunks with green installs and tests,
+ * so these check the INSTALLED dependency: on failure decide whether upstream fixed it or the
+ * patch must be re-derived.
  */
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -47,13 +34,8 @@ export interface DependencyInvariant {
 }
 
 /**
- * An invariant checked by running the dependency instead of reading it.
- *
- * Source markers are a proxy for a behavior, and a proxy can drift from the
- * thing it stands for: beta.103 fixed the aggregate leak by moving the
- * recursion out of the wrapping pipe, which left the marker text intact and
- * the marker check wrong in both directions. Where the behavior can be
- * measured directly, measure it.
+ * Checked by running the dependency: a source marker can drift from the behavior (beta.103 fixed
+ * the leak while leaving the marker text intact), so measure directly where possible.
  */
 export interface BehaviorInvariant {
   readonly id: string;

@@ -1,14 +1,7 @@
 /**
- * In-memory view state for the task sidebar's background/agent sections:
- * which completed items the user manually removed, which sections are collapsed,
- * and which item is selected for the detail panel.
- *
- * Deliberately NOT persisted: auto-clear (6h) is durable on its own because it
- * is a pure function of an item's completedAt, so the only thing persistence
- * would add is keeping a manual removal across reloads — an acceptable v1 gap
- * that avoids a second persisted store. Selection is session/UI state.
- *
- * @module sidebarViewStore
+ * Task sidebar view state: manual removals, collapsed sections, selection. Deliberately NOT
+ * persisted: the 6h auto-clear is a pure function of `completedAt`, so persistence would only keep
+ * manual removals across reloads, not worth a second persisted store.
  */
 import { create } from "zustand";
 

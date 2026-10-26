@@ -11,12 +11,7 @@ import * as Result from "effect/Result";
 
 const SESSION_COOKIE_NAME = "t3_session";
 
-/**
- * Cookies are scoped by host but *not* by port, so any two servers that can be
- * live on one hostname at once need separate names — otherwise the second
- * clobbers the first's session and both sides see "Invalid session token
- * signature" until someone clears cookies by hand.
- */
+/** Cookies span ports; use separate names for servers sharing a hostname. */
 export function resolveSessionCookieName(input: {
   readonly mode: "web" | "desktop";
   readonly port: number;
@@ -158,22 +153,9 @@ function inferOs(userAgent: string | undefined): string | undefined {
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "0000:0000:0000:0000:0000:0000:0000:0001"]);
 
 /**
- * The address to record for a client, honouring a co-located reverse proxy.
- *
- * The socket's peer is the proxy when one is in front of us, so every remote device
- * records as loopback and Settings - Connections shows them all as local. That is the
- * one screen a user checks to spot a device they do not recognise, so it has to say
- * where the request came from.
- *
- * `x-forwarded-for` supplies that, but only from a loopback peer. Unlike
- * `x-forwarded-proto` (see `requestScheme.ts`), a spoof here costs something in the
- * direction an attacker wants: the value is shown as the connecting device, so an
- * unchecked header lets a remote client plant whatever address it likes on the audit
- * screen. A remote peer's socket address is therefore authoritative and its header is
- * ignored outright. A loopback peer is either the proxy or something already running on
- * this machine, which has more direct means than forging a label.
- *
- * The left-most entry is the original client; the rest are intermediate proxies.
+ * The client address to record, honouring a co-located proxy. `x-forwarded-for` is trusted
+ * only from a loopback peer: the value is shown on the Connections audit screen, so a remote
+ * client must not be able to plant an address. Left-most entry is the original client.
  */
 export function resolveClientIpAddress(input: {
   readonly socketAddress: string | undefined;

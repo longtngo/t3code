@@ -45,22 +45,17 @@ import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
 /**
- * Untracked files whose on-disk size is >= this are excluded from checkpoint capture (and
- * symmetrically from restore's `git clean`), so `git add -A` cannot spend the whole process
- * timeout hashing+deflating heavy regenerable artifacts (e.g. `.npy`/`.npz` matrices, model
- * weights, caches). 10 MiB sits well above normal source/config/small assets and below data
- * artifacts. The bound is untracked-only: tracked files are always captured.
+ * Untracked files at or above this size are excluded from checkpoint capture and from restore's
+ * `git clean`, so `git add -A` cannot spend the whole timeout hashing model weights or caches.
+ * Tracked files are always captured.
  */
 export const MAX_UNTRACKED_CHECKPOINT_FILE_BYTES = 10 * 1024 * 1024;
 
 /**
- * Retry policy for the whole `captureCheckpoint` operation. Capture uses a throwaway temp
- * index and writes only content-addressed objects + a last-write-wins checkpoint ref, so it is
- * idempotent and safe to retry. A transient git failure (timeout / spawn starvation) is almost
- * always a passing host-overload episode (measured: 608 captures succeed per 1 timeout), so a
- * bounded jittered-backoff retry converts it into a delayed success instead of a lost checkpoint.
- * Whole-operation (not per-command) retry bounds latency on the serial checkpoint worker to
- * attempts × timeout and re-seeds a clean temp index each attempt. Read at module load.
+ * Retry policy for the whole `captureCheckpoint`, which is idempotent (temp index,
+ * content-addressed objects, last-write-wins ref). Transient git failures are passing host overload
+ * (608 successes per timeout); whole-operation retry bounds latency to attempts x timeout. Read at
+ * module load.
  */
 const captureRetryPolicy = makeTransientGitRetryPolicy(resolveGitRetryAttempts());
 
@@ -70,11 +65,9 @@ const captureRetryPolicy = makeTransientGitRetryPolicy(resolveGitRetryAttempts()
 const GITIGNORE_META = /[\\*?[\]]/g;
 
 /**
- * Build a repo-root-anchored gitignore pattern matching exactly `relPath`, for `git clean -e`.
- * Restore uses `-e` (ignore machinery) rather than a `:(exclude)` pathspec because ignore-aware
- * `clean` descends into an otherwise-untracked directory to preserve the excluded file while
- * still cleaning its small siblings — a file-level pathspec exclude cannot (clean removes the
- * whole untracked dir as a unit).
+ * A repo-root-anchored gitignore pattern matching exactly `relPath`, for `git clean -e`. A
+ * `:(exclude)` pathspec cannot do this: clean removes a fully untracked directory as a unit,
+ * while `-e` descends into it to keep the excluded file and still clean its siblings.
  */
 export function checkpointCleanExcludePattern(relPath: string): string {
   const escaped = relPath.replace(GITIGNORE_META, (ch) => `\\${ch}`);
@@ -94,11 +87,7 @@ export interface ExecuteGitInput {
   readonly forceKillAfterMs?: number;
   readonly maxOutputBytes?: number;
   readonly appendTruncationMarker?: boolean;
-  /**
-   * With `appendTruncationMarker`, keep invoking the line callbacks after the
-   * buffered copy is full. For long-running commands whose output is only
-   * consumed through `progress`.
-   */
+  /** With appendTruncationMarker, line callbacks continue beyond the buffer cap for progress-only consumers. */
   readonly keepLineCallbacksAfterTruncation?: boolean;
   readonly progress?: ExecuteGitProgress;
 }
@@ -161,10 +150,7 @@ export interface ExecuteGitProgress {
 }
 
 export interface CreateWorktreeProgress {
-  /**
-   * Git refuses an existing path, so a path reported here belongs to this call and is safe to
-   * remove on cancel.
-   */
+  /** Git refuses existing paths; claimed paths belong to this call and can be removed on cancel. */
   readonly onWorktreeClaimed?: (path: string) => Effect.Effect<void, never>;
   readonly onCheckoutProgress?: (input: {
     percent: number;
@@ -184,10 +170,7 @@ export interface CreateWorktreeProgress {
 
 export interface CreateWorktreeOptions {
   readonly progress?: CreateWorktreeProgress;
-  /**
-   * Null (or omitted, for callers without settings access) defers to the
-   * checkout's own t3.json.
-   */
+  /** Null or omitted defers to the checkout's t3.json. */
   readonly submodules?: WorktreeSubmodules | null;
   readonly worktreesDirectory?: string;
 }
@@ -241,15 +224,10 @@ export interface GitRenameBranchResult {
   branch: string;
 }
 
-export interface GitFetchPullRequestBranchInput {
+export interface GitFetchRefInput {
   cwd: string;
-  prNumber: number;
-  branch: string;
-}
-
-export interface GitFetchPullRequestHeadCommitInput {
-  cwd: string;
-  prNumber: number;
+  /** A ref on the primary remote, such as a host's change request head ref. */
+  ref: string;
 }
 
 export interface GitResolveCommitInput {
@@ -264,10 +242,7 @@ export interface GitResolveCommitResult {
 export interface GitRefreshCheckedOutBranchInput {
   cwd: string;
   targetCommit: string;
-  /**
-   * Commit the checkout is allowed to be hard-reset away from: the upstream commit read before
-   * the fetch. HEAD sitting there means the checkout holds no work of its own.
-   */
+  /** Pre-fetch upstream commit; resetting away is safe only if HEAD stayed here. */
   resetWhenHeadCommit?: string | null | undefined;
 }
 
@@ -419,6 +394,14 @@ export class GitVcsDriver extends Context.Service<
       cwd: string,
       commit: string,
     ) => Effect.Effect<ReadonlyArray<string>, GitCommandError>;
+    /**
+     * The branch, named as on the host, that T3 recorded `branch` was cut from. Null when none
+     * was recorded.
+     */
+    readonly readBranchBase: (
+      cwd: string,
+      branch: string,
+    ) => Effect.Effect<string | null, GitCommandError>;
     readonly resolveBranchName: (
       cwd: string,
       refName: string,
@@ -431,11 +414,12 @@ export class GitVcsDriver extends Context.Service<
       input: VcsCreateWorktreeInput,
       options?: CreateWorktreeOptions,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
-    readonly fetchPullRequestBranch: (
-      input: GitFetchPullRequestBranchInput,
+    /** Force-updates local `branch` to the primary remote's `ref`. */
+    readonly fetchRefIntoBranch: (
+      input: GitFetchRefInput & { readonly branch: string },
     ) => Effect.Effect<void, GitCommandError>;
-    readonly fetchPullRequestHeadCommit: (
-      input: GitFetchPullRequestHeadCommitInput,
+    readonly fetchRefCommit: (
+      input: GitFetchRefInput,
     ) => Effect.Effect<GitResolveCommitResult, GitCommandError>;
     readonly resolveCommit: (
       input: GitResolveCommitInput,
@@ -581,56 +565,50 @@ function parseGitRemoteVerboseOutput(
 }
 
 /**
- * The whole second to stamp on a copied git index, given its source's mtime in
- * epoch milliseconds.
- *
- * Never later than the source's own second, and the `- 1` is what guarantees that.
- * `File.Info.mtime` is a `Date`, which Node builds from `st_mtime_ns` by rounding to
- * the nearest millisecond, so a nanosecond tail at or above 999_499_878 rounds UP and
- * a plain floor returns the NEXT second. Stamping a copy later than its source makes
- * fewer entries look racy to `git add`, which is the one direction that reopens the
- * stale-capture defect this exists to prevent -- measured at 1 capture in 2,000.
- *
- * Landing one second EARLY (at a tail of 0) is harmless: more entries look racy, so
- * git re-reads more of them. Slower, never wrong.
+ * The whole second to stamp on a copied git index, given its source mtime in ms. The `- 1`
+ * keeps it at or below the source second: Node rounds `st_mtime_ns` to ms, so a plain floor can
+ * land on the NEXT second and make fewer entries look racy to `git add` (stale capture, 1 in
+ * 2,000). One second early is harmless: git re-reads more entries.
  */
 export function copiedIndexStampSeconds(mtimeMillis: number): number {
   return Math.floor((mtimeMillis - 1) / 1_000);
 }
 
-const gitCommand = (
-  process: VcsProcess.VcsProcess["Service"],
-  operation: string,
-  cwd: string,
-  args: ReadonlyArray<string>,
-  options?: {
-    readonly stdin?: string;
-    readonly env?: NodeJS.ProcessEnv;
-    readonly allowNonZeroExit?: boolean;
-    readonly timeoutMs?: number;
-    readonly maxOutputBytes?: number;
-    readonly outputMode?: VcsProcess.VcsProcessInput["outputMode"];
-    readonly appendTruncationMarker?: boolean;
-  },
-) =>
-  process.run({
-    operation,
-    command: "git",
-    args: ["-C", cwd, ...args],
-    cwd,
-    spawnCwd: globalThis.process.cwd(),
-    ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
-    ...(options?.env !== undefined ? { env: options.env } : {}),
-    ...(options?.allowNonZeroExit !== undefined
-      ? { allowNonZeroExit: options.allowNonZeroExit }
-      : {}),
-    ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-    ...(options?.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
-    ...(options?.outputMode !== undefined ? { outputMode: options.outputMode } : {}),
-    ...(options?.appendTruncationMarker !== undefined
-      ? { appendTruncationMarker: options.appendTruncationMarker }
-      : {}),
-  });
+const gitCommand = Effect.fn("GitVcsDriver.gitCommand")(
+  (
+    process: VcsProcess.VcsProcess["Service"],
+    operation: string,
+    cwd: string,
+    args: ReadonlyArray<string>,
+    options?: {
+      readonly stdin?: string;
+      readonly env?: NodeJS.ProcessEnv;
+      readonly allowNonZeroExit?: boolean;
+      readonly timeoutMs?: number;
+      readonly maxOutputBytes?: number;
+      readonly outputMode?: VcsProcess.VcsProcessInput["outputMode"];
+      readonly appendTruncationMarker?: boolean;
+    },
+  ) =>
+    process.run({
+      operation,
+      command: "git",
+      args: ["-C", cwd, ...args],
+      cwd,
+      spawnCwd: globalThis.process.cwd(),
+      ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
+      ...(options?.env !== undefined ? { env: options.env } : {}),
+      ...(options?.allowNonZeroExit !== undefined
+        ? { allowNonZeroExit: options.allowNonZeroExit }
+        : {}),
+      ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options?.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
+      ...(options?.outputMode !== undefined ? { outputMode: options.outputMode } : {}),
+      ...(options?.appendTruncationMarker !== undefined
+        ? { appendTruncationMarker: options.appendTruncationMarker }
+        : {}),
+    }),
+);
 
 export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -899,11 +877,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     return path.resolve(physicalCwd, gitCommonDir);
   });
 
-  // Untracked, non-ignored files at or above MAX_UNTRACKED_CHECKPOINT_FILE_BYTES. Used by BOTH
-  // capture (exclude from `git add`) and restore (exclude from `git clean`) via a single shared
-  // predicate so the two ends can never drift — the symmetry is the correctness invariant.
-  // MUST run with the plain process env: `git ls-files --others` is relative to the REAL index,
-  // never the checkpoint temp index (commitEnv). `execute` uses process.env when no env is given.
+  // Untracked, non-ignored files at or above MAX_UNTRACKED_CHECKPOINT_FILE_BYTES, shared by capture
+  // (excluded from `git add`) and restore (excluded from `git clean`) so the two cannot drift.
+  // Runs with the plain process env: `ls-files --others` must read the REAL index, never the
+  // checkpoint temp index (commitEnv).
   const enumerateOversizedUntracked = Effect.fn("GitVcsDriver.enumerateOversizedUntracked")(
     function* (cwd: string) {
       const listing = yield* execute({
@@ -942,14 +919,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     },
   );
 
-  // Git renames loose objects and refs into place without fsync by default, so
-  // an unclean restart can leave 0-byte files under refs/t3/** that break every
-  // later fetch and push. Checkpoint writes flush before they are published;
-  // macOS defaults to writeout-only, which does not reach the disk either.
+  // Git defaults and macOS writeout-only can leave empty refs after crashes; flush before publication.
   // Set fsync first: Git 2.36 ignores unknown batch without resetting the method.
-  // Git documents batch/fsync equivalence on macOS HFS+/APFS and Windows NTFS/ReFS;
-  // keep per-object fsync on other platforms. Batch still fully flushes refs.
-  // On macOS, VcsProcess retries unsupported full flushes with plain fsync.
+  // Batch fully flushes refs and equals fsync on macOS HFS+/APFS and Windows NTFS/ReFS.
+  // Keep per-object fsync elsewhere; VcsProcess retries unsupported macOS full flushes with plain fsync.
   const durableWrite = [
     "-c",
     "core.fsync=objects,reference",
@@ -967,8 +940,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: Effect.fn("GitVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
       const operation = VcsProcess.CHECKPOINT_CAPTURE_OPERATION;
-      // core.splitIndex governs every index Git writes, so an unguarded write to the
-      // scratch index can expire the sharedindex.* the real .git/index still uses.
+      // Scratch split-index writes can expire sharedindex files still used by the real index.
       const indexConfig = [
         "-c",
         "core.fsmonitor=false",
@@ -979,11 +951,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "-c",
         "splitIndex.sharedIndexExpire=never",
       ];
-      // Retry the pre-flight `git rev-parse --git-common-dir` on a transient failure too: it
-      // runs OUTSIDE the retried operation body (the temp-index path derives from it), yet a
-      // zero-work `rev-parse` is the command that most often times out under host overload — so
-      // without this it would fail the whole capture unprotected, defeating the fix for its most
-      // likely trigger.
+      // Retry the pre-flight `rev-parse --git-common-dir` too: it runs outside the retried body,
+      // yet a zero-work `rev-parse` is what most often times out under host overload.
       const gitCommonDir = yield* resolveGitCommonDir(input.cwd).pipe(
         Effect.retry(captureRetryPolicy),
       );
@@ -1005,13 +974,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       );
 
       yield* Effect.gen(function* () {
-        // Heavy untracked artifacts (regenerable `.npy`/`.npz` matrices, model weights, caches)
-        // would make `git add -A` deflate+write hundreds of MB of new blobs and blow the process
-        // timeout. Exclude any untracked file >= the size threshold from capture (and mirror it
-        // in restore's clean). Runs with the plain env (real index) — see the helper.
-        // A real Git exit here (an unreadable user index) must not fail the capture: the
-        // body below already recovers from an invalid index, so capture without the bound.
-        // Restore does NOT do this - an empty set there would let `git clean` delete them.
+        // Exclude untracked files >= the size threshold so `git add -A` cannot blow the timeout
+        // (mirrored in restore's clean). Uses the real index. A git exit here must not fail
+        // capture: the body below recovers from an invalid index, so capture unbounded. Restore
+        // must NOT do this, since an empty set there would let `git clean` delete those files.
         const oversizedUntracked =
           (yield* enumerateOversizedUntracked(input.cwd).pipe(
             Effect.catchTags({
@@ -1231,8 +1197,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           Effect.catchTags({
             VcsProcessExitError: (error) =>
               Effect.gen(function* () {
-                // Git cannot stage an embedded repository until it has a commit. Discover these
-                // only after staging fails so ordinary checkpoints do not need another file scan.
+                // Git cannot stage uncommitted embedded repos; scan for them only after staging fails.
                 const untracked = yield* execute({
                   operation,
                   cwd: input.cwd,
@@ -1345,11 +1310,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           args: [...durableWrite, "update-ref", input.checkpointRef, commitOid],
         });
       }).pipe(
-        // Retry the whole capture on a transient VCS failure (host-overload timeout / spawn
-        // starvation) — never on a real git exit or a decode/detection error. Retry is INSIDE
-        // `ensuring` so the temp index is cleaned up exactly once after all attempts settle;
-        // each attempt re-seeds it afresh. `isTransientVcsError` matches only the transient
-        // tags in the operation's error union.
+        // Retry only transient VCS failures, never a real git exit or decode error. Retry sits
+        // INSIDE `ensuring` so the temp index is cleaned once after all attempts; each attempt
+        // re-seeds it.
         Effect.retry(captureRetryPolicy),
         Effect.ensuring(cleanupTempIndex),
       );
@@ -1409,11 +1372,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         ),
       );
       yield* recreateWorkspace;
-      // Symmetric to capture: oversized untracked artifacts were never captured, so they must not
-      // be deleted here. `git restore --worktree` leaves untracked files on disk, so recompute the
-      // set and pass each as a `git clean -e` exclude — this preserves the heavy file while still
-      // cleaning its small untracked siblings (a file-level pathspec exclude would fail, because
-      // `git clean -fd` removes a fully-untracked directory wholesale). Empty set → plain clean.
+      // Oversized untracked files were never captured, so they must not be deleted. Pass each as a
+      // `git clean -e` exclude: a pathspec exclude would fail because `git clean -fd` removes a
+      // fully untracked directory wholesale.
       const oversizedUntracked = yield* enumerateOversizedUntracked(input.cwd);
       // Too many untracked files to size: keep them all rather than risk deleting one.
       if (oversizedUntracked === null) {
@@ -1566,8 +1527,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           maxOutputBytes: VcsDriver.CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
           outputMode: "error",
         }).pipe(Effect.map((result) => result.stdout.split("\0")));
-      // Remerge diff lists a merge's paths only where the result differs from Git's
-      // automatic merge, so a merge keeps its conflict fixes and drops clean upstream changes.
+      // Remerge diffs retain merge conflict fixes while excluding clean upstream changes.
       const pathLists = yield* Effect.all(
         [
           listPaths(["diff", startHead, `${input.fromCheckpointRef}^{commit}`]),

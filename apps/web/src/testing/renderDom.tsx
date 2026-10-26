@@ -42,21 +42,9 @@ interface Mounted extends AsyncDisposable {
 const mounted = new Set<() => Promise<void>>();
 
 /**
- * Mounts a component into a real DOM for the `dom` test project.
- *
- * Exists so the migration off `renderToStaticMarkup` does not copy the same mount/flush/cleanup
- * boilerplate into every file. Rendering to static markup and asserting on the HTML string tests
- * the shape of the markup rather than what the component does, which `AGENTS.md` rules out; this
- * gives the tests a DOM to query and events to dispatch instead.
- *
- * Acquire it with `await using` to tear it down when the test ends; anything still mounted is torn
- * down after the test regardless, so a leaked root cannot leak React state into the next.
- *
- * One trap this environment carries: happy-dom's `focus()` will move `document.activeElement` onto
- * an element that is not focusable, so `el.focus(); expect(document.activeElement).toBe(el)` passes
- * even when the `tabIndex` that makes it reachable has been deleted. Assert the property you mean -
- * `el.tabIndex === 0` - rather than inferring it from focus. Found by mutation: the assertion stayed
- * green with the attribute removed.
+ * Real-DOM mount for the `dom` project, replacing `renderToStaticMarkup` assertions. Use `await
+ * using`; leftovers are torn down after each test regardless. Trap: happy-dom's `focus()` focuses
+ * non-focusable elements, so assert `el.tabIndex === 0` rather than inferring it from focus.
  */
 export async function renderDom(node: ReactNode): Promise<Mounted> {
   const host = document.createElement("div");

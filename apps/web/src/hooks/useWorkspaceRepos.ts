@@ -13,13 +13,8 @@ export {
 } from "./useWorkspaceRepos.logic";
 
 /**
- * The repositories a thread can read, primary first.
- *
- * Panels derived their working directory from
- * `thread.worktreePath ?? project.workspaceRoot` in six separate places, each
- * of which would have needed the members list bolted on independently. This is
- * the one place that derivation lives now; `repos[0]` is exactly what those
- * expressions produced.
+ * The repositories a thread can read, primary first. The single home of the derivation six
+ * panels used to inline as `thread.worktreePath ?? project.workspaceRoot`; `repos[0]` is that.
  */
 export function useWorkspaceRepos(threadRef: ScopedThreadRef | null): ReadonlyArray<WorkspaceRepo> {
   const thread = useThreadShell(threadRef);

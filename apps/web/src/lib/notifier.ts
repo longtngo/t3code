@@ -1,14 +1,7 @@
 /**
- * Thread-completion OS notifications (web).
- *
- * Raised when a thread's turn transitions running -> terminal while the user is
- * not actively viewing that thread. Uses the W3C `Notification` API and
- * `document.visibilityState`/`document.hasFocus()` to decide whether the user
- * is actually looking at the completing thread.
- *
- * This module is intentionally free of React/router imports so the detection
- * and gating logic stays unit-testable. The app registers a host (navigation +
- * active-thread lookup) via `registerThreadNotificationHost`.
+ * Thread-completion OS notifications (web), raised on running -> terminal while the user is not
+ * viewing that thread. Free of React/router imports so the gating stays unit-testable; the app
+ * registers navigation and active-thread lookup via `registerThreadNotificationHost`.
  */
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {

@@ -5,29 +5,16 @@ import type * as Scope from "effect/Scope";
 
 export interface ProviderTurnStallWatchdogShape {
   /**
-   * Start the background turn-stall watchdog within the provided scope.
-   *
-   * The watchdog detects an active turn whose provider (SDK) has gone silent
-   * past a threshold — i.e. the SDK accepted tool/subagent results but never
-   * issued the follow-up inference and never closed the turn — and forcefully
-   * recovers it (stop session, then resume) so the thread does not hang
-   * indefinitely waiting on a wedged subprocess.
+   * Start the turn-stall watchdog in the provided scope. It recovers (stop, then resume) an
+   * active turn whose SDK went silent past a threshold after accepting tool results, so the
+   * thread does not hang on a wedged subprocess.
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 
   /**
-   * Adopt a stop this watchdog did not issue, so its normal stop->resume
-   * recovery runs for it.
-   *
-   * Called for a user's deliberate force-stop (`recoverAfterStop` on
-   * `thread.session.stop`). The human is the sensor the watchdog lacks here:
-   * `shouldTrip` abstains whenever the open-tool set is non-empty, so a turn
-   * wedged INSIDE a tool never trips automatically — which is exactly when
-   * someone presses Stop a second time.
-   *
-   * Adoption is a hint, not an override: it respects the existing attempt cap
-   * and a thread the watchdog has already given up on, so it cannot re-arm a
-   * stop/resume loop against a permanently wedged provider.
+   * Adopt a user's force-stop so the normal stop->resume recovery runs: `shouldTrip` abstains
+   * while a tool is open, so a turn wedged inside a tool never trips on its own. Respects the
+   * attempt cap and given-up threads, so it cannot re-arm a loop on a wedged provider.
    */
   readonly adoptExternalStop: (input: {
     readonly threadId: ThreadId;

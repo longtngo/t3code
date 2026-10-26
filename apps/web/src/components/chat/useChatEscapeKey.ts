@@ -7,15 +7,10 @@ import {
 } from "../ChatView.logic";
 
 /**
- * FORK: Escape walks the same Stop ladder the button does, so two deliberate presses force-stop
- * and a held key (auto-repeat) never reaches the hard rung. Scoped by focus: every overlay that
- * owns Escape takes focus out of the composer form, and `document.body` counts as the chat
- * (clicking the transcript leaves focus there). Bubble phase, so a handler that already claimed
- * the press wins. With messages queued, Escape works the queue instead (see
- * `createChatEscapeHandler`) and never stops the turn the user is redirecting.
- *
- * Takes the composer's props object itself, so Stop is the composer's own `onInterrupt` (the
- * same action as its Stop button) and there is no place in `ChatComposer` to substitute a copy.
+ * FORK: Escape walks the button's Stop ladder: two deliberate presses force-stop, auto-repeat
+ * never reaches the hard rung. Scoped by focus (overlays own Escape; `document.body` counts as
+ * the chat), bubble phase so earlier handlers win; with messages queued it works the queue.
+ * Takes the composer's props so Stop is its own `onInterrupt`, with no copy to substitute.
  */
 export function useChatEscapeKey(
   composerProps: {

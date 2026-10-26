@@ -15,13 +15,8 @@ import * as DesktopIpc from "../DesktopIpc.ts";
 const activeNotifications = new Set<Electron.Notification>();
 
 /**
- * Raise a native OS notification from the renderer. Built inline (mirroring
- * openExternal) rather than behind a dedicated Electron service — it is a
- * one-shot side effect plus a click handler.
- *
- * On click we reveal the app window and push the structured thread reference to
- * the renderer over NOTIFICATION_ACTIVATED_CHANNEL, reusing the same
- * main -> renderer pattern as onMenuAction. The renderer routes to the thread.
+ * Raise a native OS notification from the renderer. On click, reveal the window and push
+ * the thread reference over NOTIFICATION_ACTIVATED_CHANNEL (the onMenuAction pattern).
  */
 export const showNotification = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.SHOW_NOTIFICATION_CHANNEL,

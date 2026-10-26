@@ -37,7 +37,7 @@ import {
 } from "@t3tools/shared/model";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { usePrimarySettings } from "../../hooks/useSettings";
+import { useClientSettings, usePrimarySettings } from "../../hooks/useSettings";
 import { PresetDialog } from "./providers/PresetDialog";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { normalizeProviderAccentColor } from "../../providerInstances";
@@ -138,12 +138,7 @@ function readConfigString(config: unknown, key: string): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-/**
- * Unlike provider settings field updates, does not drop empty-looking values —
- * the caller is responsible for deciding whether an empty array / empty object
- * should be stored explicitly (e.g. `customModels: []` is a meaningful "user
- * cleared their custom list" state distinct from "driver default").
- */
+/** Preserve explicit empty arrays/objects; clearing a custom list differs from selecting driver defaults. */
 function nextConfigBlobWithValue(
   config: unknown,
   key: string,
@@ -198,18 +193,9 @@ function ProviderAuthEmail(props: { readonly email: string | undefined }) {
 }
 
 /**
- * Opens the local-LLM preset dialog for this one instance.
- *
- * The dialog was ported with the rest of the local-models work but had no
- * caller, so the env vars that point an agent at a local model still had to be
- * typed by hand — the one part of that flow a person is likely to get wrong.
- *
- * Scoped to the instance being edited rather than offering every instance as a
- * target: the button lives on the card whose environment it rewrites, so the
- * thing it changes is the thing you are looking at.
- *
- * Hidden entirely when no model configs exist, since there would be nothing to
- * apply — the settings page is where configs are created.
+ * Opens the local-LLM preset dialog for this one instance, so the env vars pointing an agent
+ * at a local model need not be typed by hand. Scoped to the card whose environment it
+ * rewrites, and hidden when no model configs exist (they are created on the settings page).
  */
 function LocalLlmPresetAction(props: {
   readonly instanceId: string;
@@ -413,11 +399,9 @@ export function ProviderEnvironmentSection(props: {
     setRows(props.environment.map(makeEnvironmentDraftRow));
   }, [props.environment]);
 
-  // The effect above replaces the fork's render-phase re-seed (fork commit 8fe3190f5,
-  // "Applying a local-LLM preset appeared to do nothing, then undid itself"). Upstream
-  // #8472 fixes the same silent data loss and is the superset: it compares by value AND
-  // remembers what this card last published, so our own round-trip cannot re-seed the
-  // draft, and it runs in an effect rather than during render.
+  // The effect above replaces the fork's render-phase re-seed. It compares by value AND
+  // remembers what this card last published, so our own round-trip cannot re-seed the draft
+  // (the bug where applying a local-LLM preset appeared to do nothing, then undid itself).
   const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
     // Null means a row is still half-typed; publishing would read as "the user cleared it".
     const published = rowsToEnvironment(nextRows);
@@ -680,14 +664,8 @@ interface ProviderInstanceCardProps {
 const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> = [];
 const NO_CUSTOM_MODELS: ReadonlyArray<CustomModelDefinition> = [];
 
-/**
- * Unknown drivers (`driverOption === undefined`) get a read-only
- *     notice instead of editable fields, so fork instances round-trip
- *     without accidentally destroying their config.
- * With `projectOverride` set, the Switch instead reads and writes
- *     that project's override, leaving the environment's `instance.enabled`
- *     untouched.
- */
+/** Unknown drivers stay read-only to preserve fork config. projectOverride switches affect only the
+ * project, not instance.enabled. */
 export function ProviderInstanceCard({
   instanceId,
   instance,
@@ -763,6 +741,7 @@ export function ProviderInstanceCard({
   const displayName =
     instance.displayName?.trim() || driverOption?.label || String(instance.driver);
   const accentColor = normalizeProviderAccentColor(instance.accentColor);
+  const redesign = useClientSettings((settings) => settings.redesignEnabled);
   const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
     onCopy: ({ providerName }) => {
       toastManager.add({
@@ -785,8 +764,6 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  // Keyed on the stored list, not the whole instance, so writing another field
-  // leaves the models list (often ~50 rows) with the same props.
   const storedCustomModels =
     instance.config !== null && typeof instance.config === "object"
       ? (instance.config as Record<string, unknown>).customModels
@@ -1057,7 +1034,7 @@ export function ProviderInstanceCard({
         data-slot="settings-row"
         className={cn(
           "group flex min-h-18 items-center gap-3 px-3 py-3 transition-colors sm:px-4",
-          selected ? "bg-muted/45" : "hover:bg-muted/25",
+          selected ? "bg-muted/45 redesign:bg-foreground/[0.06]" : "hover:bg-muted/25",
         )}
       >
         <div
@@ -1145,7 +1122,8 @@ export function ProviderInstanceCard({
       <span
         inert={readOnly}
         aria-disabled={readOnly || undefined}
-        className={cn("inline-flex items-center gap-1", readOnly && "opacity-50")}
+        // Empty, it would still add a flex gap and pull the version off the column edge.
+        className={cn("inline-flex items-center gap-1 empty:hidden", readOnly && "opacity-50")}
       >
         {titleTailNode}
         {onDelete ? (
@@ -1162,6 +1140,43 @@ export function ProviderInstanceCard({
         ) : null}
       </span>
     </div>
+  );
+
+  // The New design gives provider status its own row instead of hanging it under the name field.
+  const statusContent = (
+    <>
+      <ProviderStatusDiagnostic detail={statusDiagnostic}>
+        <div
+          tabIndex={statusDiagnostic ? 0 : undefined}
+          className="flex min-w-0 flex-wrap items-baseline gap-x-1.5"
+        >
+          {editorStatusNode}
+        </div>
+      </ProviderStatusDiagnostic>
+      {urlAuthAction && onAcceptUrlAuth ? (
+        <div className="grid max-w-xl gap-1.5 pt-1 text-xs">
+          <p>{urlAuthAction.message}</p>
+          <code className="break-all text-2xs">{urlAuthAction.url}</code>
+          <Button
+            render={
+              <a
+                href={urlAuthAction.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => onAcceptUrlAuth(urlAuthAction)}
+              />
+            }
+            size="xs"
+            variant="outline"
+            className="w-fit"
+            disabled={readOnly}
+          >
+            <ExternalLinkIcon />
+            Continue authentication
+          </Button>
+        </div>
+      ) : null}
+    </>
   );
 
   const runtimeFields = driverOption ? (
@@ -1187,43 +1202,10 @@ export function ProviderInstanceCard({
   return (
     <>
       <SettingsSection title={displayName} icon={titleIconNode} headerAction={editorHeaderAction}>
+        {redesign ? <SettingsRow title="Status" status={statusContent} /> : null}
         <SettingsRow
           title="Display name"
-          status={
-            <>
-              <ProviderStatusDiagnostic detail={statusDiagnostic}>
-                <div
-                  tabIndex={statusDiagnostic ? 0 : undefined}
-                  className="flex min-w-0 flex-wrap items-baseline gap-x-1.5"
-                >
-                  {editorStatusNode}
-                </div>
-              </ProviderStatusDiagnostic>
-              {urlAuthAction && onAcceptUrlAuth ? (
-                <div className="grid max-w-xl gap-1.5 pt-1 text-xs">
-                  <p>{urlAuthAction.message}</p>
-                  <code className="break-all text-2xs">{urlAuthAction.url}</code>
-                  <Button
-                    render={
-                      <a
-                        href={urlAuthAction.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => onAcceptUrlAuth(urlAuthAction)}
-                      />
-                    }
-                    size="xs"
-                    variant="outline"
-                    className="w-fit"
-                    disabled={readOnly}
-                  >
-                    <ExternalLinkIcon />
-                    Continue authentication
-                  </Button>
-                </div>
-              ) : null}
-            </>
-          }
+          {...(redesign ? {} : { status: statusContent })}
           control={
             <div
               inert={readOnly}

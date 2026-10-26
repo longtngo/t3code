@@ -119,15 +119,18 @@ describe("environment RPC", () => {
   it.effect("switches durable subscriptions when the supervisor replaces the session", () =>
     Effect.gen(function* () {
       const subscriptions: string[] = [];
+      const subscriptionChanges = yield* Queue.make<void>();
       const firstClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("first");
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.never;
         },
       } as unknown as WsRpcProtocolClient;
       const secondClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("second");
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.never;
         },
       } as unknown as WsRpcProtocolClient;
@@ -135,13 +138,12 @@ describe("environment RPC", () => {
       const awaitSubscriptions = Effect.fn("TestEnvironmentRpc.awaitSubscriptions")(function* (
         count: number,
       ) {
-        for (let attempt = 0; attempt < 100; attempt += 1) {
+        for (;;) {
           if (subscriptions.length >= count) {
             return;
           }
-          yield* Effect.yieldNow;
+          yield* Queue.take(subscriptionChanges);
         }
-        return yield* Effect.die(new Error(`Expected ${count} durable subscriptions.`));
       });
 
       const subscriptionFiber = yield* subscribe(WS_METHODS.subscribeTerminalEvents, {}).pipe(
@@ -229,9 +231,11 @@ describe("environment RPC", () => {
   it.effect("keeps durable subscriptions alive across a transport failure and new session", () =>
     Effect.gen(function* () {
       const subscriptions: string[] = [];
+      const subscriptionChanges = yield* Queue.make<void>();
       const firstClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("first");
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.fail(
             new RpcClientError.RpcClientError({
               reason: new RpcClientError.RpcClientDefect({
@@ -245,6 +249,7 @@ describe("environment RPC", () => {
       const secondClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("second");
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.never;
         },
       } as unknown as WsRpcProtocolClient;
@@ -256,14 +261,14 @@ describe("environment RPC", () => {
         Effect.forkChild,
       );
       yield* SubscriptionRef.set(activeSession, Option.some(session(firstClient)));
-      for (let attempt = 0; attempt < 100 && subscriptions.length < 1; attempt += 1) {
-        yield* Effect.yieldNow;
+      while (subscriptions.length < 1) {
+        yield* Queue.take(subscriptionChanges);
       }
       yield* SubscriptionRef.set(activeSession, Option.none());
       yield* SubscriptionRef.set(activeSession, Option.some(session(secondClient)));
 
-      for (let attempt = 0; attempt < 100 && subscriptions.length < 2; attempt += 1) {
-        yield* Effect.yieldNow;
+      while (subscriptions.length < 2) {
+        yield* Queue.take(subscriptionChanges);
       }
       yield* Fiber.interrupt(subscriptionFiber);
 
@@ -296,16 +301,20 @@ describe("environment RPC", () => {
     Effect.gen(function* () {
       const domainError = new Error("terminal subscription rejected");
       const subscriptions: string[] = [];
+      const subscriptionChanges = yield* Queue.make<void>();
       const observedFailures: Error[] = [];
+      const failureObserved = yield* Deferred.make<void>();
       const firstClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("first");
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.fail(domainError);
         },
       } as unknown as WsRpcProtocolClient;
       const secondClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("second");
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.never;
         },
       } as unknown as WsRpcProtocolClient;
@@ -319,6 +328,7 @@ describe("environment RPC", () => {
           onExpectedFailure: (cause) =>
             Effect.sync(() => {
               observedFailures.push(Cause.squash(cause) as Error);
+              Deferred.doneUnsafe(failureObserved, Effect.void);
             }),
         },
       ).pipe(
@@ -326,16 +336,14 @@ describe("environment RPC", () => {
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         Effect.forkChild,
       );
-      for (let attempt = 0; attempt < 100 && observedFailures.length < 1; attempt += 1) {
-        yield* Effect.yieldNow;
-      }
+      yield* Deferred.await(failureObserved);
 
       expect(subscriptions).toEqual(["first"]);
       expect(observedFailures).toEqual([domainError]);
 
       yield* SubscriptionRef.set(activeSession, Option.some(session(secondClient)));
-      for (let attempt = 0; attempt < 100 && subscriptions.length < 2; attempt += 1) {
-        yield* Effect.yieldNow;
+      while (subscriptions.length < 2) {
+        yield* Queue.take(subscriptionChanges);
       }
       yield* Fiber.interrupt(subscriptionFiber);
 
@@ -496,10 +504,14 @@ describe("environment RPC", () => {
         // COMPLETES (no error). With the option set, the client must reconnect
         // (resync) rather than stall.
         const subscriptionCount = yield* Ref.make(0);
+        const subscribed = yield* Queue.unbounded<number>();
         const client = {
           [WS_METHODS.subscribeTerminalEvents]: () =>
             Stream.unwrap(
-              Ref.update(subscriptionCount, (count) => count + 1).pipe(Effect.as(Stream.empty)),
+              Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
+                Effect.tap((count) => Queue.offer(subscribed, count)),
+                Effect.as(Stream.empty),
+              ),
             ),
         } as unknown as WsRpcProtocolClient;
         const { activeSession, supervisor } = yield* makeHarness();
@@ -515,20 +527,12 @@ describe("environment RPC", () => {
           Effect.forkChild,
         );
 
-        for (let attempt = 0; attempt < 100; attempt += 1) {
-          if ((yield* Ref.get(subscriptionCount)) >= 1) break;
-          yield* Effect.yieldNow;
-        }
         // First subscription completed; the client is now waiting out the delay.
-        expect(yield* Ref.get(subscriptionCount)).toBe(1);
+        expect(yield* Queue.take(subscribed)).toBe(1);
 
         yield* TestClock.adjust("100 millis");
-        for (let attempt = 0; attempt < 100; attempt += 1) {
-          if ((yield* Ref.get(subscriptionCount)) >= 2) break;
-          yield* Effect.yieldNow;
-        }
         // The clean completion triggered a resubscribe (the resync path).
-        expect(yield* Ref.get(subscriptionCount)).toBe(2);
+        expect(yield* Queue.take(subscribed)).toBe(2);
 
         // Client unsubscribe (scope close) is interruption, NOT a completion, so it
         // must not spawn further resubscriptions.
@@ -544,10 +548,14 @@ describe("environment RPC", () => {
       // every attempt, so every resubscribe ends the same way. At a flat delay
       // that is a hot loop re-issuing the snapshot fetch four times a second.
       const subscriptionCount = yield* Ref.make(0);
+      const subscribed = yield* Queue.unbounded<number>();
       const client = {
         [WS_METHODS.subscribeTerminalEvents]: () =>
           Stream.unwrap(
-            Ref.update(subscriptionCount, (count) => count + 1).pipe(Effect.as(Stream.empty)),
+            Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
+              Effect.tap((count) => Queue.offer(subscribed, count)),
+              Effect.as(Stream.empty),
+            ),
           ),
       } as unknown as WsRpcProtocolClient;
       const { activeSession, supervisor } = yield* makeHarness();
@@ -565,11 +573,7 @@ describe("environment RPC", () => {
 
       const settleAt = (count: number) =>
         Effect.gen(function* () {
-          for (let attempt = 0; attempt < 100; attempt += 1) {
-            if ((yield* Ref.get(subscriptionCount)) >= count) break;
-            yield* Effect.yieldNow;
-          }
-          expect(yield* Ref.get(subscriptionCount)).toBe(count);
+          expect(yield* Queue.take(subscribed)).toBe(count);
         });
 
       yield* settleAt(1);
@@ -580,7 +584,7 @@ describe("environment RPC", () => {
 
       // Second one has doubled. The old flat delay would have fired here.
       yield* TestClock.adjust("100 millis");
-      yield* settleAt(2);
+      expect(yield* Ref.get(subscriptionCount)).toBe(2);
       yield* TestClock.adjust("100 millis");
       yield* settleAt(3);
 
@@ -594,10 +598,12 @@ describe("environment RPC", () => {
       // Surviving the healthy window is the evidence that clears the budget --
       // not an emitted value, which an overflowing stream also produces.
       const subscriptionCount = yield* Ref.make(0);
+      const subscribed = yield* Queue.unbounded<number>();
       const client = {
         [WS_METHODS.subscribeTerminalEvents]: () =>
           Stream.unwrap(
             Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
+              Effect.tap((count) => Queue.offer(subscribed, count)),
               Effect.map((count) =>
                 count === 3
                   ? Stream.fromEffect(Effect.sleep("10 seconds")).pipe(Stream.drain)
@@ -621,11 +627,7 @@ describe("environment RPC", () => {
 
       const settleAt = (count: number) =>
         Effect.gen(function* () {
-          for (let attempt = 0; attempt < 100; attempt += 1) {
-            if ((yield* Ref.get(subscriptionCount)) >= count) break;
-            yield* Effect.yieldNow;
-          }
-          expect(yield* Ref.get(subscriptionCount)).toBe(count);
+          expect(yield* Queue.take(subscribed)).toBe(count);
         });
 
       yield* settleAt(1);
@@ -648,10 +650,14 @@ describe("environment RPC", () => {
   it.effect("does NOT resubscribe on a clean completion when the option is absent", () =>
     Effect.gen(function* () {
       const subscriptionCount = yield* Ref.make(0);
+      const subscribed = yield* Queue.unbounded<number>();
       const client = {
         [WS_METHODS.subscribeTerminalEvents]: () =>
           Stream.unwrap(
-            Ref.update(subscriptionCount, (count) => count + 1).pipe(Effect.as(Stream.empty)),
+            Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
+              Effect.tap((count) => Queue.offer(subscribed, count)),
+              Effect.as(Stream.empty),
+            ),
           ),
       } as unknown as WsRpcProtocolClient;
       const { activeSession, supervisor } = yield* makeHarness();
@@ -663,10 +669,7 @@ describe("environment RPC", () => {
         Effect.forkChild,
       );
 
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(subscriptionCount)) >= 1) break;
-        yield* Effect.yieldNow;
-      }
+      expect(yield* Queue.take(subscribed)).toBe(1);
       yield* TestClock.adjust("1 second");
       // Without the option, a clean completion is terminal — no resubscribe.
       expect(yield* Ref.get(subscriptionCount)).toBe(1);

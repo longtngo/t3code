@@ -1,15 +1,7 @@
 /**
- * WebPushRelay - sends VAPID Web Push notifications for two thread edges (a run
- * finishing; an agent asking the user a question) to the browser PWA, so they
- * arrive with the tab frozen (screen off). The WebSocket-driven foreground notifier
- * (`apps/web/src/lib/notifier.ts`) cannot cover that case.
- *
- * Edges are classified from the orchestrator v2 domain event itself, by positive
- * match: a `run.updated` whose run reached a terminal status, or a
- * `runtime-request.updated` that opened a pending `user_input` request. The stream
- * handler is O(1) and only enqueues the edge (invariant 18: the domain-event hub is
- * unbounded, so an internal reader must take promptly); reads and HTTP sends run on
- * a `DrainableWorker`.
+ * WebPushRelay - Web Push for a run finishing or an agent asking a question, so they reach a
+ * frozen PWA. Edges match domain events positively; the handler only enqueues (invariant 18:
+ * the event hub is unbounded) and a `DrainableWorker` does reads and sends.
  *
  * @module WebPushRelay
  */
@@ -110,14 +102,12 @@ export const getOrCreateVapidKeys = Effect.fn("getOrCreateVapidKeys")(function* 
       Effect.catchIf(ServerSecretStore.isSecretStoreError, (error) =>
         ServerSecretStore.isSecretAlreadyExistsError(error)
           ? readVapidKeyPair(secrets).pipe(
-              Effect.flatMap((concurrent) =>
-                concurrent !== null
-                  ? Effect.succeed(concurrent)
-                  : Effect.fail(
-                      new ServerSecretStore.SecretStoreConcurrentReadError({
-                        resource: VAPID_SECRET_RESOURCE,
-                      }),
-                    ),
+              Effect.filterOrFail(
+                (concurrent): concurrent is VapidKeyPair => concurrent !== null,
+                () =>
+                  new ServerSecretStore.SecretStoreConcurrentReadError({
+                    resource: VAPID_SECRET_RESOURCE,
+                  }),
               ),
             )
           : Effect.fail(error),
@@ -143,16 +133,9 @@ export interface PushEdge {
 }
 
 /**
- * The push edge a domain event raises, or `null`.
- *
- * Positive match only; every other event type and every unlisted status is `null`:
- * - `run.updated` with status `completed` -> finished/completed, `failed` ->
- *   finished/error, `interrupted` or `cancelled` -> finished/interrupted. A run
- *   that never started (a withdrawn or restart-cancelled queued message) does not
- *   "finish", except a failure, which is the alert people keep. A run completed
- *   before `notBefore` (this relay's start) is history being re-written, not news.
- * - `runtime-request.updated` opening a `pending` `user_input` request -> asking.
- *   Approvals are not "asking", matching the fork's V1 `hasPendingUserInput` edge.
+ * The push edge a domain event raises, or `null` (positive match only). A terminal
+ * `run.updated` finishes, except a never-started non-failed run or one completed before
+ * `notBefore`; a pending `user_input` request asks. Approvals are not "asking".
  */
 export function classifyPushEdge(
   event: OrchestrationV2DomainEvent,
@@ -207,13 +190,9 @@ function backgroundLivenessOf(shell: OrchestrationV2ThreadShell): "monitoring" |
 }
 
 /**
- * Whether another run has started since `runId` did: the latest run started after
- * it, or another run is executing or waiting on the user. Compares start times, not
- * ordinals: queued runs do not execute in ordinal order (a delegated completion
- * jumps the queue, and users reorder it). A start at the same instant is not after.
- * The shell carries only the highest-ordinal run's start, so a lower-ordinal run
- * that started later and has already ended is missed (rare: 1 of 3,594 runs ran
- * out of order over two weeks).
+ * Whether another run started after `runId` or is executing or waiting. Compares start times,
+ * not ordinals: queued runs can run out of order. The shell holds only the top run's start,
+ * so a later-started, already-ended lower run is missed (1 of 3,594 runs).
  */
 function anotherRunStarted(
   shell: OrchestrationV2ThreadShell,
@@ -232,15 +211,9 @@ function anotherRunStarted(
 }
 
 /**
- * Whether the thread already moved past `runId`: another run started after it, or
- * another run is live or queued to run next. A wake is queued while the turn it
- * continues is still running, so its finish is interim. A newer run cancelled
- * before it started (a withdrawn queued message) does not count, so the final
- * finish still pushes.
- * Push only: the foreground notifiers (`apps/web/src/lib/notifier.ts`,
- * `ThreadNotificationCoordinator`) apply neither this rule nor the final-finish
- * grace. A wake queued before the finish keeps the thread running -> running there,
- * so they never see that finish at all.
+ * Whether the thread moved past `runId`: a later run started, or one is live or queued next.
+ * A run cancelled before starting does not count. Push only: foreground notifiers apply
+ * neither this nor the grace, and never see a wake-continued finish anyway.
  */
 function continuedPast(
   shell: OrchestrationV2ThreadShell,
@@ -257,11 +230,9 @@ function continuedPast(
 }
 
 /**
- * Which category an edge belongs to. A finish splits on live background work: an
- * agent that fans out to subagents settles once per wake-up, and the last of those
- * is the genuinely final completion. A failure never becomes an interim finish.
- * `categoryForCompletion` in the web notifier mirrors this split; the "working"
- * liveness from `continuedPast` and the grace are push-only.
+ * An edge's category. A finish splits on live background work: only the last settle of a
+ * subagent fan-out is final. A failure is never interim. `categoryForCompletion` in the web
+ * notifier mirrors this; `continuedPast` liveness and the grace are push-only.
  */
 function categoryForEdge(
   edge: ThreadNotifyEdge,
@@ -393,15 +364,9 @@ export interface WebPushRelayShape {
   readonly drain: Effect.Effect<void>;
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   /**
-   * Take no new edges for the rest of this process. Server shutdown calls it before
-   * it cancels the runs still in flight, which are not the user's work ending; edges
-   * already queued (work that really finished) still send, and a finish held for its
-   * grace sends at once, unless another run has started since.
-   *
-   * Not covered: Ctrl-C in a terminal signals the whole process group, so provider
-   * CLIs can exit before this finalizer runs, and the runs they leave may be marked
-   * failed or interrupted and push. Desktop and the service launcher send SIGTERM to
-   * the server only, so they take the clean path.
+   * Take no new edges: shutdown is about to cancel in-flight runs, which is not the user's
+   * work ending. Queued edges still send, and held finishes send now unless another run started.
+   * Ctrl-C signals the whole group, so CLIs may exit first and their runs may still push.
    */
   readonly stop: Effect.Effect<void>;
 }
@@ -623,7 +588,7 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
    */
   const rereadShell = (threadId: ThreadId) =>
     readShell(threadId).pipe(
-      Effect.map(Option.some),
+      Effect.asSome,
       Effect.catchCause((cause) =>
         Effect.logWarning("web push re-read failed", {
           threadId,
@@ -633,15 +598,9 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
     );
 
   /**
-   * After the grace, re-read the shell and send only a finish that still reads as
-   * final; one the agent continued meanwhile is dropped even when interim finishes
-   * push, since a late push could replace a newer question on the device.
-   *
-   * `stop` ends the wait early. Shutdown is about to cancel any run still queued,
-   * so only another run that has STARTED drops the finish (it may have asked
-   * something since); otherwise the finish sends as first read. A failed re-read
-   * on either path sends as first read too, unless a question on this thread was
-   * pushed while the finish was held.
+   * After the grace, re-read and send only a finish that is still final; a late push could
+   * replace a newer question. `stop` ends the wait early, dropping it only if another run has
+   * STARTED. A failed re-read sends as first read, unless a question was pushed meanwhile.
    */
   const sendAfterGrace = Effect.fn("WebPushRelay.sendAfterGrace")(
     function* (

@@ -14,10 +14,16 @@ import * as Schema from "effect/Schema";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
-import { readSourceControlHostSettings } from "@t3tools/source-control-core/client/definition";
+import { readSourceControlHostSettings } from "@t3tools/source-control-core/shared/definition";
 
-import * as GitHubClient from "../client/definition.ts";
+import * as GitHubClient from "../shared/definition.ts";
 import { parseGitHubAuthStatus } from "./gitHubAuthStatus.ts";
+
+/**
+ * Every gh run on the server shares this. A burst of them (a status poll across many checkouts)
+ * otherwise starts enough at once to trip GitHub's secondary rate limit.
+ */
+export const GH_PROCESS_CONCURRENCY = { key: "gh", limit: 4 } as const;
 
 const TOKEN_TTL = Duration.minutes(5);
 const MISSING_TTL = Duration.seconds(10);
@@ -109,16 +115,11 @@ function normalizeHost(host: string): string {
   return host.trim().toLowerCase();
 }
 
-/** Hosts gh treats as GitHub.com-like for `GH_TOKEN`: github.com and GHE.com data residency. */
 function isGitHubDotCom(host: string): boolean {
   return host === "github.com" || host.endsWith(".ghe.com");
 }
 
-/**
- * The environment token for a host, in gh's precedence order. gh hands `GH_ENTERPRISE_TOKEN` to
- * any non-github.com host; here it only goes to the host `GH_HOST` names, because a remote URL
- * picks the host and a hostile one must not receive an enterprise token.
- */
+/** Restrict GH_ENTERPRISE_TOKEN to GH_HOST to prevent remote URLs from leaking it. */
 export function environmentToken(
   host: string,
   env: Readonly<Record<string, string | undefined>>,
@@ -148,7 +149,7 @@ export function parseFillUsername(stdout: string): string | null {
   return null;
 }
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
   const process = sourceControlHost.process;
@@ -187,6 +188,7 @@ export const make = Effect.gen(function* () {
           GITHUB_ENTERPRISE_TOKEN: "",
         },
         timeoutMs: 10_000,
+        concurrency: GH_PROCESS_CONCURRENCY,
       })
       .pipe(
         Effect.mapError((error) =>
@@ -349,6 +351,7 @@ export const make = Effect.gen(function* () {
         // gh exits 1 when any stored login has failed; the JSON still lists the others.
         allowNonZeroExit: true,
         timeoutMs: 10_000,
+        concurrency: GH_PROCESS_CONCURRENCY,
       })
       .pipe(
         Effect.map((output) =>
@@ -421,7 +424,7 @@ export const make = Effect.gen(function* () {
       }
       return found;
     }),
-    invalidate: (rawHost) => {
+    invalidate: Effect.fn("GitHubCredentials.invalidate")(function (rawHost) {
       const host = normalizeHost(rawHost);
       return Cache.keys(tokenCache).pipe(
         Effect.flatMap((keys) =>
@@ -432,7 +435,7 @@ export const make = Effect.gen(function* () {
           ),
         ),
       );
-    },
+    }),
   });
 });
 

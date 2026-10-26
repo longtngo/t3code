@@ -542,9 +542,7 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
         undefined,
       );
 
-      // A skill with no frontmatter falls back to its directory name; a skill
-      // whose frontmatter fails to parse is skipped entirely (Claude Code
-      // won't load it either).
+      // Claude falls back to directory names without frontmatter, but skips malformed frontmatter.
       assert.deepEqual(
         skills.map((skill) => skill.name),
         ["no-frontmatter"],
@@ -689,8 +687,7 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
           ["---", `name: ${name}`, "---", "", "# Body"].join("\n"),
         );
       }
-      // Verified against the CLI: with an unknown string or a boolean in the
-      // map, the valid "off" sibling is ignored too and every skill runs.
+      // Claude ignores the entire override map when any value is an unknown string or boolean.
       yield* fs.writeFileString(
         path.join(configDir, "settings.json"),
         '{ "skillOverrides": { "unknown-mode": "some-future-mode", "boolean-false": false, "sibling-off": "off" } }',

@@ -25,27 +25,10 @@ export interface SubagentBackendRowStatus {
 }
 
 /**
- * What the collapsed sidebar row reads, in priority order:
- *
- * 1. No state yet (still loading the first `get`) — a neutral placeholder.
- * 2. `degraded` — the on-disk state couldn't be used as written; surfaced here (not just in
- *    the panel) so a broken toggle is visible without expanding it. Not on a Default backend
- *    with threads set to Cursor (step 5): a Default file is degraded when its remembered
- *    Cursor instance is disabled, yet those threads still offload to another enabled one, so
- *    the count wins and the panel carries the reason.
- * 3. No enabled Cursor instance — Cursor cannot be the active backend regardless of what the
- *    persisted `backend` field says, so the row says so directly.
- * 4. Cursor is the active backend — the selected model's label, falling back to its raw id
- *    (unrecognised by the cached model list) and then to "Auto" (no model chosen yet).
- * 5. Default backend, master on, and some live threads set to Cursor — a partial dot and the
- *    thread count.
- * 6. Anything else — including the "default" backend and any unrecognised value, which the
- *    wire contract says must read as default — is the default route.
- *
- * `masterEnabled: false` forces the dot grey without changing the text. This row is always
- * mounted, so it is the only part of the feature most users ever see, and under master-off
- * no T3 thread offloads — a green dot there would be a lie. The text stays because the
- * machine-wide file the row names is still live for non-T3 tools on this host.
+ * Collapsed-row status, in priority order: loading placeholder; `degraded` (except a Default
+ * backend whose Cursor threads still offload: the count wins); no enabled Cursor instance;
+ * Cursor's model label (raw id, then "Auto"); Default with Cursor threads (count); else default.
+ * `masterEnabled: false` greys the dot only: no T3 thread offloads, but the file stays live.
  */
 export function subagentBackendRowStatus(
   state: SubagentBackendState | null,
@@ -90,11 +73,9 @@ const decodeCursorSettings = Schema.decodeUnknownOption(CursorSettings);
 export type CursorOffloadReadiness = "unavailable" | "ready" | { readonly refused: string };
 
 /**
- * The per-environment half of the server's `resolveThreadBackend` for a Default machine: Cursor
- * credits must not be used up with spending off (`cursorOffloadBlockedReason`), and the first
- * enabled Cursor instance must have a config that decodes (`validateCursorInstance`). One known
- * gap: the server tries the remembered instance before the first one, and these settings do not
- * carry it.
+ * The per-environment half of the server's `resolveThreadBackend` for a Default machine:
+ * spending must allow Cursor credits and the first enabled Cursor instance must decode. Known
+ * gap: the server tries the remembered instance first, which these settings do not carry.
  */
 export function cursorOffloadReadiness(
   source: OffloadSource | null | undefined,
@@ -194,13 +175,9 @@ export function subagentCursorInstancesPickable(state: SubagentBackendState | nu
 }
 
 /**
- * Notes under the per-thread control. The segment itself renders only while the thread's own
- * server has the master on; its absence is explained only when that server disagrees with the
- * primary (when both are off, the panel's own master-off line has already said it).
- * `cursorAvailable` is `null` when unknown — a thread on another environment (the primary's
- * instance list says nothing about that server) or state not yet loaded — so no Cursor note
- * is offered on a guess. `refused` leads, since it explains why a thread set to Cursor is not
- * offloading.
+ * Notes under the per-thread control. A missing segment is explained only when the thread's
+ * server disagrees with the primary on master. `cursorAvailable: null` means unknown (another
+ * environment, or not loaded), so no Cursor note is guessed. `refused` leads.
  */
 export function threadOffloadNotes(input: {
   readonly threadMasterEnabled: boolean;
@@ -254,11 +231,9 @@ export function subagentTargetSetInput(
 }
 
 /**
- * Builds the `set` payload for the segmented toggle. Both backends remember the target
- * (`instanceId`/`model`), falling back to the first available instance when none is stored:
- * a fresh state has none, and a Cursor request without one is rejected, so the toggle could
- * never be turned on. Switching to Default stores that first instance too; dispatch is
- * unchanged because readers fall back to the same instance.
+ * The `set` payload for the segmented toggle. Both backends store a target, falling back to the
+ * first available instance: a fresh state has none, and Cursor without one is rejected, so the
+ * toggle could never turn on. Default stores it too; readers fall back to the same instance.
  */
 export function subagentBackendApplyInput(
   state: SubagentBackendState,
@@ -282,19 +257,10 @@ export interface SubagentCursorVisibleModel {
 }
 
 /**
- * The model picker's options: the Cursor provider's own model list, honouring whatever the user
- * hid or reordered for that instance, rather than the ~200 concrete ids `cursor-agent
- * --list-models` advertises. The two are separate namespaces that overlap in only nine ids, and
- * the CLI accepts provider slugs it never advertises, so the provider list is both the shorter
- * list and the one the user actually curated.
- *
- * `visibleModels: null` means the provider snapshot has not arrived yet — distinct from an empty
- * list, which means the user hid everything. Only the former falls back to the CLI list, since a
- * picker that silently repopulates itself with 200 entries would misreport the second case as the
- * first.
- *
- * A selected model missing from the list is appended rather than dropped, so a stored value the
- * provider no longer offers still renders as the current selection instead of a blank control.
+ * Model picker options: the Cursor provider's own curated list, not the ~200 ids the CLI
+ * advertises (the namespaces overlap in nine). `visibleModels: null` means not arrived yet and
+ * falls back to the CLI list; an empty list means the user hid everything. A selected model
+ * missing from the list is appended so it still renders as the current selection.
  */
 export function subagentCursorModelOptions(
   state: SubagentBackendState | null,

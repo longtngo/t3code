@@ -253,11 +253,8 @@ const initRepoWithCommit = (
     return { initialBranch };
   });
 
-// `git rev-parse HEAD` in a repository with no commits prints the literal string
-// "HEAD" on STDOUT and exits 128. `readHeadSha` allows the non-zero exit and returns
-// stdout regardless, so the absent head came back as the string "HEAD" - and two
-// members in that state then compare EQUAL at revert time, reading as "nothing
-// moved". That is the defect the checkpoint drift comparison exists to prevent.
+// `git rev-parse HEAD` with no commits prints "HEAD" and exits 128; reading stdout regardless
+// made two unborn members compare EQUAL at revert time, reading as "nothing moved".
 it.effect("reports no head sha for a repository with no commits", () =>
   Effect.gen(function* () {
     const driver = yield* GitVcsDriver.GitVcsDriver;
@@ -1833,9 +1830,11 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           baseRef: initialBranch,
         });
         const branch = preview.sources.find((source) => source.kind === "branch-range")!;
+        const decodeReviewDiffPreviewInput = Schema.decodeEffect(ReviewDiffPreviewInput);
+
         for (const path of ["renamed.md", "[literal].txt", " leading.txt", "mode-only.sh"]) {
           const stat = branch.files!.find((file) => file.path === path)!;
-          const request = yield* Schema.decodeEffect(ReviewDiffPreviewInput)({
+          const request = yield* decodeReviewDiffPreviewInput({
             cwd,
             baseRef: initialBranch,
             file: { path, previousPath: stat.previousPath, sourceKind: "branch-range" },
@@ -2429,7 +2428,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
     it.effect("Changes compares the default branch with its tracking upstream, not origin", () =>
       Effect.gen(function* () {
         // `origin` is a fork whose main is behind; the checkout tracks the
-        // canonical repository through a second remote (#15314).
+        // canonical repository through a second remote.
         const canonical = yield* makeTmpDir();
         yield* initRepoWithCommit(canonical);
         yield* git(canonical, ["branch", "-M", "main"]);
@@ -2860,12 +2859,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           const afterFirst = yield* fetchInvocations;
           assert.ok(afterFirst >= 1, "first status read should attempt the upstream fetch");
 
-          // The failed branch (and only it) logs this warning once per outage. A
-          // non-zero exit reaching the "refreshed" branch — the pre-fix bug — would
-          // log nothing, so this pins the fix end-to-end: a non-zero exit is counted
-          // as a failure (which is what puts the entry into the failure backoff,
-          // whose 30s→15m curve is covered by the
-          // statusUpstreamRefreshFailureCooldown tests).
+          // Only the failed branch logs this warning, once per outage, so it pins that a non-zero
+          // exit counts as a failure (and enters the backoff covered by the cooldown tests).
           assert.isTrue(
             logMessages.some((message) => message.includes("upstreamRefreshFailing")),
             "a failed upstream fetch should log the failing-refresh warning",
@@ -2883,13 +2878,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             "the cached outcome should suppress the repeat fetch",
           );
 
-          // Backoff suppresses the repeat FETCH. It does not, on its own, suppress
-          // the repeat LOG: if the loader fails rather than returning an outcome,
-          // the cache stores a failed Exit, every read re-propagates it, and
-          // `Effect.ignoreCause({ log: true })` prints the whole cause again -- for
-          // the entire cooldown, which reaches 15 minutes. That is what produced
-          // 40,000+ identical stack traces and a 128 MB server.log while the fetch
-          // itself was correctly backing off.
+          // Backoff suppresses the repeat FETCH, not the repeat LOG: a failing loader caches a
+          // failed Exit that `Effect.ignoreCause({ log: true })` re-prints on every read for up to
+          // 15 minutes. That produced 40,000+ identical stack traces and a 128 MB server.log.
           assert.equal(
             logMessages.length,
             messagesBeforeSecondRead,
@@ -3172,7 +3163,6 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         assert.deepEqual(yield* driver.listLocalBranchNames(cwd), branches);
         assert.isFalse(yield* fileSystem.exists(pathService.join(worktrees, "wt")));
 
-        // A lone "-" is still the previous checkout.
         yield* git(cwd, ["checkout", "-q", "keep"]);
         yield* git(cwd, ["checkout", "-q", initialBranch]);
         assert.equal((yield* driver.switchRef({ cwd, refName: "-" })).refName, "keep");
@@ -3226,7 +3216,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* git(cwd, ["rev-parse", "HEAD"]),
         );
         assert.equal(
-          yield* git(cwd, ["config", "branch.feature/parallel.gh-merge-base"]),
+          yield* git(cwd, ["config", "branch.feature/parallel.t3-merge-base"]),
           initialBranch,
         );
         for (const [configured, expected] of [
@@ -3277,7 +3267,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
 
           assert.equal(yield* git(worktreePath, ["rev-parse", "HEAD"]), commit);
           assert.equal(
-            yield* driver.readConfigValue(cwd, "branch.feature/revision.gh-merge-base"),
+            yield* driver.readConfigValue(cwd, "branch.feature/revision.t3-merge-base"),
             null,
           );
         }),
@@ -3302,7 +3292,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           });
 
           assert.equal(
-            yield* driver.readConfigValue(cwd, "branch.feature/branch.gh-merge-base"),
+            yield* driver.readConfigValue(cwd, "branch.feature/branch.t3-merge-base"),
             baseBranch,
           );
         }),
@@ -3388,9 +3378,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const fileSystem = yield* FileSystem.FileSystem;
         const pathService = yield* Path.Path;
 
-        // Git refuses `file:` submodule transports by default (CVE-2022-39253)
-        // and ignores repo-level config for it, so a local fixture needs the
-        // env allowance. Real submodules are https/ssh and need none of this.
+        // Git blocks file submodule transports (CVE-2022-39253) despite repo config; local fixtures need env permission.
         const previousAllowedProtocol = process.env.GIT_ALLOW_PROTOCOL;
         process.env.GIT_ALLOW_PROTOCOL = "file";
         yield* Effect.addFinalizer(() =>
@@ -3625,7 +3613,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           "# test\n",
         );
         assert.equal(
-          yield* driver.readConfigValue(worktreePath, "branch.feature/locked-config.gh-merge-base"),
+          yield* driver.readConfigValue(worktreePath, "branch.feature/locked-config.t3-merge-base"),
           null,
         );
         assert.equal(yield* fileSystem.exists(pathService.join(cwd, ".git/config.lock")), true);
@@ -3842,12 +3830,12 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* git(cwd, ["branch", "feature/shared-b", initialBranch]);
         yield* fileSystem.remove(shared, { recursive: true });
 
-        const results = yield* Effect.all(
-          ["feature/shared-a", "feature/shared-b"].map((refName) =>
+        const results = yield* Effect.forEach(
+          ["feature/shared-a", "feature/shared-b"],
+          (refName) =>
             driver
               .createWorktree({ cwd, path: shared, refName, reuseRegisteredPath: true })
               .pipe(Effect.exit),
-          ),
           { concurrency: "unbounded" },
         );
 
@@ -3881,11 +3869,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const fileSystem = yield* FileSystem.FileSystem;
         const pathService = yield* Path.Path;
         const shared = pathService.join(yield* makeTmpDir("git-worktrees-"), "shared");
-        // Both callers resolve the path before either goes further, so without
-        // serialization both pass their checks against the same stale entry.
-        // Then any second admin-entry delete stalls until one recreation has
-        // fully finished: the window in which the second caller would delete
-        // the winner's fresh entry.
+        // Both callers resolve the path first, so without serialization both pass their checks
+        // against the same stale entry. The second admin-entry delete stalls until one recreation
+        // finishes: the window in which it would delete the winner's fresh entry.
         const bothArrived = yield* Deferred.make<void>();
         let arrivals = 0;
         const firstFinished = yield* Deferred.make<void>();
@@ -3925,13 +3911,13 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* git(cwd, ["branch", "feature/held-b", initialBranch]);
         yield* fileSystem.remove(shared, { recursive: true });
 
-        const results = yield* Effect.all(
-          ["feature/held-a", "feature/held-b"].map((refName) =>
+        const results = yield* Effect.forEach(
+          ["feature/held-a", "feature/held-b"],
+          (refName) =>
             driver.createWorktree({ cwd, path: shared, refName, reuseRegisteredPath: true }).pipe(
               Effect.exit,
               Effect.tap(() => Deferred.succeed(firstFinished, undefined)),
             ),
-          ),
           { concurrency: "unbounded" },
         );
 
@@ -4215,7 +4201,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         assert.equal(yield* driver.resolvePrimaryRemoteName(cwd), remoteName);
         yield* driver.fetchRemoteTrackingBranch({ cwd, remoteName, remoteBranch: initialBranch });
         yield* driver.fetchRemote({ cwd, remoteName });
-        const head = yield* driver.fetchPullRequestHeadCommit({ cwd, prNumber: 7 });
+        const head = yield* driver.fetchRefCommit({ cwd, ref: "refs/pull/7/head" });
 
         assert.isFalse(yield* fileSystem.exists((yield* Path.Path).join(cwd, "t3-marker")));
         assert.equal(head.commitSha, yield* git(cwd, ["rev-parse", "HEAD"]));
@@ -4611,7 +4597,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         assert.strictEqual(status.branchChanges?.deletions, 0);
         // gh pr create consumes this setting verbatim as the hosted target branch.
         assert.equal(
-          yield* driver.readConfigValue(worktreePath, "branch.feature/from-upstream.gh-merge-base"),
+          yield* driver.readConfigValue(worktreePath, "branch.feature/from-upstream.t3-merge-base"),
           "release",
         );
         assert.equal(changes.baseRef, "upstream/release");
@@ -4840,7 +4826,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* git(cwd, ["rev-parse", "--abbrev-ref", "@{upstream}"]),
           "origin/feature/x",
         );
-        assert.equal(yield* driver.readConfigValue(cwd, "branch.feature/x.gh-merge-base"), "dev");
+        assert.equal(yield* driver.readConfigValue(cwd, "branch.feature/x.t3-merge-base"), "dev");
 
         const preview = yield* driver.getReviewDiffPreview({ cwd });
         const changes = preview.sources.find((source) => source.kind === "branch-range")!;

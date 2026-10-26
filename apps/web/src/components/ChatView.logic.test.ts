@@ -1146,8 +1146,8 @@ describe("shouldAbortSendBeforeOfflineQueue", () => {
       true,
     );
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, sendInFlight: true })).toBe(true);
-    // Upstream #7949: a Codex feedback upload already running for this thread. Kept in this
-    // helper rather than beside the call so every abort reason stays in one tested place.
+    // A Codex feedback upload already running for this thread. Kept in this helper rather than
+    // beside the call so every abort reason stays in one tested place.
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, feedbackUploadInFlight: true })).toBe(
       true,
     );
@@ -1324,13 +1324,9 @@ describe("nextStopAction", () => {
   });
 
   it("holds the band exactly at both edges", () => {
-    // Pinning the boundaries, because an off-by-one here either resurrects the
-    // reflex case or clips the deliberate one.
-    //
-    // The two constants are pinned by value first. Every assertion below is
-    // written as CONSTANT ± n, so widening the window to a minute would leave
-    // them all green while quietly discarding the decay the safety argument in
-    // `nextStopAction` rests on.
+    // Pin the boundaries: an off-by-one resurrects the reflex case or clips the deliberate one. The
+    // constants are pinned by value first, since every assertion is CONSTANT +/- n and would stay
+    // green if the window widened past the decay `nextStopAction` relies on.
     expect(STOP_ESCALATION_MIN_MS).toBe(500);
     expect(STOP_ESCALATION_WINDOW_MS).toBe(10_000);
 
@@ -1448,15 +1444,9 @@ describe("resolvePendingRevertRestore", () => {
 });
 
 /*
- * `shouldHardStopAfterGrace` and its five tests were DELETED here, not lost.
- *
- * It said the arming RIPENS into an automatic hard stop once a grace period
- * elapses. `nextStopAction` now says the arming EXPIRES after one. Those are
- * opposite semantics over the same state, and it had no production caller — it
- * was tested, dormant code that would have misled whoever wired it next.
- *
- * If timed auto-escalation is ever wanted again it has to be redesigned against
- * the decay band above, not restored from git.
+ * `shouldHardStopAfterGrace` was deleted deliberately: it made the arming RIPEN into a hard stop,
+ * the opposite of `nextStopAction`'s EXPIRING arming. Timed auto-escalation must be redesigned
+ * against the decay band above, not restored from git.
  */
 
 describe("mergeDirectPreviewAnnotation", () => {

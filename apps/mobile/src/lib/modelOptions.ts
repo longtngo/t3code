@@ -136,11 +136,7 @@ function normalizeSelectionOptions(
       };
 }
 
-/**
- * `projectId` has no default: a caller that forgets it would silently check only the
- * machine-wide state and miss a project that turned this instance off. Pass `null` explicitly
- * outside a project's scope.
- */
+/** Require explicit projectId or null so omissions cannot bypass project provider disablement. */
 export function isModelSelectionUnavailable(
   config: T3ServerConfig | null | undefined,
   selection: ModelSelection | null | undefined,
@@ -455,14 +451,9 @@ export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyAr
 }
 
 /**
- * Filter a thread's provider picker to its continuation group: the thread's
- * own group, plus any other group of the same driver that resumes from the
- * same store (equal, non-null `continuationGroupKey`). A missing key never
- * pairs, which also covers web's Antigravity exact-instance rule.
- *
- * The anchor is the live session's instance when it still has a group, else
- * the stored selection's — `buildModelOptions` guarantees a group for the
- * stored selection, so the picker can never come back empty.
+ * Filter the provider picker to the thread's continuation group plus same-driver groups
+ * sharing a non-null `continuationGroupKey`. Anchored on the live session's instance when it
+ * has a group, else the stored selection's, which `buildModelOptions` always groups.
  */
 export function filterThreadProviderGroups(
   groups: ReadonlyArray<ProviderGroup>,

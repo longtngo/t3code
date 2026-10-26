@@ -86,22 +86,10 @@ export const makeSweep = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const settings = yield* ServerSettings.ServerSettingsService;
   const creditSpendGuard = yield* CreditSpendGuard;
-  // "Allow to spend credits" refusing the resume now: skip it instead of sending a turn the
-  // start gate would fail as a non-limit error, which would drop the thread out of recovery
-  // for good. The thread stays a candidate, so the next sweep (every 5 s) tries again.
-  //
-  // While blocked, the check reads the published usage only: a 7-day window can stay full
-  // for days. When the published reading allows the resume, the full gate runs once more
-  // just before the send, so a stale reading cannot let through a resume the start gate
-  // would refuse. Its fresh read publishes what it found, so a refusal there returns the
-  // following sweeps to the cheap published check. Cost: at most one shared fresh read per
-  // instance per sweep, and only while the published reading allows and the fresh one does
-  // not.
-  //
-  // A fresh read that fails or times out leaves the answer unknown, and the start gate's
-  // own read could still refuse (a slow read it joins, or the next read succeeding). So
-  // wait for a later sweep, up to MAX_INCONCLUSIVE_SKIPS in a row per thread; after that
-  // the resume goes out on the published reading, as the start gate itself fails open.
+  // Credit guard refusing: skip rather than send a turn the start gate would fail as a
+  // non-limit error (ending recovery); the next 5 s sweep retries. Blocked threads check only
+  // published usage; when it allows, the full gate runs once more before the send. An
+  // inconclusive fresh read waits up to MAX_INCONCLUSIVE_SKIPS sweeps, then fails open.
   const refusedThreads = new Set<ThreadId>();
   const inconclusiveSkips = new Map<ThreadId, number>();
   const resumeRefused = Effect.fn("UsageLimitRecoveryWorker.resumeRefused")(function* (

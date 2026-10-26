@@ -169,15 +169,9 @@ describe("browser API CORS", () => {
 const layerFileResponse = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
 
 /**
- * Retargeted from upstream #8919's `assetFileResponse` tests. Workspace assets take
- * the fork's Range parser (which also serves audio, clamps each response, and caps
- * the rangeless branch), so its EDGE CASES are asserted against that parser here: a
- * suffix larger than the file, an end past the file, an inverted range, `bytes=-0`,
- * and an empty file.
- *
- * `assetFileResponse` itself is live again as of upstream #9023 — host files outside
- * any workspace resolve to an open descriptor only it can serve from — and keeps its
- * own suite in "video asset byte ranges" below.
+ * Workspace assets take the fork's Range parser (audio, per-response clamps, a capped
+ * rangeless branch), so its edge cases are asserted here. `assetFileResponse` still serves
+ * host files outside any workspace and keeps its suite in "video asset byte ranges" below.
  */
 describe("asset byte ranges (retargeted from upstream #8919)", () => {
   const SIZE = 10;
@@ -235,9 +229,7 @@ const makeStaticRequest = Effect.fn("HttpTest.makeStaticRequest")(function* (sta
     ServerHttp.layerStaticAndDevRoute,
     ServerHttp.layerHttpCompression,
   ).pipe(Layer.provideMerge(NodeHttpPlatform.layer));
-  // HttpRouter.serve reuses services from the layers around it before the
-  // app's own, and NodeHttpServer.layerTest brings a real FileSystem, so the
-  // caller's FileSystem and static directory go between the two.
+  // HttpRouter.serve prefers outer services; inject the test FileSystem between it and NodeHttpServer.layerTest.
   const services = yield* Layer.build(
     HttpRouter.serve(layerApp, { disableListenLog: true }).pipe(
       Layer.provideMerge(ServerConfig.layer({ ...config, staticDir })),
@@ -719,9 +711,22 @@ describe("video asset byte ranges", () => {
       const image = HttpServerResponse.toWeb(
         yield* assetFileResponse({ path: file, mimeType: "image/png" }, "bytes=0-1"),
       );
-      expect(image.status).toBe(200);
-      expect(image.headers.has("accept-ranges")).toBe(false);
-      expect(yield* Effect.promise(() => image.text())).toBe("0123456789");
+      expect(image.status).toBe(206);
+      expect(image.headers.get("accept-ranges")).toBe("bytes");
+      expect(yield* Effect.promise(() => image.text())).toBe("01");
+      for (const mimeType of ["text/plain", "text/csv", "application/octet-stream"]) {
+        for (const [range, expected, status] of [
+          ["bytes=2-5", "2345", 206],
+          ["bytes=-3", "789", 206],
+          ["bytes=10-", "", 416],
+        ] as const) {
+          const result = HttpServerResponse.toWeb(
+            yield* assetFileResponse({ path: file, mimeType }, range),
+          );
+          expect(result.status).toBe(status);
+          expect(yield* Effect.promise(() => result.text())).toBe(expected);
+        }
+      }
     }).pipe(Effect.provide(layerFileResponse)),
   );
 
@@ -870,12 +875,9 @@ describe("classifyViewerPath", () => {
 });
 
 describe("isGrantableViewerAssetDirectory", () => {
-  // Identities, not paths. Every earlier version of this guard compared strings and
-  // was defeated by another spelling of the same directory — case, Unicode
-  // normalization, duplicate separators — until a macOS firmlink showed the premise
-  // was wrong: /System/Volumes/Data/Users/me IS /Users/me, shares no prefix, and
-  // survives realpath unchanged. Verified on a real machine: both report
-  // dev 16777234, ino 302769.
+  // Identities, not paths. Every string comparison here was defeated by another spelling of
+  // the same directory; a macOS firmlink (/System/Volumes/Data/Users/me IS /Users/me, no
+  // shared prefix, unchanged by realpath) showed the premise was wrong.
   const root = { dev: 1, ino: 2 };
   const users = { dev: 1, ino: 10 };
   const home = { dev: 1, ino: 20 };
@@ -940,11 +942,9 @@ describe("classifyViewerAssetPath", () => {
   });
 
   it("still admits non-secret-looking files anywhere under the grant", () => {
-    // Recording the residual, because the allow-list narrows this capability
-    // rather than removing it: a `.json` outside a dot-directory is readable
-    // anywhere below the grant. That is why the grant itself is bounded — see
-    // isGrantableViewerAssetDirectory — and why closing it properly needs a real
-    // CSP rather than a filename filter.
+    // The residual: a `.json` outside a dot-directory is readable anywhere below the grant.
+    // That is why the grant is bounded (isGrantableViewerAssetDirectory), and closing it
+    // properly needs a real CSP, not a filename filter.
     expect(
       classifyViewerAssetPath("/Users/me/proto", "/Users/me/proto/deep/nested/data.json"),
     ).not.toBeNull();
@@ -1049,13 +1049,9 @@ describe("downloadContentDisposition", () => {
 });
 
 describe("resolveViewerAssetGrantDecision", () => {
-  // Drives the REAL decision — the ancestor walk, the containment probe, and the
-  // null handling — over a fake filesystem that can express the thing that broke
-  // it four times: one directory reachable by two unrelated paths.
-  //
-  // Every bypass in this guard's history was found by running it against a real
-  // machine, and none by the suite, because the suite only ever exercised the
-  // two-line comparison at the end. This is the shape that could have caught them.
+  // Drives the REAL decision (ancestor walk, containment probe, null handling) over a fake
+  // filesystem where one directory is reachable by two unrelated paths. Every past bypass was
+  // that shape, and the suite missed them all by testing only the final comparison.
   const dirname = (path: string) => {
     const trimmed = path.length > 1 ? path.replace(/\/+$/, "") : path;
     const cut = trimmed.lastIndexOf("/");
@@ -1100,13 +1096,9 @@ describe("resolveViewerAssetGrantDecision", () => {
   });
 
   it("does NOT cover an alias grandparent, which is the documented residual", () => {
-    // "/alias" contains home too, but the containment probe tests one candidate —
-    // join("/alias", "Users/me") — and home sits at "data/Users/me" below it, so
-    // the probe misses. This is the real /System and /System/Volumes case, which
-    // is judged unexploitable only because those are root-owned on a sealed
-    // read-only volume. Asserted so the docstring's limitation is executable
-    // rather than prose, and so widening the probe later shows up as a failure
-    // here rather than passing unnoticed.
+    // "/alias" contains home too, but the probe tests only join("/alias", "Users/me") and misses.
+    // This is the real /System case, unexploitable only because it is a sealed root-owned volume.
+    // Asserted so widening the probe later shows up as a failure here.
     expect(decide("/alias")).toBe(true);
   });
 
@@ -1302,11 +1294,9 @@ describe("viewer route auth ordering", () => {
     });
   });
 
-  // Pins the ORDER, not just the condition. A mutation run showed the waiver
-  // assertion below survives both "delete the auth call entirely" and "move the
-  // stat ahead of it" — the two failures whose whole cost is an unauthenticated
-  // existence and size oracle. This asserts the video branch's first filesystem
-  // call comes after the auth call in the route body.
+  // Pins the ORDER, not just the condition: a mutation run showed the waiver assertion
+  // survives deleting the auth call and moving the stat ahead of it. Asserts the video
+  // branch's first filesystem call comes after the auth call.
   it("authenticates before the video branch touches the filesystem", () => {
     const source = NodeFS.readFileSync(new URL("./http.ts", import.meta.url), "utf8");
     const routeStart = source.indexOf("export const viewerRouteLayer");
@@ -1322,12 +1312,9 @@ describe("viewer route auth ordering", () => {
     expect(route.slice(videoBranchIndex)).toContain("fileSystem.stat(absolutePath)");
   });
 
-  // Replaces a guard that used to check every byte kind was excluded from a
-  // local-process waiver. The waiver is gone: a co-located reverse proxy is
-  // indistinguishable from a local process at every signal the server can read, and
-  // seven of eight measured proxy configurations handed a remote unauthenticated
-  // visitor the contents of any readable file. What has to be pinned now is that no
-  // condition of any shape gets in front of the auth call again.
+  // A co-located reverse proxy is indistinguishable from a local process, and seven of eight
+  // measured proxy configurations let a remote unauthenticated visitor read any file through a
+  // local-process waiver. Pins that no condition of any shape precedes the auth call again.
   it("authenticates unconditionally, with no branch ahead of the auth call", () => {
     const source = NodeFS.readFileSync(new URL("./http.ts", import.meta.url), "utf8");
     // A waiver predicate must not come back under any name.
@@ -1347,18 +1334,10 @@ describe("viewer route auth ordering", () => {
     expect(firstKindBranch).toBeGreaterThan(-1);
     expect(authIndex).toBeLessThan(firstKindBranch);
 
-    // The two assertions above pin the auth call's own shape and the kind
-    // branches, and between them they still let the deleted bypass back in:
-    // `if (looksLocal(request)) return yield* serve();` placed ABOVE the auth
-    // call leaves that call unindented and keyed on nothing, so both pass. An
-    // early exit IS the bypass, whatever it is named, so the route may contain
-    // exactly the two documented early returns before it authenticates.
-    //
-    // Line-based and comment-skipping on purpose. A substring scan anchored at
-    // the destructuring had two holes: prose in the long comment above the auth
-    // call turned it red on the word "returns", and a bypass placed above the
-    // destructuring (reading `target.absolutePath` directly) sat outside the
-    // window entirely.
+    // The assertions above still let a bypass back in above the auth call, so the route may
+    // contain exactly the two documented early returns before it authenticates. Line-based and
+    // comment-skipping on purpose: a substring scan tripped on prose and missed a bypass placed
+    // above the destructuring.
     const earlyReturns = route
       .slice(0, authIndex)
       .split("\n")
@@ -1367,15 +1346,10 @@ describe("viewer route auth ordering", () => {
         if (line.startsWith("//") || line.startsWith("*") || line.startsWith("/*")) return false;
         return /\breturn\b/.test(line);
       });
-    // Both are 400s, and both must stay ahead of auth so that an unreadable URL
-    // or an unsupported extension is not reported as "not signed in". The status
-    // check is load-bearing, not decoration: without it, swapping a bypass IN for
-    // one of these two keeps the count at 2 and passes.
-    //
-    // If this fails on the `status: 400` assertion rather than the count, suspect
-    // the formatter before the code. The `!target` return sits ~90 chars against a
-    // 100-char width, so lengthening that message wraps `status: 400` onto its own
-    // line and fails here with a message that does not say so.
+    // Both 400s stay ahead of auth so a bad URL or extension is not reported as "not signed in".
+    // The status check stops a bypass swapped in for one of them from keeping the count at 2.
+    // If this fails on `status: 400` rather than the count, suspect the formatter wrapping the
+    // `!target` return (it sits near the line width).
     expect(earlyReturns).toHaveLength(2);
     for (const line of earlyReturns) {
       expect(line).toContain("status: 400");

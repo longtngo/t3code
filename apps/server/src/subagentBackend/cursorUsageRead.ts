@@ -1,14 +1,7 @@
 /**
- * cursorUsageRead — the Cursor account's overall usage window for the Subagents panel,
- * reduced to the wire-shaped `CursorUsageSnapshot`.
- *
- * Read from the provider registry's Cursor snapshot, whose `usageLimits` the Cursor
- * driver fills on every provider probe (`readCursorUsageLimits`). The panel therefore
- * shows the same numbers, at the same freshness, as the Vitals gauge, and opening it
- * makes no request of its own. Nothing to show — no Cursor instance, not signed in,
- * usage unavailable, or no "Overall" window — resolves to `null`, never an error.
- *
- * @module subagentBackend/cursorUsageRead
+ * The Cursor account's Overall usage window for the Subagents panel, read from the provider
+ * registry's snapshot so it matches the Vitals gauge and makes no request of its own.
+ * Nothing to show (no instance, signed out, no Overall window) resolves to `null`, never an error.
  */
 import type { CursorUsageSnapshot, ServerProvider } from "@t3tools/contracts";
 import { cursorTotalUsageLimits } from "@t3tools/shared/usageLimits";

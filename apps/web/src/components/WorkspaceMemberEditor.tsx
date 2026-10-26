@@ -66,11 +66,9 @@ interface WorkspaceMemberEditorProps {
 }
 
 /**
- * The one editor on either surface — the project settings page and the legacy
- * sidebar's dialog: it attaches a repository, or edits the one selected from the
- * list. The caller remounts it (via `key`) when the target
- * changes, so the draft state below always starts from the right values without
- * a synchronizing effect.
+ * The one editor on both surfaces (project settings and the legacy sidebar dialog): attaches a
+ * repository or edits the selected one. The caller remounts it via `key` when the target
+ * changes, so the draft state starts from the right values without a syncing effect.
  */
 export default function WorkspaceMemberEditor({
   environmentId,
@@ -130,12 +128,9 @@ export default function WorkspaceMemberEditor({
       : entries;
   }, [browseDenied, browsePath.canBrowseUp, browsePath.parentPath, visibleEntries]);
 
-  // Integration branch
-  // Debounced, not deferred. `useDeferredValue` is a scheduling hint: it catches
-  // up on the very next transition render, so the previous version here fired
-  // one `vcs.listRefs` — a real git spawn, almost always against a directory
-  // that does not exist yet — for every character typed, and left one live atom
-  // per prefix behind it.
+  // Integration branch. Debounced, not deferred: `useDeferredValue` catches up on the next
+  // transition render, so it fired one `vcs.listRefs` git spawn per keystroke (usually against
+  // a path that does not exist yet) and left one live atom per prefix.
   const [debouncedPath] = useDebouncedValue(path, { wait: BRANCH_QUERY_DEBOUNCE_MS });
   const branchCwd = useMemo(() => resolveMemberCwd(debouncedPath), [debouncedPath]);
   const refsQuery = useEnvironmentQuery(
@@ -197,12 +192,9 @@ export default function WorkspaceMemberEditor({
       className="rounded-lg border border-border/70 bg-muted/40 p-3"
       onKeyDownCapture={(event) => {
         if (event.key !== "Escape") return;
-        // While a suggestion list is up, Escape belongs to the list — Base UI
-        // closes it from a document-level listener. Otherwise cancel the whole
-        // editor, and do it in the capture phase: on a bubbling Escape the
-        // combobox input first wipes its own value, and once a suggestion has
-        // been selected it stops the event outright, so a bubble-phase handler
-        // would see an already-cleared field or no event at all.
+        // While a suggestion list is up, Escape belongs to the list (Base UI closes it from a
+        // document listener). Otherwise cancel the editor in the CAPTURE phase: on bubble the
+        // combobox has already cleared its value, or stopped the event after a selection.
         if (isPathOpen || isBranchOpen) return;
         event.preventDefault();
         event.stopPropagation();
@@ -227,11 +219,8 @@ export default function WorkspaceMemberEditor({
           filter={null}
           items={pathItems}
           onOpenChange={(nextOpen, details) => {
-            // Selecting a folder descends into it, so the list must stay up to
-            // show what is inside rather than closing on every step down.
-            // Re-opening from `onValueChange` did not work: the library calls
-            // the value change first and its own close second, so the close won
-            // the batch and the popup shut on every step down.
+            // Selecting a folder descends into it, so the list must stay open. Re-opening from
+            // `onValueChange` lost the batch to the library's own close, which runs second.
             if (!nextOpen && details.reason === "item-press") return;
             setIsPathOpen(nextOpen);
           }}

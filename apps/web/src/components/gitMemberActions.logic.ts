@@ -1,12 +1,9 @@
 import type { WorkspaceMemberBranchReport, WorkspaceMemberPrBaseSource } from "@t3tools/contracts";
 
 /**
- * Whether a git action may run against an attached repository, and why not.
- *
- * Members are shared long-lived checkouts, so the answer is about the state of
- * someone else's work rather than about permissions: a repository another
- * thread has already moved onto its own branch is the one case where running
- * here would quietly mix two efforts together.
+ * Whether a git action may run against an attached repository, and why not. Members are
+ * shared checkouts: a repository another thread already moved onto its own branch is the one
+ * case where running here would quietly mix two efforts together.
  */
 export type MemberActionGate =
   | { readonly kind: "allowed" }

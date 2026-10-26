@@ -1,17 +1,7 @@
 /**
- * Browsable listing of a directory addressed by ABSOLUTE path.
- *
- * Rendered by the file viewers when the path they were asked to open turns out
- * to be a folder, so a folder chip in chat opens something useful instead of a
- * read error.
- *
- * Each level is one `filesystem.browse` call with `includeFiles`, fetched when
- * the row is expanded. That is deliberate: the recursive workspace listing
- * (`projects.listEntries`) is a ranked search index that drops dotfiles and
- * images outside a git repo and pins a native index plus an FS watcher for
- * fifteen minutes, which makes it wrong for "show me what is in this folder".
- *
- * @module DirectoryListingView
+ * Browsable listing of a directory by ABSOLUTE path, shown when a viewer's path is a folder.
+ * Each level is one `filesystem.browse` with `includeFiles`, fetched on expand: the recursive
+ * `projects.listEntries` is a ranked index that drops dotfiles and pins a watcher for 15 min.
  */
 import { ChevronDown, ChevronRight, LoaderCircle } from "lucide-react";
 import { useState } from "react";

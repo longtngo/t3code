@@ -43,7 +43,10 @@ const countingAttempt = (makeError: () => { readonly _tag: string }, failTimes: 
   Effect.gen(function* () {
     const ref = yield* Ref.make(0);
     const attempt = Ref.updateAndGet(ref, (n) => n + 1).pipe(
-      Effect.flatMap((n) => (n <= failTimes ? Effect.fail(makeError()) : Effect.succeed(n))),
+      Effect.filterOrFail(
+        (n) => n > failTimes,
+        () => makeError(),
+      ),
     );
     return { ref, attempt } as const;
   });

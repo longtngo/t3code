@@ -1,5 +1,6 @@
 import { type RuntimeRequestId, type ScopedThreadRef } from "@t3tools/contracts";
-import { memo, useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import { memo, use, useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import { BackgroundThreadContext } from "./backgroundThread";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { type PendingUserInput } from "../../session-logic";
 import {
@@ -92,11 +93,9 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   const advance = useStableCallback(onAdvance);
   const optionsListRef = useRef<HTMLDivElement | null>(null);
   const optionsListId = useId();
-  // Collapsing hides the options so the conversation behind the panel can be
-  // read before answering. The panel is keyed by `requestId`, so it does NOT
-  // remount when `questionIndex` advances within a multi-question prompt.
-  // Storing the collapsed question's id rather than a bare flag is the reset:
-  // a collapse never carries over to hide the next question's options.
+  // Collapsing hides the options so the thread behind can be read. The card is keyed by
+  // `requestId` and does not remount as `questionIndex` advances, so storing the collapsed
+  // question's id (not a flag) is the reset: a collapse never hides the next question's options.
   const [collapsedQuestionId, setCollapsedQuestionId] = useState<string | null>(null);
   const [optimisticSingleSelect, setOptimisticSingleSelect] = useState<{
     questionId: string;
@@ -168,10 +167,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   };
 
   const selectOptionFromShortcut = useEffectEvent(handleOptionSelection);
+  const backgroundThread = use(BackgroundThreadContext);
 
   useEffect(() => {
     // FORK: no `isCollapsed` bail - the options list stays mounted through a collapse.
-    if (!activeQuestion || responseDisabled) return;
+    if (!activeQuestion || responseDisabled || backgroundThread) return;
     const handler = (event: globalThis.KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
@@ -195,7 +195,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, responseDisabled]);
+  }, [activeQuestion, backgroundThread, responseDisabled]);
 
   if (!activeQuestion) {
     return null;
@@ -332,6 +332,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             <button
               key={`${activeQuestion.id}:${optionValue}`}
               type="button"
+              aria-pressed={isSelected}
               data-option-index={index}
               disabled={disabled || isResponding}
               onClick={() => {

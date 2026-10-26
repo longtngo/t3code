@@ -6,11 +6,9 @@ import { vi } from "vite-plus/test";
 import { listCursorModels, peekCursorModels } from "./cursorModels.ts";
 import { modelsForPersistedBackend, type PersistedBackend } from "./SubagentBackend.ts";
 
-// vi.mock is hoisted above every import, so `modelsForPersistedBackend`'s calls to
-// `listCursorModels`/`peekCursorModels` already resolve to these mocks. The `die`
-// default on `listCursorModels` is the tripwire this file exists for: a `get`
-// (refresh: false) that regresses into probing unconditionally kills the fiber
-// instead of quietly passing.
+// vi.mock is hoisted, so `modelsForPersistedBackend` already calls these mocks. The `die`
+// default on `listCursorModels` is the tripwire: a `get` (refresh: false) that starts
+// probing kills the fiber instead of quietly passing.
 vi.mock("./cursorModels.ts", () => ({
   listCursorModels: vi.fn(() =>
     Effect.die("listCursorModels should not run when refresh is false"),

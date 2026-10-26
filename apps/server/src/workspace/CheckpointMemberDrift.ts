@@ -3,26 +3,10 @@ import type { CheckpointMemberState } from "@t3tools/contracts";
 import type { MemberBranchState } from "./MemberBranches.ts";
 
 /**
- * Why a member blocks the revert.
- *
- * `changed` is a positive observation: the server read the repository both
- * times and the answers differ. `unobserved` is the absence of one: the server
- * never managed to read it, so it cannot say whether anything moved. They are
- * different things to tell the user, and collapsing them makes the refusal
- * assert a change nobody saw.
- *
- * `unobserved` recorded at capture time is DURABLE, and deliberately so: a
- * checkpoint whose member was never read can never be shown to be restorable, so
- * it blocks that revert permanently. One transient git timeout during one capture
- * therefore costs that checkpoint, with no override. That is the fail-safe
- * direction, but it is a real cost - if it proves too sharp, the fix is a way to
- * re-observe a checkpoint, not a softer reading of absence.
- *
- * Detaching that member does not clear the record, and detaching it does not have
- * to: this comparison walks the RECORDED list, so a member that is gone from the
- * live workspace is still drift. But the caller only consults this at all while
- * the live workspace still has at least one member (`WorkspaceMemberHooks`), so
- * detaching every member skips the check rather than passing it.
+ * `changed` means both reads differ; `unobserved` means the server never read it, so the refusal
+ * must not claim a change. Unobserved at capture is DURABLE: that checkpoint can never be restored
+ * (fail-safe; fix by re-observing, not softening). Detaching a member does not clear it, but with
+ * no live members the caller skips the check entirely.
  */
 export type CheckpointDriftReason = "changed" | "unobserved";
 
@@ -32,14 +16,9 @@ export interface CheckpointDriftMember {
 }
 
 /**
- * Whether restoring the staging checkpoint alone still produces the tree the
- * checkpoint describes.
- *
- * Checkpoints are staging-only by design, and dropping cross-repo capture does
- * not drop the hazard: a revert that restores staging while member repositories
- * have moved leaves an inconsistent tree behind a UI that implies a clean undo.
- * Completeness is therefore a property of what the turn actually touched, not of
- * whether the project happens to be a workspace.
+ * Whether restoring the staging checkpoint alone still produces the tree it describes. A revert
+ * restoring staging while member repositories moved leaves an inconsistent tree behind a UI that
+ * implies a clean undo, so completeness depends on what the turn touched.
  */
 export interface CheckpointDrift {
   /** Members whose head moved, whose tree changed state, or that were unreadable. */
@@ -66,11 +45,8 @@ export function resolveCheckpointDrift(
       driftedMembers.push({ memberId: state.memberId, reason: "changed" });
       continue;
     }
-    // An unobserved head on either side is checked on its own, BEFORE the
-    // equality below. Two unobserved states are not evidence of sameness —
-    // `undefined === undefined` would read as "nothing moved", which is this
-    // very defect reintroduced one level down. Reaching the equality at all
-    // therefore means both sides were really read.
+    // An unobserved head on either side is checked BEFORE the equality below: two unobserved states
+    // are not evidence of sameness, so reaching the equality means both sides were really read.
     if (state.headSha === undefined || now.headSha === undefined) {
       driftedMembers.push({ memberId: state.memberId, reason: "unobserved" });
       continue;
@@ -83,16 +59,9 @@ export function resolveCheckpointDrift(
 }
 
 /**
- * Drift for a revert to turn 0, which asks a different question.
- *
- * No checkpoint is ever projected for turn count 0, so there is no recorded
- * baseline to compare against — comparing state would report "no claim" and wave
- * through the deepest revert of all. This asks instead: is any member still
- * carrying this thread's work?
- *
- * `unavailable` is not an all-clear. `inspect` never fails, so a member that
- * could not be read answers exactly like a clean one, and treating that as fine
- * is the same defect this module exists to prevent on the recorded path.
+ * Drift for a revert to turn 0. No checkpoint exists for turn 0, so this asks instead whether any
+ * member still carries this thread's work. `unavailable` is not an all-clear: `inspect` never
+ * fails, so an unreadable member would otherwise answer like a clean one.
  */
 export function resolveTurnZeroDrift(
   reports: ReadonlyArray<{
@@ -112,17 +81,9 @@ export function resolveTurnZeroDrift(
 }
 
 /**
- * Whether a revert has to consult the member comparison at all.
- *
- * Turn 0 asks whether any LIVE member still carries this thread's work, so with
- * none attached there is nothing to carry it and nothing to check.
- *
- * Every other turn compares against what the checkpoint RECORDED, and
- * `resolveCheckpointDrift` deliberately treats a member that has since been
- * detached as drift - the revert cannot deliver a state the workspace no longer
- * has. Keying the decision on the live members alone contradicted that: detaching
- * ONE member refused the revert, and detaching them ALL skipped the check and
- * allowed it. The recorded side has to count too.
+ * Whether a revert must consult the member comparison. Turn 0 needs a live member; other turns
+ * compare against the RECORDED members, where a detached one counts as drift. Keying on live
+ * members alone refused the revert after detaching one member and allowed it after detaching all.
  */
 export function shouldCheckMemberDrift(input: {
   readonly isTurnZero: boolean;

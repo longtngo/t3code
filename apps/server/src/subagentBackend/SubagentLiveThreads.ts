@@ -1,26 +1,8 @@
 /**
- * SubagentLiveThreads — the threads whose Claude process opened in this server process,
- * and the bridge that lets a Claude adapter prepare a thread's offload state.
- *
- * On `personal` the reconciler enumerated live sessions through the V1 adapter registry's
- * `listSessions()`. V2 sessions live in `ProviderSessionManagerV2`, and the only processes
- * that read a thread flag file are Claude processes spawned with `SUBAGENT_BACKEND_STATE`,
- * so the set that matters is exactly the threads `prepareThreadBackend` ran for. It lives
- * for the process and never shrinks: a thread whose process later closed stays listed,
- * and rewriting its file is harmless. That is deliberately unbounded because it is
- * small: the set is read only by the reconciler, which runs on a settings change, and it
- * can hold at most every thread that ran a Claude turn in this process — 673 threads in
- * the developer's whole install history (2026-10-03), so at worst a few hundred
- * sub-kilobyte file writes per settings save.
- *
- * Adapters are built below the runtime services in the layer graph, so they cannot require
- * this service. The bridge follows `McpSessionRegistry`'s module-level active-instance
- * precedent: the layer registers a preparer on build and clears it on release, and
- * `prepareActiveSubagentThreadBackend` returns `undefined` when no layer is live, which a
- * Claude adapter reads as "no offload" — the session prompt and environment stay
- * byte-identical to a build without this feature.
- *
- * @module subagentBackend/SubagentLiveThreads
+ * Threads whose Claude process opened in this server process. Never shrinks: it is small and
+ * read only by the reconciler on a settings change. Adapters sit below this service in the layer
+ * graph, so the layer registers a module-level preparer; `undefined` (no live layer) means
+ * "no offload", leaving the session prompt and environment byte-identical.
  */
 import type { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";

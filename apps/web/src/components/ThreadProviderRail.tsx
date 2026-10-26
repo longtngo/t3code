@@ -27,19 +27,10 @@ function useThreadProvider(thread: RowThread): ThreadProviderPresentation | unde
 }
 
 /**
- * Permanent per-thread provider indicator: a thin vertical bar pinned to the row's leading edge,
- * filled with the provider instance's accent colour.
- *
- * Absolutely positioned so it costs no horizontal space and no row content shifts to make room —
- * the row it sits in supplies the positioning context.
- *
- * The `inset-y-1.5` is load-bearing, not spacing taste: every row surface is `rounded-md` (a 6px
- * radius) and the v2 rows additionally clip with `overflow-hidden`, so a rail inset by less than
- * the radius gets its ends eaten by the corner curve. 6px is the smallest inset that clears it on
- * all three surfaces, which is why one value serves them all.
- *
- * Renders nothing when the provider has no usable accent — a neutral bar on those rows would be
- * visual weight carrying no information.
+ * Permanent per-thread provider bar on the row's leading edge in the instance's accent colour,
+ * absolutely positioned so nothing shifts. `inset-y-1.5` is load-bearing: rows are `rounded-md`
+ * (6px) and v2 rows clip, so a smaller inset loses the bar's ends to the corner. Renders
+ * nothing without a usable accent.
  */
 export function ThreadProviderRail({
   thread,
@@ -68,12 +59,8 @@ export function ThreadProviderRail({
 }
 
 /**
- * Monogram shown beside the title *only* on rows whose provider accent is shared with another
- * configured instance — the rows where the rail's colour cannot decide on its own.
- *
- * Deliberately conditional: an always-present chip was rejected as too busy, and on a typical
- * configuration almost every accent is unique, so this renders on a small minority of rows.
- * The rail carries the identity everywhere; this only breaks ties.
+ * Monogram beside the title only on rows whose accent is shared with another configured
+ * instance, where the rail's colour cannot decide alone. Always-on was rejected as too busy.
  */
 export function ThreadProviderChip({
   thread,

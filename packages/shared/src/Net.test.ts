@@ -126,11 +126,9 @@ it.layer(NetService.layer)("NetService", (it) => {
     it.effect("reserveLoopbackPort returns a port both loopback families accept", () =>
       Effect.gen(function* () {
         const net = yield* NetService.NetService;
-        // The two helpers used to disagree about the same number: the reserve
-        // binds ONE family, `isPortAvailableOnLoopback` demands both, and the
-        // kernel keeps a separate ephemeral space per family. Arm that by
-        // parking IPv6-only listeners on the ports the v4 allocator is about to
-        // walk through, so a single-family reserve lands on one of them.
+        // The reserve binds ONE family while `isPortAvailableOnLoopback` demands both, with separate
+        // ephemeral spaces per family. Park IPv6-only listeners on the ports the v4 allocator will walk,
+        // so a single-family reserve lands on one of them.
         const probe = yield* net.reserveLoopbackPort("127.0.0.1");
         const held = yield* Effect.forEach(
           [1, 2, 3, 4, 5].map((offset) => probe + offset),

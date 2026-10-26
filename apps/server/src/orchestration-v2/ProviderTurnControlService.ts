@@ -48,13 +48,9 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
 const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 
 /**
- * FORK Stop ladder: how long the cooperative rung gets to END the turn before
- * it escalates to the hard stop. Sized on the fork's live V1 event log
- * (2026-10-02, 572 Claude cooperative interrupts, request to session leaving
- * `running`): 363 settled within 0.5 s, 491 within 5 s, 493 within 8 s and only
- * 4 more by 15 s. The 79 that missed 8 s were wedges, not slow stops: users
- * force-stopped 72 of them by hand, a median 2.7 s after the first press.
- * Same value as the fork's `INTERRUPT_REQUEST_GRACE`.
+ * FORK Stop ladder: grace for the cooperative rung before the hard stop. From 572 live
+ * interrupts: 491 settled within 5 s, 493 within 8 s; the 79 slower were wedges users
+ * force-stopped (median 2.7 s). Same value as `INTERRUPT_REQUEST_GRACE`.
  */
 export const COOPERATIVE_INTERRUPT_GRACE = Duration.seconds(8);
 const COOPERATIVE_SETTLE_POLL = Duration.millis(100);
@@ -307,16 +303,13 @@ export const layer: Layer.Layer<
               },
             );
           }
-          // A settled turn reaches its adapter too: only the adapter knows
-          // whether it still runs work for the thread, and each one either
-          // stops it or reports there is nothing left to stop.
+          // Settled turns still reach adapters, which alone know whether background work remains.
           yield* session.value.interruptTurn({
             providerThread: loaded.providerThread,
             providerTurnId: loaded.providerTurn.id,
             requestRuntimeRestart: true,
           });
-          // The wait is real time: ingestion runs on other fibers and never
-          // advances a test clock, so a test clock would hold Stop forever.
+          // Use real time; ingestion fibers do not advance TestClock and would leave Stop blocked.
           yield* Effect.gen(function* () {
             const deadline = (yield* Clock.currentTimeMillis) + 2_000;
             while (
@@ -353,9 +346,7 @@ export const layer: Layer.Layer<
         function* (input) {
           const loaded = yield* load({ ...input, operation: "restart" });
           if (Option.isNone(loaded.session)) {
-            // No live adapter: nothing can emit a terminal provider-turn update
-            // from interrupt. Do not poll for projection terminalization or the
-            // restart effect stalls; let detach/start proceed.
+            // Without a live adapter, no terminal event can arrive; proceed to detach/start without polling.
             if (loaded.providerTurn.status === "running") {
               yield* Effect.logWarning(
                 "Provider restart interrupt skipped; no live session for a still-projected running turn",
@@ -391,10 +382,7 @@ export const layer: Layer.Layer<
             ) {
               return;
             }
-            // Provider terminal events are projected on a detached ingestion
-            // fiber. Yield through the Node event loop instead of sleeping on
-            // Effect's clock so deterministic runtimes cannot deadlock a
-            // command that is waiting for that projection.
+            // Yield through Node's event loop; detached ingestion cannot advance a deterministic Effect clock.
             yield* yieldToRuntime;
           }
           return yield* new ProviderTurnControlError({

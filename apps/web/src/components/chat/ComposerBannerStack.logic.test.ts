@@ -36,7 +36,7 @@ describe("arrangeComposerBannerStack", () => {
     expect(ids(arranged.folded)).toEqual(["update-available", "branch-changed"]);
   });
 
-  // Upstream #18919: a warning or urgent notice is never hidden behind an activity banner.
+  // A warning or urgent notice is never hidden behind an activity banner.
   it("puts urgent and warnings ahead of activity, and activity ahead of plain notices", () => {
     const arranged = arrangeComposerBannerStack([
       banner("plain"),

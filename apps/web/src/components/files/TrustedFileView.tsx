@@ -1,23 +1,8 @@
 /**
- * Read-only view of a file addressed by ABSOLUTE path, read through the trusted
- * read RPC.
- *
- * That RPC applies NO path sandbox — anything the server process can read, it
- * will read. The boundary is the `orchestration:read` scope on the request, not
- * a root allow-list; `WorkspaceFileSystem.readTrustedFile` records why the old
- * allow-list was removed. An earlier version of this comment described a home /
- * OS-temp / trusted-roots sandbox that no longer exists.
- *
- * This is the renderer behind both the standalone `/viewer/$` route and the
- * right panel's trusted-file surface, so a report opened from a chat message
- * looks the same wherever it lands.
- *
- * Distinct from `FilePreviewPanel`, which is an *editor* for files inside the
- * workspace, keyed on `(environmentId, cwd, relativePath)`. Files outside the
- * workspace have no workspace-relative path and no write RPC, so they get this
- * read-only surface rather than a disabled editor.
- *
- * @module TrustedFileView
+ * Read-only view of a file by ABSOLUTE path through the trusted read RPC, which has NO path
+ * sandbox: the boundary is the `orchestration:read` scope (see `readTrustedFile`). Renders both
+ * the `/viewer/$` route and the right panel's trusted-file surface; editable workspace files
+ * use `FilePreviewPanel` instead.
  */
 import { LoaderCircle, RotateCcwIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
@@ -77,36 +62,23 @@ export interface TrustedFileViewProps {
 }
 
 /**
- * How this view renders a path.
- *
- * `.mdx` is deliberately routed through `isMarkdownPreviewFile` rather than the
- * shared classifier, which covers only `md|markdown` — dropping it would silently
- * demote `.mdx` from rendered markdown to source. Everything unclassified falls
- * through to `code`, which is what keeps `Makefile` / `Dockerfile` / unlisted
- * extensions viewable through the address bar.
+ * How this view renders a path. `.mdx` goes through `isMarkdownPreviewFile` because the shared
+ * classifier covers only `md|markdown`. Everything unclassified falls through to `code`, which
+ * keeps `Makefile`, `Dockerfile` and unlisted extensions viewable.
  */
 type TrustedViewKind = "markdown" | "html" | "image" | "video" | "audio" | "code";
 
 /**
- * What a raw-byte view (image, video, rendered HTML) shows for one render.
- *
- * A raw-byte kind never issues the text read, so `file.error` is permanently null
- * for one and the media element's own `onError` is its only failure signal. That
- * signal used to end at a "could not be played" notice, which made a DIRECTORY
- * named `demo.mp4` — a real shape, same as `shots.png` — a dead player instead of
- * the listing the text path has always shown for a folder. Pure so the table is
- * testable; nothing here guesses from the name, the listing probe answers it.
+ * What a raw-byte view (image, video, rendered HTML) shows for one render. A raw-byte kind
+ * never issues the text read, so its media `onError` is the only failure signal, and a
+ * DIRECTORY named `demo.mp4` must reach the listing probe rather than a dead player.
  */
 export type RawMediaOutcome = "connecting" | "media" | "listing" | "probing" | "failed";
 
 /**
- * Whether a path that would not open as a regular file should be probed as a
- * directory.
- *
- * Both failure signals count, and that is the whole fix: the text read reports
- * through `readError`, but a raw-byte kind never issues that read, so a failed
- * <img>/<video> is the only signal it can ever produce. Arming on `readError`
- * alone left every media-named directory permanently unprobed.
+ * Whether a path that would not open as a regular file should be probed as a directory. Both
+ * failure signals count: a raw-byte kind never issues the text read, so a failed <img>/<video>
+ * is its only signal, and arming on `readError` alone left media-named directories unprobed.
  */
 export function shouldProbeForDirectory(input: {
   readonly readError: string | null;
@@ -179,16 +151,10 @@ function TrustedFileViewContents({
   // error branch below cannot see a failed <video>. Without this, a 404, 413, 416
   // or 401 renders as a silent dead player.
   const [rawMediaFailed, setRawMediaFailed] = useState(false);
-  // A read only fails on a path the server could not open as a regular file, so
-  // every failure is a directory candidate. Asking for the listing is both the
-  // question and the answer: it succeeds for a folder, and for anything else it
-  // fails and the read error below stands. Nothing here guesses from the name —
-  // `Makefile`, `LICENSE` and `.env` are all files that look like folders.
-  //
-  // A raw-byte kind never issues the text read, so `file.error` is permanently
-  // null for one and `rawMediaFailed` is its only failure signal. Both feed the
-  // probe, because a DIRECTORY named `demo.mp4` is precisely the path that fails
-  // as media and succeeds as a listing.
+  // Every read failure is a directory candidate; the listing request is both question and
+  // answer (it fails for anything that is not a folder). Never guess from the name: `Makefile`
+  // and `.env` are files. Raw-byte kinds never issue the text read, so `rawMediaFailed` also
+  // feeds the probe, since a DIRECTORY named `demo.mp4` fails as media.
   const readFailed = shouldProbeForDirectory({
     readError: file.error,
     mediaFailed: rawMediaFailed,
@@ -294,12 +260,9 @@ function TrustedFileViewContents({
           </ScrollArea>
         );
       }
-      // Loaded by `src`, not `srcDoc`: the document then has a real URL, so its
-      // relative assets resolve against its own directory, the server's CSP governs
-      // it, and it is not capped by the trusted read's 1 MiB text limit. The server
-      // serves .html under `sandbox allow-scripts allow-popups` — an opaque origin
-      // with no access to this app, but interactive, which is the point of opening a
-      // report.
+      // Loaded by `src`, not `srcDoc`: relative assets resolve, the server's CSP governs it, and it
+      // skips the trusted read's 1 MiB cap. The server sandboxes .html (`allow-scripts allow-popups`):
+      // an opaque origin with no access to this app, but interactive.
       return (
         <iframe
           title="Rendered document"

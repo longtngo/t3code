@@ -36,16 +36,10 @@ export function sidebarDragLabelsShift(boundaryLabelHeight: number, scale = 1): 
   return 2 * (boundaryLabelHeight * scale + 1);
 }
 
-/** Where the empty Snoozed shelf shows its hint for this drag. One call decides it for the
- * strategy, the hint's paint and its place among the drop zones, so they never disagree.
- * - `closed`: the lifted row may not be snoozed; no hint, no target.
- * - `in-place`: the 36px box resting above the placeholder's li opens in the free space without
- *   pushing the shelves: it clears whatever renders above the li (the whole docked Queue block
- *   when there is one, else the row above) by two gaps plus the label space the same free space
- *   must also give the Pins labels (`labelsShift`).
- * - `at-end`: no such room (a crowded or scrolling list, Working rows right above it, or a free
- *   space the labels need). The box renders out of flow below everything in the list, reached by
- *   autoscroll: opening it moves no row at pickup, and every source keeps a snooze target. */
+/** Where the empty Snoozed shelf's hint goes for this drag; one call drives strategy, paint, drop
+ * zones so they agree. `closed`: row may not be snoozed. `in-place`: the 36px box opens in the free
+ * space above the placeholder, clearing what renders above it plus the Pins labels' space.
+ * `at-end`: no room, so it renders out of flow below the list, reached by autoscroll. */
 export type SidebarSnoozeHint = "closed" | "in-place" | "at-end";
 
 export function sidebarSnoozeHintState(input: {
@@ -76,11 +70,9 @@ export function restrictBelowSidebarLabel(
 }
 
 /**
- * A drop zone is only real where it is painted. A zone docked at the end of a scrolling list can be
- * laid out beyond its scroller's clip - measured at a 500px viewport, the Queue header sits at
- * 428..460 against a clip ending at 424 for a whole drag, invisible but geometrically live - and a
- * hit test reading only the element's own rect would accept a release the user aimed at whatever is
- * painted there instead.
+ * A drop zone is only real where it is painted. A zone docked at the end of a scrolling list can
+ * lie beyond its scroller's clip yet stay geometrically live, so a hit test on its own rect would
+ * accept a release aimed at whatever is painted there.
  */
 export function pointerOverVisibleRect(
   node: HTMLElement,
@@ -102,12 +94,10 @@ export function pointerOverVisibleRect(
     const scrolls = style.overflowY === "auto" || style.overflowY === "scroll";
     if (!scrolls) continue;
     const box = el.getBoundingClientRect();
-    // A 0x0 box is a detached or not-yet-laid-out ancestor, not a clip anyone can see through. It
-    // is unsound in principle - a 0x0 overflow:auto element does genuinely clip its child - but the
-    // walk stops at the sidebar's scroll viewport, which always has a box: swept across seven
-    // viewport sizes and the collapsed sidebar, and counted over two live drags (112 and 64 calls),
-    // this skip never fired. A collapse on ONE axis is still a real clip and is still checked -
-    // narrowing this to either operand alone reddens a test.
+    // A 0x0 box is a detached or unlaid-out ancestor, skipped. Unsound in principle, but the walk
+    // stops at the scroll viewport, which always has a box; the skip never fired across seven
+    // viewport sizes and two live drags. A collapse on ONE axis is still a real clip and still
+    // checked.
     if (box.width === 0 && box.height === 0) continue;
     return (
       pointer.x >= box.left &&
@@ -142,12 +132,10 @@ export function createSidebarCollisionDetection(
     if (pointer && options.pointerDropIds) {
       for (const container of args.droppableContainers) {
         if (!options.pointerDropIds.includes(String(container.id))) continue;
-        // Hit-test what is DRAWN, not what was measured. dnd-kit measures droppable rects once per
-        // drag, and this test has no tolerance, so any movement afterwards makes the two disagree
-        // and the drop lands somewhere the pointer visibly was not. The sidebar list sits within a
-        // pixel of its scroll threshold, and rows flipping between their content-visibility
-        // intrinsic size and their real height carry it across, which lets the list scroll a couple
-        // of pixels mid-drag. The boundary label below is read live for the same reason.
+        // Hit-test what is DRAWN, not what was measured: dnd-kit measures rects once per drag, and
+        // rows settling into their real height can scroll the list a couple of pixels mid-drag, so
+        // the drop would land where the pointer was not. The boundary label below is read live for
+        // the same reason.
         const node = container.node.current;
         const rect = node?.getBoundingClientRect() ?? args.droppableRects.get(container.id);
         // With no node there is nothing to ask about clipping, so fall back to plain containment
@@ -185,19 +173,15 @@ export function createSidebarCollisionDetection(
     if (items && boundary && source?.kind === "thread" && pointer) {
       boundarySection ??=
         source.section === "pinned" && !options.freeIds?.includes(source.key) ? "pinned" : "active";
-      // Use the visible divider row, including its sortable translation.
-      // Only pointer movement can change sections: opening the destination
-      // moves this row, but must not toggle a stationary gesture back.
+      // Only pointer movement changes sections; opening the destination moves rows under stationary gestures.
       const previousY = previousPointerY ?? pointer.y;
       previousPointerY = pointer.y;
       if (pointer.x >= boundary.left && pointer.x <= boundary.right) {
         if (pointer.y < previousY && pointer.y <= boundary.bottom) boundarySection = "pinned";
         else if (pointer.y > previousY && pointer.y >= boundary.top) boundarySection = "active";
-        // Active ends at the first block below it: a custom section or a shelf. With that header's
-        // node missing (transient), skip the re-rank: a lower header would bound Active below a
-        // custom section and let a pointer over it resolve to Active.
-        // Not the empty shelf's placeholder: its node is a hint box that can rest over the last
-        // row, and its li ends where the Settled header starts anyway.
+        // Active ends at the first block below it (a custom section or a shelf); with that header's
+        // node transiently missing, skip the re-rank rather than bound Active by a lower header.
+        // Not the empty shelf's placeholder: it can rest over the last row.
         const activeEnd = items.find(
           (item) =>
             item.kind === "marker" &&
@@ -264,11 +248,9 @@ export function createSidebarSortingStrategy(input: {
   trailingHeight?: number;
   /** Where the Queue block renders (`sidebarQueueBoundary`): the Queue header moves with it. */
   queueBoundary?: SidebarBoundary | null;
-  /** While the lifted row may be snoozed: the shelf's drop zones (`sidebarSnoozeZoneIds`).
-   * Over a zone the preview projects as `stickyOverId`, so the bottom-anchored zone does not move
-   * under the pointer. `hint` is
-   * `sidebarSnoozeHintState`'s answer for this drag. Unset: the empty-shelf placeholder stays
-   * closed. */
+  /** While the lifted row may be snoozed: the shelf's drop zones (`sidebarSnoozeZoneIds`). Over a
+   * zone the preview projects as `stickyOverId`, so the zone stays under the pointer. `hint` is
+   * `sidebarSnoozeHintState`'s answer; unset keeps the empty-shelf placeholder closed. */
   snooze?: {
     readonly zoneIds: ReadonlySet<string>;
     readonly hint: SidebarSnoozeHint;
@@ -560,12 +542,10 @@ export function createSidebarSortingStrategy(input: {
 /** "Show N more" below the expanded Settled rows, by sortable id. */
 export const SHOW_MORE_ID = "sidebar-settled-show-more";
 
-/** The main SortableContext's items: the list, then the content rendered after it, which can never
- * be lifted. Listed last, they keep every row's index, and the strategy hands them the
- * shift of the content above them, so they move with the rows and with the rows' transition:
- * - the Queue header, a drop zone: it keeps dnd-kit displacing the rows while it is the over, which
- *   otherwise snap to rest and move the zones beside it. The strategy projects it as the sticky over;
- * - "Show N more", which is no drop target at all. */
+/** The main SortableContext's items: the list, then unliftable content after it, which keeps every
+ * row's index and moves with the rows' shift and transition. The Queue header, a drop zone, keeps
+ * dnd-kit displacing rows while it is the over (projected as the sticky over); "Show N more" is no
+ * drop target. */
 export function sidebarSortableIds(
   items: readonly SidebarListItem[],
   queueDropId: string,

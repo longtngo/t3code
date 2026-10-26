@@ -85,13 +85,9 @@ export function resolveProvider(
 const CTX_FLAG = "--ctx-size";
 
 /**
- * The launch args for a config, before the port and model flags are added.
- *
- * An explicit `argsOverride` replaces everything: someone who typed a command line means it.
- * Otherwise the provider's defaults are extended with the model's own, which is how a model
- * that needs a specific flag to perform (Qwen3.8 and `--mtp-depth 2`) gets it without every
- * config having to re-type the provider defaults alongside it. A model default is skipped when
- * its flag is already present, so the provider layer stays the one that wins on conflict.
+ * Launch args before port and model flags. An explicit `argsOverride` replaces everything.
+ * Otherwise provider defaults are extended with the model's own (e.g. `--mtp-depth 2`),
+ * skipping any flag already present so the provider layer wins on conflict.
  */
 export function launchArgs(
   config: LocalLlmModelConfig,
@@ -110,11 +106,9 @@ export function launchArgs(
 }
 
 /**
- * Resolve a model config into a concrete managed launch, or an error describing
- * why it can't be launched (unknown provider/model, external provider, missing
- * models dir). The context slider owns the engine's ctx flag: when
- * `contextWindow` is set and the resolved args don't already carry it, it is
- * appended. Pure — performs no filesystem access.
+ * Resolve a model config into a managed launch, or an error saying why it can't launch.
+ * `contextWindow` appends the engine's ctx flag unless the args already carry it.
+ * Pure: performs no filesystem access.
  */
 export function resolveLaunch(
   config: LocalLlmModelConfig,

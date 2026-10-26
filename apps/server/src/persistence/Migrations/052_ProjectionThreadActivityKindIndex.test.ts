@@ -8,11 +8,9 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
-// The index is only worth having if the planner picks it, so that is what this
-// asserts rather than the index's mere existence. Measured against mutations:
-// it catches indexing the wrong column, and it does NOT catch reversing the
-// column order — because for an equality-on-both query SQLite serves
-// (kind, thread_id) just as well, so that reversal is not actually a defect here.
+// Asserts the planner picks the index, not that it exists. It catches indexing the wrong
+// column, not reversing column order, which is fine: SQLite serves the equality-on-both query
+// equally well either way.
 layer("052_ProjectionThreadActivityKindIndex", (it) => {
   const planFor = Effect.fn("planFor")(function* () {
     const sql = yield* SqlClient.SqlClient;

@@ -30,7 +30,6 @@ interface ChatTerminalDrawersProps {
   readonly activeTerminalOpen: boolean;
   readonly composerHeight: number;
   readonly launchContext: PersistentTerminalLaunchContext | null;
-  readonly focusRequestId: number;
   readonly splitShortcutLabel: string | undefined;
   readonly splitVerticalShortcutLabel: string | undefined;
   readonly newShortcutLabel: string | undefined;
@@ -60,14 +59,10 @@ export function ChatTerminalDrawers(props: ChatTerminalDrawersProps) {
   const draftThreadKeys = Object.values(draftThreadsByThreadKey).map((draftThread) =>
     scopedThreadKey(scopeThreadRef(draftThread.environmentId, draftThread.threadId)),
   );
-  // FORK: the filter below hides a dead thread's terminal state; it never removes it.
-  // The persisted map therefore keeps every thread the user ever opened a
-  // terminal in, including ones the server has since forgotten, and each one is
-  // a candidate to be re-mounted the moment a stale cached shell still lists it.
-  //
-  // Gated on every environment's shell having bootstrapped, because the cached
-  // shell that loads first is exactly the thing that cannot be trusted to say a
-  // thread is gone - pruning against it would delete live state.
+  // FORK: the filter below only hides a dead thread's terminal state, so the persisted map keeps
+  // every thread ever opened and a stale cached shell can re-mount it. Pruning waits for every
+  // environment's shell to bootstrap: the first cached shell cannot be trusted to say a thread
+  // is gone, and pruning against it would delete live state.
   const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const threadShells = useThreadShells();
   useEffect(() => {
@@ -125,7 +120,6 @@ export function ChatTerminalDrawers(props: ChatTerminalDrawersProps) {
       active={mountedThreadKey === activeThreadKey}
       composerHeight={mountedThreadKey === activeThreadKey ? props.composerHeight : 0}
       launchContext={mountedThreadKey === activeThreadKey ? props.launchContext : null}
-      focusRequestId={mountedThreadKey === activeThreadKey ? props.focusRequestId : 0}
       splitShortcutLabel={props.splitShortcutLabel}
       splitVerticalShortcutLabel={props.splitVerticalShortcutLabel}
       newShortcutLabel={props.newShortcutLabel}

@@ -35,12 +35,9 @@ import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.
 import Migration0031 from "./Migrations/031_AuthAuthorizationScopes.ts";
 import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
 import Migration0033 from "./Migrations/033_PendingBackgroundTasks.ts";
-// Fork migration 33 (PendingBackgroundTasks) is preserved. Id 34 is the fork's first
-// Web Push migration ("PushSubscriptions"), still recorded on real databases; it is
-// registered below with the same idempotent body as 37 so the history matches.
-// Upstream migrations kept their original 033/034 filenames but are assigned
-// ids 35/36 here so the fork's already-deployed 33 is never renumbered and stays
-// consistent with live DBs.
+// Fork migration 33 keeps its id. Id 34 is the fork's first PushSubscriptions migration,
+// still recorded on real databases, so it is registered with 37's idempotent body. Upstream's
+// 033/034 files take ids 35/36 so already-deployed ids are never renumbered.
 import Migration0035 from "./Migrations/033_ProjectionThreadsSettled.ts";
 import Migration0036 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
 // Web Push background notifications. First applied as fork id 34, re-ported as 37
@@ -67,11 +64,8 @@ import Migration0042 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
 // deployed ids 33-42, so it takes the next free id (43) rather than its
 // filename number.
 import Migration0043 from "./Migrations/038_ProjectionThreadsPinOrderKey.ts";
-// Upstream's 039 (projection_projects.default_thread_env_mode) arrives after the
-// fork already deployed ids 33-43, so it takes the next free id (44) rather than
-// its filename number. Its 039 filename collides with the fork's own
-// 039_ProjectionCheckpointMemberStates (id 40); filenames are free to repeat,
-// applied ids are not.
+// Upstream's 039 (projection_projects.default_thread_env_mode) takes the next free id (44).
+// Its filename collides with the fork's 039 (id 40); filenames may repeat, applied ids not.
 import Migration0044 from "./Migrations/039_ProjectionProjectsDefaultThreadEnvMode.ts";
 // Upstream's 040 (projection_projects.favicon_path) likewise takes the next free
 // id (45) rather than its filename number.
@@ -81,19 +75,13 @@ import Migration0045 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
 // diverged long ago and must not be reconciled.
 import Migration0046 from "./Migrations/041_ProjectionThreadsTitleRegenerationFailedAt.ts";
 import Migration0047 from "./Migrations/042_DropUnusedCommandReceiptIndexes.ts";
-// Upstream's 041 (auth_sessions client connection columns, #7774) arrives after
-// the fork already deployed ids 33-47, so it takes the next free id (48) rather
-// than its filename number. Its 041 filename collides with the fork's own
-// 041_ProjectionThreadsTitleRegenerationFailedAt (id 46); filenames are free to
-// repeat, applied ids are not.
+// Upstream's 041 (auth_sessions client connection columns) takes the next free id (48). Its
+// filename collides with the fork's 041 (id 46); filenames may repeat, applied ids not.
 import Migration0048 from "./Migrations/041_AuthSessionClientConnection.ts";
-// Upstream's 042 (V1 threads.linked_pull_request_json, #8160) arrives after
-// the fork already deployed ids 33-48, so it takes the next free id (49) rather than
-// its filename number. Its 042 filename collides with the fork's own
-// 042_DropUnusedCommandReceiptIndexes (id 47); filenames are free to repeat,
-// applied ids are not.
+// Upstream's 042 (V1 threads.linked_pull_request_json) takes the next free id (49). Its
+// filename collides with the fork's 042 (id 47); filenames may repeat, applied ids not.
 import Migration0049 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts";
-// Upstream's 043 (V1 threads.unsettled_at, #8231) likewise takes the next
+// Upstream's 043 (V1 threads.unsettled_at) likewise takes the next
 // free id (50) rather than its filename number.
 import Migration0050 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
 // Crew orchestration was removed; 51 stays registered (ids are positional) and its tables are unused.
@@ -134,25 +122,23 @@ import Migration0059 from "./Migrations/050_ProjectionThreadPullRequests.ts";
 // arrives after the fork already deployed ids 33-59, so it takes the next free id (60)
 // rather than its filename number.
 import Migration0060 from "./Migrations/051_ProjectionThreadMessageContext.ts";
-// Upstream's 052 (V1 threads.title_state_json, #10720) arrives after the fork
-// already deployed ids 33-60, so it takes the next free id (61) rather than its filename
-// number. Its 052 filename collides with the fork's own 052_ProjectionThreadActivityKindIndex
-// (id 57); filenames are free to repeat, applied ids are not.
+// Upstream's 052 (V1 threads.title_state_json) takes the next free id (61). Its filename
+// collides with the fork's 052 (id 57); filenames may repeat, applied ids not.
 import Migration0061 from "./Migrations/052_ProjectionThreadTitleState.ts";
-// Upstream's 053 (pull request files marked as viewed, #7721) arrives after the fork
+// Upstream's 053 (pull request files marked as viewed) arrives after the fork
 // already deployed ids 33-61, so it takes the next free id (62) rather than its filename
 // number.
 import Migration0062 from "./Migrations/053_PullRequestFilesViewed.ts";
-// Upstream's 054 (V1 threads.auto_settle_disabled_at, #11846) arrives after the
+// Upstream's 054 (V1 threads.auto_settle_disabled_at) arrives after the
 // fork already deployed ids 33-62, so it takes the next free id (63) rather than its
 // filename number.
 import Migration0063 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
-// Upstream's 055 (orchestrator v2 schema, #2829) and 056 arrive after the fork
+// Upstream's 055 (orchestrator v2 schema) and 056 arrive after the fork
 // already deployed ids 33-63, so they take the next free ids (64, 65) rather than
 // their filename numbers (registry section 1).
 import Migration0064 from "./Migrations/055_OrchestrationV2.ts";
 import Migration0065 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
-// Upstream's 057/058 (scheduled-task webhooks, #15085 / #15487) arrive after the fork
+// Upstream's 057/058 (scheduled-task webhooks) arrive after the fork
 // already deployed ids 33-65, so they take the next free ids (66, 67) rather than their
 // filename numbers (registry section 1).
 import Migration0066 from "./Migrations/057_ScheduledTaskWebhooks.ts";
@@ -162,16 +148,16 @@ import Migration0067 from "./Migrations/058_WebhookRelayDeliveries.ts";
 // their filename numbers (registry section 1).
 import Migration0068 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0069 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
-// Upstream's 061 (pull request review guides, #18124) arrives after the fork already
+// Upstream's 061 (pull request review guides) arrives after the fork already
 // deployed ids 33-69, so it takes the next free id (70) rather than its filename
 // number (registry section 1).
 import Migration0070 from "./Migrations/061_PullRequestReviewGuides.ts";
-// Upstream's 062 (thread failure lookup index, #18628) arrives after the fork already
+// Upstream's 062 (thread failure lookup index) arrives after the fork already
 // deployed ids 33-70, so it takes the next free id (71) rather than its filename
 // number (registry section 1).
 import Migration0071 from "./Migrations/062_ThreadFailureLookupIndex.ts";
-// Upstream's 063/064 (drop unused V1 projections, #20947; canonicalize thread pull
-// request links, #19129) arrive after the fork already deployed ids 33-71, so they take
+// Upstream's 063/064 (drop unused V1 projections; canonicalize thread pull
+// request links) arrive after the fork already deployed ids 33-71, so they take
 // the next free ids (72, 73) rather than their filename numbers (registry section 1).
 import Migration0072 from "./Migrations/063_DropUnusedV1Projections.ts";
 import Migration0073 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
@@ -184,6 +170,9 @@ import Migration0076 from "./Migrations/067_WebhookDedupe.ts";
 // Upstream's 068 (shell stop request index) arrives after the fork already deployed ids
 // 33-76, so it takes the next free id (77) rather than its filename number (registry section 1).
 import Migration0077 from "./Migrations/068_ShellStopRequestIndex.ts";
+// Upstream's 069 (thread message search) arrives after the fork already deployed ids
+// 33-77, so it takes the next free id (78) rather than its filename number (registry section 1).
+import Migration0078 from "./Migrations/069_ThreadMessageSearch.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -266,6 +255,7 @@ export const migrationEntries = [
   [75, "RepairClientSettlementTimestamps", Migration0075],
   [76, "WebhookDedupe", Migration0076],
   [77, "ShellStopRequestIndex", Migration0077],
+  [78, "ThreadMessageSearch", Migration0078],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -282,12 +272,7 @@ const makeMigrationLoader = (throughId?: number) =>
 // V2's schema migrations start at 64 here (upstream's 55; registry section 1).
 const FIRST_V2_MIGRATION_ID = 64;
 
-/**
- * Fail before migrating when the migrator would skip one of V2's own
- * migrations. It skips every id up to the highest recorded one, whatever name
- * was recorded, so a database that took a V2 id for another migration would
- * start without V2's schema and fail on first use.
- */
+// Migrators skip ids up to the highest recorded; reject collisions that would skip V2 schema.
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
   throughId?: number,
 ) {

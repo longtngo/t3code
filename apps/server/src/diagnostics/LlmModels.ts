@@ -17,11 +17,9 @@ interface SamplerState {
 }
 
 /**
- * A per-subscriber stream of local-model samples. Each tick asks the
- * `LlmServeManager` for the current managed snapshot (one provider per enabled engine —
- * it scans `ps`, the models dirs, and probes online processes). The manager's `list` is
- * total, so the stream's error channel stays `never`. The stream ends when the
- * subscriber's scope closes — no background work runs without a listener.
+ * Per-subscriber local-model samples from `LlmServeManager`'s snapshot (which scans `ps`,
+ * the models dirs, and probes processes). `list` is total, so the error channel is `never`.
+ * Ends with the subscriber's scope: no background work without a listener.
  */
 export function llmModelsStream(
   intervalMs: number,

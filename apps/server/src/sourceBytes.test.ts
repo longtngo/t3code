@@ -5,19 +5,9 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 /**
- * A raw NUL byte in a source file is legal TypeScript and survives every normal
- * review, but it makes the file opaque to the tools we audit merges with: BSD
- * `sed` aborts mid-file and returns a plausible truncated answer, and `grep`
- * reports `Binary file … matches` and prints nothing. Both have already misled
- * a reconcile on this fork — once faking 130 phantom deletions, once hiding a
- * whole report from a follow-up sweep.
- *
- * The web app has carried this guard since `ChatComposer.tsx` was cleaned up;
- * `ActivityPayloadProjection.ts` used NULs the same way, as dedup-key
- * delimiters, and was outside its reach. `\0` produces the identical string, so
- * the escape costs nothing at runtime. The walker is duplicated rather than
- * shared: it is a dozen lines, and a package to hold it would be more machinery
- * than the thing it holds.
+ * A raw NUL byte makes a source file opaque to merge-audit tools (BSD `sed` truncates, `grep`
+ * says "Binary file"), which has misled reconciles here twice. `\0` is identical at runtime.
+ * The walker is duplicated from the web guard rather than shared: it is a dozen lines.
  */
 const SOURCE_ROOT = import.meta.dirname;
 

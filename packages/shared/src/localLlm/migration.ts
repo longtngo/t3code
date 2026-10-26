@@ -27,15 +27,9 @@ function groupArgs(flat: readonly string[]): string[] {
 }
 
 /**
- * Migrate the deprecated `localModels` settings into the new `localLlm` shape.
- *
- * - provider-level fields (modelsDir / defaultArgs) become catalog provider overrides.
- * - each `perModel` key that matches a catalog model `resourceName` seeds a
- *   model config carrying its arg overrides; non-catalog keys are dropped.
- *
- * The legacy shape also carried a `ds4` block. That engine is retired and gone from the
- * catalog, so its models no longer match anything and its provider override would name a
- * provider that does not exist — the block is read and dropped rather than migrated.
+ * Legacy `localModels` -> `localLlm`: provider fields become provider overrides, and `perModel` keys
+ * matching a catalog `resourceName` seed model configs (others dropped). The retired `ds4` block is
+ * read and dropped: its models and provider no longer exist in the catalog.
  */
 export function migrateLocalModels(legacy: LocalModelsSettings): LocalLlmSettings {
   const byResource = new Map(LOCAL_LLM_MODELS.map((m) => [m.resourceName, m]));

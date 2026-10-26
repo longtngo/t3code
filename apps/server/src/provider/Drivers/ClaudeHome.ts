@@ -24,11 +24,9 @@ export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function
 });
 
 /**
- * Resolve the configured CLAUDE_CONFIG_DIR for this instance, or "" when none
- * is set (the instance uses Claude's default ~/.claude). Distinct config dirs
- * are what actually isolate credentials between accounts — on macOS the
- * Keychain credential service name is salted by CLAUDE_CONFIG_DIR, so two
- * instances differing only by HOME would still share one login.
+ * The configured CLAUDE_CONFIG_DIR, or "" for Claude's default ~/.claude. Config
+ * dirs, not HOME, isolate logins: macOS salts the Keychain credential service
+ * name by CLAUDE_CONFIG_DIR.
  */
 export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(function* (
   config: ClaudeHomeConfig,
@@ -58,26 +56,18 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
     env.HOME = yield* resolveClaudeHomePath(config);
   }
   if (configDirPath.length > 0) {
-    // Isolate this instance's credentials via CLAUDE_CONFIG_DIR. On macOS the
-    // Keychain credential service name is salted by CLAUDE_CONFIG_DIR, so this
-    // (rather than HOME alone) is what actually separates logins between
-    // accounts while leaving the keychain lookup intact.
+    // CLAUDE_CONFIG_DIR, not HOME, separates logins: macOS salts the Keychain
+    // credential service name by it and leaves the keychain lookup intact.
     env.CLAUDE_CONFIG_DIR = yield* resolveClaudeConfigDirPath(config);
   } else {
-    // An inherited CLAUDE_CONFIG_DIR would bind this instance to a different
-    // login than its continuation/cache keys encode (they resolve blank to "").
-    // Scrub it so a blank-config instance genuinely uses Claude's default dir.
+    // An inherited CLAUDE_CONFIG_DIR would bind this instance to a different login
+    // than its continuation/cache keys encode (blank resolves to ""), so scrub it.
     delete env.CLAUDE_CONFIG_DIR;
   }
   return env;
 });
 
-/**
- * While it exists Claude refuses `--strict-mcp-config` and exits before
- * initializing, but it already ignores user, project and `--mcp-config` servers
- * on its own, so callers that pass the flag for isolation can drop it. Paths
- * match the ones Claude Code checks.
- */
+/** managed-mcp.json excludes other MCP config and forbids --strict-mcp-config; omit the flag when present. */
 export const hasClaudeManagedMcpConfig = Effect.fn("hasClaudeManagedMcpConfig")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const platform = yield* HostProcess.Platform;
@@ -91,11 +81,8 @@ export const hasClaudeManagedMcpConfig = Effect.fn("hasClaudeManagedMcpConfig")(
 });
 
 /**
- * Key the continuation group on the transcript store — `<configDir>/projects`,
- * the directory `claude --resume` reads `<cwd>/<sessionId>.jsonl` from. Two
- * config dirs whose `projects` resolve to one directory can resume each
- * other's sessions, so they share a group (fork precedent:
- * `codexContinuationIdentity` keys on Codex's shared home). HOME is not part of
+ * Keyed on the transcript store `<configDir>/projects`, where `claude --resume`
+ * reads sessions, so config dirs sharing one store share a group. HOME is not in
  * the key: with `CLAUDE_CONFIG_DIR` set it does not locate the transcript.
  */
 export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationGroupKey")(
@@ -145,10 +132,7 @@ export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesC
   },
 );
 
-/**
- * Describe the spawned CLI's environment separately from the login command so
- * paths remain literal on every shell, including relative inherited values.
- */
+/** Separate spawn env from login commands to preserve literal paths, including relative inherited values. */
 export const claudeSignedOutMessage = (input: {
   readonly configDir: string | undefined;
   readonly cwd: string;

@@ -5,13 +5,9 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 
 /**
- * Query + command atoms for the machine-level subagent-dispatch-backend toggle.
- *
- * `get` and `usage` are one-shot RPC reads, mirroring `createResourceQueueEnvironmentAtoms`.
- * `set` is a command, mirroring `createAccountUsageEnvironmentAtoms`: its response IS the
- * committed `SubagentBackendState` (the flag-file write is atomic and completes before the
- * response returns), so callers commit UI state directly from the `set` result rather than
- * flipping optimistically or waiting on a follow-up `get`.
+ * `get`/`usage` are one-shot reads. `set` is a command whose response IS the committed state (the
+ * flag-file write is atomic and done before it returns), so callers commit UI from it rather than
+ * flipping optimistically or re-`get`ting.
  */
 export function createSubagentBackendEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,

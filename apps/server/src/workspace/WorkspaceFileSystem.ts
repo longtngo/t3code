@@ -29,8 +29,7 @@ import { fileHeaderMimeType } from "./fileHeaderMimeType.ts";
 
 const PROJECT_READ_FILE_MAX_BYTES = 1024 * 1024;
 
-// Windows also reaches `.git` through trailing dots or spaces, a `:` stream
-// suffix, or the 8.3 short name `GIT~1`. Names compare upcased, as NTFS does.
+// NTFS reaches .git through trailing dots/spaces, stream suffixes and GIT~1; compare uppercased names.
 const isGitMetadataName = (segment: string) => {
   const name = (segment.split(":")[0] ?? "").replace(/[. ]+$/, "").toUpperCase();
   return name === ".GIT" || name === "GIT~1";
@@ -145,7 +144,7 @@ export class WorkspaceFileSystem extends Context.Service<
   }
 >()("t3/workspace/WorkspaceFileSystem") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -180,7 +179,7 @@ export const make = Effect.gen(function* () {
           }
         },
         catch: () => undefined,
-      }).pipe(Effect.catch(() => Effect.succeed(undefined)));
+      }).pipe(Effect.orElseSucceed(() => undefined));
     }
     return {
       kind: "file",
@@ -208,13 +207,8 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  /**
-   * Git runs config and hooks from its own folders, so a write never lands in one:
-   * a `.git` entry, or a repository folder under another name such as `.bare`.
-   * Folders are checked upward to a linked worktree's top, which holds a `.git`
-   * file, since worktrees can sit inside a bare repository. `absolutePath` must
-   * be normalized.
-   */
+  // Reject Git folders, including renamed bare repos whose config/hooks can execute; paths must be normalized.
+  // Stop at linked worktrees' .git files since worktrees can sit inside bare repos.
   const isInGitFolder = async (absolutePath: string) => {
     if (absolutePath.split(path.sep).some(isGitMetadataName)) return true;
     for (let folder = path.dirname(absolutePath); ; folder = path.dirname(folder)) {
@@ -227,8 +221,7 @@ export const make = Effect.gen(function* () {
           }),
         ),
       );
-      // What git reads as a repository: HEAD, plus objects and refs here or in
-      // the folder a `commondir` file names, as in a linked worktree's git folder.
+      // Git recognizes HEAD with commondir or objects/refs as a repository.
       if (head && (commondir || (objects && refs))) return true;
       if (dotGit?.isFile() || path.dirname(folder) === folder) return false;
     }
@@ -369,8 +362,7 @@ export const make = Effect.gen(function* () {
 
     return yield* Effect.acquireUseRelease(
       Effect.tryPromise({
-        // Non-blocking so a FIFO cannot hang the open; the stat below rejects
-        // it. Regular files ignore the flag. Windows lacks it.
+        // Non-blocking opens prevent FIFO hangs before stat rejects them; Windows lacks the flag.
         try: () =>
           NodeFSP.open(
             realTargetPath,
@@ -466,15 +458,9 @@ export const make = Effect.gen(function* () {
   const readTrustedFile: WorkspaceFileSystem["Service"]["readTrustedFile"] = Effect.fn(
     "WorkspaceFileSystem.readTrustedFile",
   )(function* (input) {
-    // No path sandbox: any file the server process can read is readable here.
-    //
-    // There used to be a home + `os.tmpdir()` allowlist, but it denied ordinary
-    // paths the user expected to open — notably `/tmp/...`, which on darwin is
-    // `/private/tmp` while `os.tmpdir()` is `/var/folders/.../T` — while barely
-    // narrowing what a caller could reach, since all of `$HOME` (every dotfile,
-    // key, and `.env` under it) was already inside the allowlist. What keeps
-    // this to *text* is the NUL-byte guard in `readFile` below; what keeps it
-    // authorized is the `orchestration:read` scope on the calling RPCs.
+    // No path sandbox: any file the server can read is readable. The old home + tmpdir allowlist
+    // denied `/tmp/...` (darwin `/private/tmp`) while already admitting all of `$HOME`. The NUL-byte
+    // guard in `readFile` keeps this to text; the `orchestration:read` scope authorizes it.
     const realTargetPath = yield* Effect.tryPromise({
       try: () => NodeFSP.realpath(input.path),
       catch: (cause) =>
@@ -488,21 +474,15 @@ export const make = Effect.gen(function* () {
         }),
     });
 
-    // Delegate to the proven cwd-relative reader (open/stat/binary-guard/decode)
-    // against the realpath's own directory, so its escape check is trivially
-    // satisfied.
+    // Delegate to the cwd-relative reader against the realpath's own directory, so its escape
+    // check is trivially satisfied.
     return yield* readFile({
       cwd: path.dirname(realTargetPath),
       relativePath: path.basename(realTargetPath),
     });
   });
 
-  /**
-   * Resolves the file a write targets. The deepest existing ancestor resolves to
-   * its real path before the root check, so neither the file nor the directories
-   * created for it can follow a symlink out of the root. A dangling symlink is
-   * rejected rather than written through.
-   */
+  // Resolve existing ancestors and reject dangling links so creation cannot follow symlinks outside root.
   const resolveWriteTarget = Effect.fn("WorkspaceFileSystem.resolveWriteTarget")(function* (
     input: ProjectWriteFileInput,
   ) {

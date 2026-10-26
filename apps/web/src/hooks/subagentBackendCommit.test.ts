@@ -44,11 +44,8 @@ describe("commitSubagentBackendGet", () => {
     expect(next).toEqual({ state: state(SUBAGENT_BACKEND_DEFAULT), generation: 0 });
   });
 
-  // Reproduces the real race: the panel-open `get` (refreshModels: true) and `set` both spawn
-  // the same multi-second Cursor model probe server-side, so a `get` issued BEFORE a `set` can
-  // resolve AFTER it. Applying that response would silently revert the just-confirmed `set`
-  // back to the pre-flip backend — the exact "UI shows one backend, the file says the other"
-  // failure the no-optimistic-flip rule exists to prevent, reached from the other side.
+  // The real race: the panel-open `get` and a `set` spawn the same multi-second Cursor probe, so
+  // a `get` issued BEFORE a `set` can resolve AFTER it; applying it would revert the confirmed set.
   it("drops a get issued before a set that has since committed", () => {
     // t0: the panel-open get fires while backend is still "default"; its generation is
     // captured as 0.
@@ -90,11 +87,9 @@ describe("commitSubagentBackendGet", () => {
 });
 
 /**
- * These exercise the WIRING — `observeSubagentBackendQuery`'s stamping combined with the
- * commit reducer — the way `useSubagentBackend` actually drives them across a sequence of
- * renders, rather than the reducer alone. That distinction matters: the reducer was already
- * correct, and the real defect (an atom-identity-keyed stamp that a background SWR
- * re-resolution never revisits) lived entirely in how `issuedGeneration` gets captured.
+ * Exercises the WIRING (`observeSubagentBackendQuery` stamping plus the reducer) across renders
+ * as `useSubagentBackend` drives it: the real defect was an atom-identity-keyed stamp that a
+ * background SWR re-resolution never revisited, not the reducer.
  */
 describe("observeSubagentBackendQuery + the commit reducer, driven as a render sequence", () => {
   it("still drops a get issued before a set (same as the reducer-only case)", () => {

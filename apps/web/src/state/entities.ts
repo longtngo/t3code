@@ -273,11 +273,7 @@ export function waitForProject(
   });
 }
 
-/**
- * Resolves once a deleted project leaves the live client store. The delete
- * command returns before the shell stream does, so anything that picks a
- * project in between (the index route's draft landing) still sees it.
- */
+/** Waits for removal from the live store; delete replies arrive before the shell stream. */
 export function waitForProjectRemoval(ref: ScopedProjectRef, timeoutMs = 5_000): Promise<boolean> {
   return waitForAtomValue({
     registry: appAtomRegistry,
@@ -339,11 +335,9 @@ export function readEnvironmentSupportsTitleRegeneration(environmentId: Environm
   );
 }
 
-/** Whether the environment's server honours `includeRemote: false` on a vcs status
-    subscription. An older one drops the flag and starts a remote poller per
-    subscription instead, so a workspace with seven attached repositories would
-    fetch seven remotes on a timer. Same version-skew contract as the rest:
-    missing reads as unsupported. */
+/** Whether the server honours `includeRemote: false` on a vcs status subscription. An older one
+    starts a remote poller per subscription (seven repos, seven fetches on a timer). Missing reads
+    as unsupported, like the rest of the version-skew checks. */
 export function useEnvironmentSupportsLocalOnlyStatus(environmentId: EnvironmentId): boolean {
   const serverConfigs = useServerConfigs();
   return serverConfigs.get(environmentId)?.environment.capabilities.vcsLocalOnlyStatus === true;
@@ -457,13 +451,7 @@ function shellParentThreadId(
     : thread.lineage.parentThreadId;
 }
 
-/**
- * The live shells the panel's immediate relationships can reach: the thread,
- * its parent, its children, and the threads its subagents, workflow members and
- * context transfers name. Keeps its array while those shells are unchanged, so
- * another thread streaming in the same environment does not re-render the panel.
- */
-/** Exported for tests. */
+/** Retains unchanged reachable shells so unrelated streams do not re-render the panel. */
 export function selectThreadRelationshipShells(
   threadId: ThreadId,
   projection: Pick<

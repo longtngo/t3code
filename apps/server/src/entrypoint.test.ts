@@ -9,11 +9,9 @@ import { describe, expect, it } from "vite-plus/test";
 import { isEntrypoint } from "./entrypoint.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
-// FORK: realpath the temp root. On macOS `os.tmpdir()` is `/var/folders/...`, itself a symlink
-// to `/private/var/...`, so `realpathSync` on the fixture's link resolves BOTH indirections and
-// the symlink case below can never match the un-resolved module URL. Upstream's Linux CI has no
-// `/tmp` symlink, so the test passes there and fails on every macOS run. Production is unaffected:
-// an npm-installed CLI symlink carries no such prefix indirection.
+// FORK: realpath the temp root. macOS `os.tmpdir()` is itself a symlink, so `realpathSync`
+// resolves both indirections and the symlink case below never matches the module URL.
+// Upstream's Linux CI has no such symlink. Production is unaffected.
 const makeTempDir = () =>
   NodeFS.realpathSync(NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-entrypoint-test-")));
 
@@ -42,8 +40,7 @@ describe("isEntrypoint", () => {
       NodeFS.writeFileSync(real, "");
       NodeFS.symlinkSync(real, link);
 
-      // Node resolves the module URL to the real path, and on macOS the temp
-      // directory itself sits behind a symlink (`/var` -> `/private/var`).
+      // macOS temp directories can be symlinks; Node resolves module URLs to real paths.
       expect(
         isEntrypoint({
           moduleUrl: NodeURL.pathToFileURL(NodeFS.realpathSync(real)).href,

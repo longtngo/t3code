@@ -17,11 +17,9 @@ const TRANSPORT_ERROR_PATTERNS = [
   /\bClientProtocolError\b/i,
   /\bRpcClientError\b/i,
   /\bping timeout\b/i,
-  // A re-subscribe issued while the socket is mid-reconnect is abandoned by the
-  // stream codec's disconnect latch (`abandonSendOnDisconnect`). This is a transient
-  // connection condition — the subscribe loop must keep retrying until the socket
-  // reopens, not treat it as a fatal subscription error and exit (which would
-  // re-orphan the subscription; see the 2026-07-11 transient-reconnect design).
+  // A re-subscribe abandoned by the codec's disconnect latch (`abandonSendOnDisconnect`) mid-reconnect
+  // is transient: the subscribe loop must keep retrying, not exit as fatal and re-orphan the
+  // subscription.
   /\bsend abandoned\b/i,
 ] as const;
 

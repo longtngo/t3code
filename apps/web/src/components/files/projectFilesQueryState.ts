@@ -18,6 +18,7 @@ import { projectEnvironment } from "~/state/projects";
 import { useProjectPathSearch } from "~/state/queries";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import { isDirectoryListing } from "./directoryListing.logic";
+import { revisionedQuery } from "~/state/revisionedQuery";
 
 const EMPTY_PROJECT_FILE_PATH = "";
 const EMPTY_PROJECT_ENTRIES_QUERY_ATOM = Atom.make(
@@ -237,17 +238,19 @@ function fileAccessError(fileAccess: FileAccess, enabled: boolean, cause: unknow
 
 const isProjectReadFileError = Schema.is(ProjectReadFileError);
 
+/** `revision` is the workspace mutation id; a new one refetches the listing. */
 export function useProjectEntriesQuery(
   environmentId: EnvironmentId,
   cwd: string,
   directoryPath?: string,
+  revision?: string | null,
 ): ProjectQueryState<ProjectListEntriesResult> {
   const fileAccess = useFilesystemReadAccess(environmentId);
   const { canReadFiles } = fileAccess;
   const atom = canReadFiles
     ? getProjectEntriesQueryAtom(environmentId, cwd, directoryPath)
     : EMPTY_PROJECT_ENTRIES_QUERY_ATOM;
-  const result = useAtomValue(atom);
+  const result = useAtomValue(revisionedQuery(atom, canReadFiles ? revision : undefined));
   const refreshAtom = useAtomRefresh(atom);
   const refresh = () => refreshAtom();
   return {
@@ -262,11 +265,7 @@ export function useProjectEntriesQuery(
   };
 }
 
-/**
- * An empty query is a valid request — the index answers it with
- * frecency-ordered files, so the picker's initial view is recent files without
- * transferring the full workspace listing.
- */
+/** Empty queries return frecency-ranked files without transferring the full workspace listing. */
 export function useProjectFilePickerQuery(
   environmentId: EnvironmentId,
   cwd: string,
@@ -300,8 +299,7 @@ export function useProjectFileQuery(
   relativePath: string | null,
   enabled = true,
 ): ProjectFileQueryState {
-  // A media path is not skipped here: a folder named `assets.png` is only
-  // knowable as a folder from the read failure.
+  // Read media-like paths too; a failed read is how folders with those names are detected.
   const fileAccess = useFilesystemReadAccess(environmentId);
   const { canReadFiles } = fileAccess;
   const isQueryEnabled = enabled;
@@ -343,11 +341,9 @@ export function useProjectFileQuery(
 }
 
 /**
- * Read a file by ABSOLUTE path via the trusted-read RPC, which reads any text
- * file the server process can open. Powers the standalone `/viewer/$` route for
- * files that live outside any open workspace (e.g. `~/reports/...`,
- * `/tmp/...`). Disabled — resolving to a stable empty atom — when there is no
- * primary environment yet or no path to read.
+ * Reads a file by ABSOLUTE path via the trusted-read RPC, for the `/viewer/$` route and files
+ * outside any workspace (`~/reports/...`, `/tmp/...`). A stable empty atom while there is no
+ * environment or path.
  */
 export function useTrustedFileQuery(
   environmentId: EnvironmentId | null,
@@ -375,16 +371,9 @@ const EMPTY_DIRECTORY_LISTING_ATOM = Atom.make(
 ).pipe(Atom.withLabel("directory-listing-query:empty"));
 
 /**
- * One level of a directory, by absolute path.
- *
- * The trailing separator is what tells `filesystem.browse` to list the folder
- * rather than treat its last segment as an autocomplete prefix, and
- * `includeFiles` is what makes it return files, tag every entry with a kind,
- * and report an unreadable folder instead of an empty one.
- *
- * A failure here is also the answer to "is this path a directory at all" — the
- * viewers ask for a listing after a read fails, and keep the read error when
- * this one fails too.
+ * One level of a directory, by absolute path. The trailing separator makes `filesystem.browse` list
+ * the folder instead of autocompleting it; `includeFiles` returns kinded files and reports an
+ * unreadable folder. Viewers ask after a failed read, so a failure here means "not a directory".
  */
 export function useDirectoryListingQuery(
   environmentId: EnvironmentId | null,

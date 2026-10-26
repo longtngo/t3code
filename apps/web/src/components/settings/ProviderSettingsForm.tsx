@@ -267,15 +267,10 @@ function readProviderConfigBoolean(config: unknown, key: string, defaultValue = 
 }
 
 /**
- * The option a dropdown should show for a stored value, falling back to the empty row when
- * the value is not one of the choices.
- *
- * A stored value can be off the list: the config blob is `Schema.Unknown`, so a hand-edited
- * settings file or one written by a build with a longer list of choices puts a string here
- * that this build does not offer. Displaying the raw string would claim a choice the driver
- * is not using; the dropdown shows its first row instead. For `outputStyle` that is also what
- * the server acts on, since Claude's schema recovers an unreadable value to empty at spawn;
- * a driver without such recovery (Antigravity's `authMethod`) fails its decode instead.
+ * The option a dropdown shows for a stored value, or the empty row when it is off the list
+ * (the blob is `Schema.Unknown`, so a hand edit or a newer build can put one there). For
+ * `outputStyle` that matches the server, which recovers to empty at spawn; a driver without
+ * such recovery (Antigravity's `authMethod`) fails its decode instead.
  */
 export function selectedOptionValue(config: unknown, field: ProviderSettingsFieldModel): string {
   const stored = readProviderConfigString(config, field.key);

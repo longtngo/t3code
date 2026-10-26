@@ -32,7 +32,7 @@ import {
   type VcsRef,
 } from "@t3tools/contracts";
 import { GIT_REMOTE_PROMPT_ENV } from "@t3tools/source-control-core/server/SourceControlHost";
-import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
+import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -53,6 +53,7 @@ import {
   parseRemoteRefWithRemoteNames,
 } from "../git/remoteRefs.ts";
 import * as ServerConfig from "../config.ts";
+import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -64,22 +65,18 @@ const retryTransientRead = <A, E extends { readonly _tag: string }, R>(
 ): Effect.Effect<A, E, R> => Effect.retry(effect, transientReadRetryPolicy);
 
 /**
- * How long a terminated git process has to exit before it is killed outright.
- *
- * Long enough that an ordinary git handling SIGTERM finishes its own cleanup —
- * releasing `index.lock` matters, since a killed git leaves it behind and every
- * index-writing command in that repository then fails on it. Short enough that
- * a wedged one cannot outlast the command timeout it is holding open.
- *
- * Measured: a git pull interrupted mid-checkout releases the lock within ~50ms
- * of SIGTERM and leaves HEAD unmoved; the same pull SIGKILLed leaves the lock
- * (`GitVcsDriver.test.ts` pins both). So the only way a checkout is left with a
- * stale lock is a git that ignores SIGTERM for this whole grace period — the
- * kind of host saturation that is already timing out every command in it. That
- * window is accepted rather than closed: deleting a lock this process did not
- * watch being abandoned could unlock a git someone else is running there.
+ * Grace a terminated git gets before SIGKILL: long enough for an ordinary git to release
+ * `index.lock` on SIGTERM (~50ms measured), short enough that a wedged one cannot outlast its
+ * command timeout. A git ignoring SIGTERM this long is killed holding the lock (accepted).
  */
 const FORCE_KILL_AFTER = "5 seconds";
+/** T3's record of the branch, named as on the host, that a branch was cut from. */
+const branchBaseConfigKey = (branch: string) => `branch.${branch}.t3-merge-base`;
+/**
+ * Where T3 kept that record before it had a key of its own, for every host alike: the GitHub
+ * CLI's key, which branches cut before then still carry instead.
+ */
+const legacyBranchBaseConfigKey = (branch: string) => `branch.${branch}.gh-merge-base`;
 const gitProcesses = Semaphore.makeUnsafe(8);
 const WORKTREE_ADD_TIMEOUT_MS = 300_000;
 const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
@@ -91,14 +88,10 @@ const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
 const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000;
 const REVIEW_METADATA_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
-// Every status refresh adds the untracked files to a temporary index, and git add's cost grows
-// much faster than the file count (50k files took about 30 seconds). Past this many, the
-// totals are reported incomplete instead.
+// Temporary-index git add scales poorly (50k files took ~30 s); report incomplete totals above this cap.
 const REVIEW_UNTRACKED_MAX_FILES = 5_000;
 const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
-// Patches the clients render are parsed against git's default a/ and b/ path
-// prefixes. A repository or global diff.noprefix or diff.mnemonicPrefix would
-// otherwise leak into the patch and leave every parsed file unnamed.
+// Client patch parsers require a/ and b/ prefixes; override user diff prefix settings.
 export const PATCH_RENDER_PREFIX_ARGS = ["--src-prefix=a/", "--dst-prefix=b/"] as const;
 const REVIEW_DIFF_ARGS = [
   "diff",
@@ -342,12 +335,8 @@ export function splitNullSeparatedGitStdoutPaths(
   return splitNullSeparatedPaths(result.stdout, result.stdoutTruncated);
 }
 
-/**
- * Refuses a ref name with a leading "-" before it reaches checkout or `worktree add`. Git refuses
- * such branch and tag names, and both commands, or the `git branch` that `worktree add` runs, read
- * one as an option. `--end-of-options` cannot guard them: Git before 2.44 reads it like `--`.
- * A lone "-" is the previous checkout, which both commands read as a ref.
- */
+// Checkout/worktree add parse leading dashes as options; pre-2.44 Git cannot guard with --end-of-options.
+// A lone - still means previous checkout.
 const refuseOptionLikeRefName = (operation: string, cwd: string, refName: string | undefined) =>
   refName !== undefined && refName !== "-" && refName.startsWith("-")
     ? Effect.fail(
@@ -462,10 +451,7 @@ function gitCommandContext(
   } as const;
 }
 
-// Git states the actual cause on stderr, but stderr never leaves this module:
-// it echoes argv and remote URLs, which can carry credentials. Matching it
-// against fixed patterns yields a tag the caller can act on and a message that
-// quotes none of the matched text.
+// Stderr can echo credentials from argv/URLs; classify fixed patterns without exposing matched text.
 const GIT_FAILURE_REASON_PATTERNS: ReadonlyArray<readonly [RegExp, GitCommandFailureReason]> = [
   [/would clobber existing tag/i, "tag_would_be_clobbered"],
   [/is already (?:used by worktree at|checked out at)/i, "branch_checked_out_in_worktree"],
@@ -479,8 +465,7 @@ const GIT_FAILURE_REASON_PATTERNS: ReadonlyArray<readonly [RegExp, GitCommandFai
     /(?:could not read from remote repository|does not appear to be a git repository|repository .+ not found)/i,
     "remote_unreachable",
   ],
-  // Quoted-path forms only: an unquoted `fatal: <thing> already exists` also
-  // covers tag and ref collisions, which are not path collisions.
+  // Unquoted already-exists errors also describe ref/tag collisions; require quoted paths.
   [/fatal: '[^']+' already exists|destination path .+ already exists/i, "path_already_exists"],
   // Ambiguous revision/path and pathspec failures can name files, so omit them.
   // Anchor to a diagnostic line to avoid matching quoted paths in other errors.
@@ -518,17 +503,10 @@ function gitFailureDetail(reason: GitCommandFailureReason | null): string {
 // distinguishes them with a separate error line.
 const GIT_NOT_A_COMMIT_PATTERN = /^error: .+(?:, not a commit|expected commit type)/im;
 
-// Hooks write to the same stream git does, and nothing distinguishes their text
-// from git's: a pre-push hook echoing "authentication failed" would otherwise
-// be read as a credential failure. `remote:` is deliberately excluded — git
-// prefixes every byte the server sends that way, remote hook output included,
-// so trusting it would reintroduce the same false positive from the other end
-// of the connection.
+// Trust only Git's diagnostic prefixes: local hooks can write indistinguishable text.
+// Exclude `remote:` too, since it prefixes remote hook output as well as server diagnostics.
 const GIT_DIAGNOSTIC_LINE_PATTERN = /^(?:fatal|error):|^!\s|^\s+!\s/;
-// ssh reports the refusal itself, unprefixed, and git only adds a generic
-// "Could not read from remote repository" after it. Dropping ssh's line would
-// leave that generic one to be read as an unreachable remote when the real
-// cause is credentials, so these specific refusals are classified too.
+// SSH credential refusals are unprefixed; Git's later generic error would otherwise misclassify them as unreachable.
 const SSH_TRANSPORT_REFUSAL_PATTERN =
   /Permission denied \((?:publickey|password|keyboard-interactive)|Permission denied, please try again|Host key verification failed/i;
 
@@ -592,9 +570,7 @@ function isUnbornHeadStderr(stderr: string): boolean {
   );
 }
 
-// Matches `git worktree remove` on a path git no longer tracks: "is not a
-// working tree" when the registration is gone, "cannot remove working tree"
-// when older gits fail validation on a registered-but-deleted directory.
+// Git reports missing worktree registrations and registered-but-deleted paths differently.
 function isMissingWorktreeStderr(stderr: string): boolean {
   const normalized = stderr.toLowerCase();
   return (
@@ -603,8 +579,7 @@ function isMissingWorktreeStderr(stderr: string): boolean {
   );
 }
 
-// Fetch stderr can contain remote credentials. Only fixed diagnoses may enter
-// persisted errors; unrecognized output keeps the generic failure message.
+// Fetch stderr can carry credentials; persist only fixed diagnoses or generic failures.
 function fetchFailureDetail(stderr: string): string | undefined {
   const lines = stderr.split(/\r?\n/).map((line) => line.trim());
   if (
@@ -640,8 +615,7 @@ function fetchFailureDetail(stderr: string): string | undefined {
   return undefined;
 }
 
-// Matches a fetch that lost a ref update to another Git process. Git 2.53+
-// reports it as "fetching ref <ref> failed: ..."; older Git says "cannot lock ref".
+// Git 2.53+ reports ref races as fetching-ref failures; older versions say cannot lock ref.
 function isRefLockFailure(stderr: string): boolean {
   return stderr
     .split(/\r?\n/)
@@ -879,12 +853,10 @@ const collectOutput = Effect.fnUntraced(function* (
   let text = "";
   let lineBuffer = "";
   let truncated = false;
-  // A separator-free stream past the cap must not grow the line buffer
-  // without bound; a line longer than this is not one the callbacks want.
+  // Bound newline-free output; oversized lines are not useful to callbacks.
   const maxPendingLineBytes = 64 * 1024;
 
-  // Git redraws progress with a bare `\r` between updates and only ends the
-  // line once the step is done, so `\r` has to count as a line break here.
+  // Git redraws progress with bare CR; treat it as a line break.
   const emitCompleteLines = Effect.fnUntraced(function* (flush: boolean) {
     let separator = OUTPUT_LINE_SEPARATOR.exec(lineBuffer);
     while (separator) {
@@ -962,12 +934,7 @@ const collectOutput = Effect.fnUntraced(function* (
   };
 });
 
-/**
- * Git on Windows cannot create or delete a path longer than MAX_PATH (260)
- * unless `core.longpaths` is set. The OS-level LongPathsEnabled setting does not
- * cover it, and git leaves it off by default, so deep worktrees fail to check
- * out and fail midway through removal.
- */
+/** Windows Git needs core.longpaths beyond MAX_PATH (260); OS LongPathsEnabled alone is insufficient. */
 export const windowsLongPathConfigEnv = (
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
@@ -1010,8 +977,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         );
         const baseEnv = {
           ...process.env,
-          // Status polling runs beside the user's own git commands; without this,
-          // `git status` takes index.lock to save its refreshed index.
+          // Concurrent status polls must not take index.lock to save refreshed indexes.
           GIT_OPTIONAL_LOCKS: "0",
           ...input.env,
           ...trace2Monitor.env,
@@ -1019,22 +985,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         const env = { ...baseEnv, ...explicitBareRepositoryEnv(baseEnv, hostPlatform) };
         const spawnEnv = { ...env, ...windowsLongPathConfigEnv(hostPlatform, env) };
         const resolved = yield* resolveSpawnCommand("git", [], { env: spawnEnv });
-        // A git.cmd wrapper would need cmd.exe, which cuts multi-line commit
-        // messages at the first newline; leave that case to Node's lookup.
+        // cmd wrappers truncate multiline commits; leave git.cmd handling to Node lookup.
         const executable = resolved.shell ? "git" : resolved.command;
         const child = yield* commandSpawner
           .spawn(
             ChildProcess.make(executable, commandInput.args, {
               cwd: commandInput.cwd,
               env: spawnEnv,
-              // The timeout below interrupts this effect, which closes the scope,
-              // which terminates the child and AWAITS its exit. `forceKillAfter`
-              // defaults to undefined — no escalation — so a git wedged in
-              // uninterruptible IO that never handles SIGTERM would hold the
-              // finalizer open, and the timeout that was supposed to bound this
-              // command would never resolve. The retry that timeout exists to
-              // trigger could then never fire either.
-              // Upstream lets a caller shorten the grace (the status fetch uses 1s).
+              // The timeout closes this scope, which kills the child and AWAITS its exit. With no
+              // `forceKillAfter`, a git wedged in uninterruptible IO would hold the finalizer open
+              // and the timeout (and the retry it triggers) would never resolve. A caller may
+              // shorten the grace.
               forceKillAfter: input.forceKillAfterMs ?? FORCE_KILL_AFTER,
             }),
           )
@@ -1234,10 +1195,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map((result) => result.stdout),
     );
 
-  /**
-   * Runs `git worktree list --porcelain -z`. Git before 2.36 rejects `-z`, so a failed run
-   * retries the line form and returns it NUL-delimited, the same shape as `-z` output.
-   */
+  // Pre-2.36 Git rejects worktree list -z; normalize its line fallback to NUL records.
   const executeWorktreeList = Effect.fn("executeWorktreeList")(function* (
     operation: string,
     cwd: string,
@@ -1343,16 +1301,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   ) {
     const fetchCwd =
       path.basename(gitCommonDir) === ".git" ? path.dirname(gitCommonDir) : gitCommonDir;
-    // `--no-auto-gc` (a synonym of `--no-auto-maintenance` that older Git also knows) keeps
-    // this poll from starting `git gc --auto`. When that gc fails, for example on a repository
-    // with missing objects, Git retries it on every fetch and leaves a full-size `tmp_pack_*`
-    // behind each time, so a background poll could fill the disk.
-    // `-c credential.helper=` clears the helper chain for this fetch so a stuck
-    // credential helper (git-credential-osxkeychain under launchd) cannot hang
-    // the process; combined with GIT_TERMINAL_PROMPT=0 in the env, a fetch
-    // needing auth fails fast instead of blocking until the timeout. Tradeoff: an
-    // HTTPS remote that genuinely requires credentials never authenticates here,
-    // so its ahead/behind status settles into the failure backoff.
+    // `--no-auto-gc` stops a failing `git gc --auto` leaving a full `tmp_pack_*` on every poll. `-c
+    // credential.helper=` plus GIT_TERMINAL_PROMPT=0 keeps a stuck credential helper (osxkeychain
+    // under launchd) from hanging the fetch. Tradeoff: an HTTPS remote that needs credentials never
+    // authenticates here, so its ahead/behind settles into the failure backoff.
     const args = [
       "--git-dir",
       gitCommonDir,
@@ -1655,21 +1607,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       // The loader must SUCCEED with an outcome rather than fail: a cached failure is
       // re-propagated on every read for the whole cooldown. The fetch fiber records and
       // logs the failure; the outcome only picks the cache TTL below.
-      Effect.catch(() => Effect.succeed<StatusRemoteRefreshOutcome>("failed")),
+      Effect.orElseSucceed((): StatusRemoteRefreshOutcome => "failed"),
     );
   });
 
   const statusRemoteRefreshCache = yield* Cache.makeWith(refreshStatusRemoteCacheEntry, {
     capacity: STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY,
-    // A failed background fetch is intentionally cached and exponentially
-    // backed off. Status reads swallow this failure and use the last fetched
-    // refs, so repeated thread mounts cannot turn a slow or unavailable remote
-    // into a repository-wide Git subprocess storm.
-    //
-    // This reads the OUTCOME, not `Exit.isSuccess`. The loader above now succeeds
-    // either way, so keying on the exit alone would hand every failed entry the
-    // 15-second success interval and convert the log storm into a real fetch
-    // storm -- the exact regression this pair of changes exists to avoid.
+    // Cache/back off failed fetches while status uses old refs; repeated mounts must not cause subprocess storms.
+    // Keyed on the OUTCOME, not `Exit.isSuccess`: the loader succeeds either way, so the exit
+    // alone would give failed entries the 15 s success interval and turn a log storm into a
+    // fetch storm.
     timeToLive: (exit, cacheKey) =>
       Exit.isSuccess(exit) && exit.value === "refreshed"
         ? STATUS_UPSTREAM_REFRESH_INTERVAL
@@ -1798,7 +1745,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     "ensureRemote",
   )(function* (input) {
     const preferredName = sanitizeRemoteName(input.preferredName);
-    const normalizedTargetUrl = normalizeGitRemoteUrl(input.url);
+    const normalizedTargetUrl = sourceControlDefinitions.repositoryKeyFromRemote(input.url);
     const remoteFetchUrls = yield* runGitStdout(
       "GitVcsDriver.ensureRemote.listRemoteUrls",
       input.cwd,
@@ -1806,7 +1753,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     ).pipe(Effect.map((stdout) => parseRemoteFetchUrls(stdout)));
 
     for (const [remoteName, remoteUrl] of remoteFetchUrls.entries()) {
-      if (normalizeGitRemoteUrl(remoteUrl) === normalizedTargetUrl) {
+      if (sourceControlDefinitions.repositoryKeyFromRemote(remoteUrl) === normalizedTargetUrl) {
         return remoteName;
       }
     }
@@ -1888,8 +1835,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
     }
 
-    const configuredBaseBranch =
-      (yield* readConfigValue(cwd, `branch.${refName}.gh-merge-base`)) ?? "";
+    const configuredBaseBranch = (yield* readBranchBase(cwd, refName)) ?? "";
     const configuredBase = yield* resolveComparisonBaseRef(cwd, configuredBaseBranch);
     if (
       configuredBase !== null &&
@@ -2191,8 +2137,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const statusCacheKey = repositoryPaths?.gitCommonDir;
     const [numstatEntries, defaultBranch, hasPrimaryRemote] = yield* Effect.all(
       [
-        // Plumbing, because porcelain `git diff` rewrites the index even with
-        // GIT_OPTIONAL_LOCKS=0. -M keeps porcelain's rename detection.
+        // Porcelain diff rewrites indexes despite GIT_OPTIONAL_LOCKS=0; plumbing with -M preserves rename detection.
         executeGitWithStableDiagnostics(
           "GitVcsDriver.statusDetails.numstat",
           cwd,
@@ -2692,11 +2637,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.orElseSucceed(() => null),
     );
     if (currentUpstream) {
-      // A branch tracking a differently named ref was cut from it, the way `git
-      // checkout -b feature origin/dev` and our own worktree flow leave it.
-      // That upstream is the branch's base, not its publish target, and pushing
-      // HEAD onto it would write feature commits to a shared branch (bare `git
-      // push` refuses this under push.default=simple).
+      // Differently named upstreams are bases, not publish targets; pushing HEAD there would write features to shared branches.
       const isAliasOfUpstreamHead =
         branch === currentUpstream.branchName ||
         (branch.endsWith(`/${currentUpstream.branchName}`) &&
@@ -2708,16 +2649,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         const remoteName = publishRemoteName ?? currentUpstream.remoteName;
         const publishBranch = yield* resolvePublishBranchName(cwd, branch);
         // Publishing retargets the upstream, so preserve its comparison base first.
-        const configuredMergeBase = yield* runGitStdout(
-          "GitVcsDriver.pushCurrentBranch.readMergeBase",
-          cwd,
-          ["config", "--get", `branch.${branch}.gh-merge-base`],
-          true,
-        ).pipe(Effect.map((stdout) => stdout.trim()));
-        if (configuredMergeBase.length === 0) {
+        if ((yield* readBranchBase(cwd, branch)) === null) {
           yield* runGit("GitVcsDriver.pushCurrentBranch.recordMergeBase", cwd, [
             "config",
-            `branch.${branch}.gh-merge-base`,
+            branchBaseConfigKey(branch),
             currentUpstream.branchName,
           ]);
           if (!(yield* readConfigValue(cwd, `branch.${branch}.t3-merge-base-ref`))) {
@@ -2965,8 +2900,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (indexExists) {
       const { mtime } = yield* fileSystem.stat(indexPath);
       yield* fileSystem.copyFile(indexPath, tempIndexPath);
-      // Node FileSystem.stat truncates bigint timestamps to milliseconds before creating its Date.
-      // Flooring preserves the source second without making preceding-second files racy.
+      // stat truncates bigint times to ms; floor seconds to avoid making preceding-second files racy.
       const indexTime = Option.isSome(mtime)
         ? Math.max(0, Math.floor(mtime.value.getTime() / 1000))
         : 0;
@@ -3454,16 +3388,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     runGit("GitVcsDriver.deleteRef", cwd, ["branch", "-d", refName]);
 
   const readHeadSha: GitVcsDriver.GitVcsDriver["Service"]["readHeadSha"] = (cwd) =>
-    // A repository with no commits exits non-zero here, which is an absent
-    // head rather than a failure.
-    //
-    // `--verify` is load-bearing, not decoration. Without it `rev-parse HEAD`
-    // prints the literal string "HEAD" on STDOUT before exiting 128, and this
-    // call allows the non-zero exit and reads stdout regardless - so an unborn
-    // repository reported a head sha of "HEAD". Two members in that state then
-    // compared EQUAL at revert time and read as "nothing moved". `--verify`
-    // prints nothing when it cannot resolve the ref, so the empty-string check
-    // below returns null and the comment above becomes true.
+    // A repository with no commits exits non-zero here: an absent head, not a failure. `--verify`
+    // is load-bearing: without it `rev-parse HEAD` prints "HEAD" before exiting 128, and two unborn
+    // members compared EQUAL at revert time. With it, stdout is empty and this returns null.
     runGitStdout("GitVcsDriver.readHeadSha", cwd, ["rev-parse", "--verify", "HEAD"], true).pipe(
       Effect.map((stdout) => stdout.trim()),
       Effect.map((sha) => (sha.length > 0 ? sha : null)),
@@ -3503,6 +3430,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             .filter((line) => line.length > 0),
         ),
       );
+
+  const readBranchBase: GitVcsDriver.GitVcsDriver["Service"]["readBranchBase"] = Effect.fn(
+    "GitVcsDriver.readBranchBase",
+  )(function* (cwd, branch) {
+    const base = yield* readConfigValue(cwd, branchBaseConfigKey(branch));
+    return base ?? (yield* readConfigValue(cwd, legacyBranchBaseConfigKey(branch)));
+  });
+
   const resolveBranchBase = Effect.fn("GitVcsDriver.resolveBranchBase")(function* (
     cwd: string,
     refName: string,
@@ -3743,10 +3678,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const currentEpoch = listRefsEpochByCommonDir.get(gitCommonDir);
       const snapshot =
         refresh || currentEpoch === undefined
-          ? // The refresh cache owns the complete snapshot read, rather than only the
-            // epoch bump. Slow repositories therefore remain singleflight for the
-            // entire Git scan even when more refresh requests arrive after the
-            // coalescing TTL would otherwise have elapsed.
+          ? // Cache the entire snapshot read so slow scans stay single-flight beyond the coalescing TTL.
             yield* Cache.get(
               listRefsRefreshSnapshotCache,
               new GitRefsRefreshCacheKey({ gitCommonDir, generation }),
@@ -3861,18 +3793,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       current = parent;
     }
   });
-  // `git worktree add` refuses a path git still has an admin entry for, even
-  // when its directory is gone. `reuseRegisteredPath` drops exactly that entry
-  // (`<common-dir>/worktrees/<id>`, whose `gitdir` names `<path>/.git`) and
-  // then adds normally, so git still refuses an existing path or a branch in
-  // use elsewhere. It never touches a working tree or another prunable entry,
-  // unlike `add --force`, `worktree remove` or `worktree prune`. A locked entry
-  // is left for git to refuse; git also holds one `locked` while its own add is
-  // in flight, and a finished add has its directory. Callers hold the
-  // workspace lease for the resolved path across this and the add: without it
-  // a second caller can pass its checks, stall, then delete the first caller's
-  // fresh entry. That only covers this process. Two servers on one repo can
-  // still race, and git itself is not safe with two concurrent adds of one path.
+  // `git worktree add` refuses a path with a stale admin entry; this drops only that entry, never a
+  // working tree or another prunable entry (unlike `add --force` or `prune`). Locked entries are
+  // left to git. Callers hold the workspace lease across this and the add, or a second caller could
+  // delete the first's fresh entry. Cross-process races remain.
   const releaseMissingWorktreeRegistration = Effect.fn("releaseMissingWorktreeRegistration")(
     function* (cwd: string, worktreePath: string, target: string) {
       const isPresent = (target: string) =>
@@ -3909,7 +3833,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.newRefName);
     const targetBranch = input.newRefName ?? input.refName;
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
-    // resolve: a cwd like `<repo>/sub/..` must not name the folder `..`.
+    // Resolve sub/.. before taking the basename.
     const repoName = path.basename(path.resolve(input.cwd));
     let worktreePath = input.path;
     if (worktreePath == null) {
@@ -3974,9 +3898,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       yield* progress.onWorktreeClaimed(worktreePath);
     }
 
-    // `git worktree add` leaves submodules empty, so a repo that keeps agent
-    // skills, tooling or source in one gets a worktree that is quietly missing
-    // them.
+    // worktree add leaves submodules empty, potentially omitting project skills, tools or source.
     const hasSubmodules = yield* fileSystem
       .exists(path.join(worktreePath, ".gitmodules"))
       .pipe(Effect.orElseSucceed(() => false));
@@ -4042,17 +3964,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       );
     }
 
-    if (input.newRefName && input.baseRefName) {
+    const newRefName = input.newRefName;
+    if (newRefName && input.baseRefName) {
       const base = yield* resolveBranchBase(input.cwd, input.baseRefName);
       if (base) {
         yield* Effect.gen(function* () {
           yield* runGit("GitVcsDriver.createWorktree.configureBaseRef", input.cwd, [
             "config",
-            `branch.${input.newRefName}.gh-merge-base`,
+            branchBaseConfigKey(newRefName),
             base.branchName,
           ]);
           if (base.baseRef.startsWith("refs/remotes/")) {
-            // gh consumes its key as a provider branch; T3 also needs the selected remote.
+            // The base key names a branch on the host; this one keeps the remote it came from.
             yield* runGit("GitVcsDriver.createWorktree.configureComparisonRef", input.cwd, [
               "config",
               `branch.${input.newRefName}.t3-merge-base-ref`,
@@ -4078,25 +4001,26 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
   });
 
-  const fetchPullRequestBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchPullRequestBranch"] =
-    Effect.fn("fetchPullRequestBranch")(function* (input) {
-      const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
-      yield* executeGit(
-        "GitVcsDriver.fetchPullRequestBranch",
-        input.cwd,
-        [
-          "fetch",
-          "--quiet",
-          "--no-tags",
-          "--",
-          remoteName,
-          `+refs/pull/${input.prNumber}/head:refs/heads/${input.branch}`,
-        ],
-        {
-          fallbackErrorDetail: "git fetch pull request branch failed",
-        },
-      );
-    });
+  const fetchRefIntoBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchRefIntoBranch"] = Effect.fn(
+    "GitVcsDriver.fetchRefIntoBranch",
+  )(function* (input) {
+    const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
+    yield* executeGit(
+      "GitVcsDriver.fetchRefIntoBranch",
+      input.cwd,
+      [
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--",
+        remoteName,
+        `+${input.ref}:refs/heads/${input.branch}`,
+      ],
+      {
+        fallbackErrorDetail: "git fetch ref into branch failed",
+      },
+    );
+  });
 
   const resolveCommit: GitVcsDriver.GitVcsDriver["Service"]["resolveCommit"] = Effect.fn(
     "resolveCommit",
@@ -4110,22 +4034,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return { commitSha };
   });
 
-  const fetchPullRequestHeadCommit: GitVcsDriver.GitVcsDriver["Service"]["fetchPullRequestHeadCommit"] =
-    Effect.fn("fetchPullRequestHeadCommit")(function* (input) {
-      const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
-      // No refspec destination: the pull head lands in FETCH_HEAD (per worktree) instead of a
-      // branch, which is the only way to read it while that branch is checked out somewhere.
-      yield* executeGit(
-        "GitVcsDriver.fetchPullRequestHeadCommit",
-        input.cwd,
-        ["fetch", "--quiet", "--no-tags", "--", remoteName, `refs/pull/${input.prNumber}/head`],
-        {
-          fallbackErrorDetail: "git fetch pull request head failed",
-        },
-      );
+  const fetchRefCommit: GitVcsDriver.GitVcsDriver["Service"]["fetchRefCommit"] = Effect.fn(
+    "GitVcsDriver.fetchRefCommit",
+  )(function* (input) {
+    const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
+    // No refspec destination: the ref lands in FETCH_HEAD (per worktree) instead of a branch,
+    // which is the only way to read it while that branch is checked out somewhere.
+    yield* executeGit(
+      "GitVcsDriver.fetchRefCommit",
+      input.cwd,
+      ["fetch", "--quiet", "--no-tags", "--", remoteName, input.ref],
+      {
+        fallbackErrorDetail: "git fetch ref failed",
+      },
+    );
 
-      return yield* resolveCommit({ cwd: input.cwd, revision: "FETCH_HEAD" });
-    });
+    return yield* resolveCommit({ cwd: input.cwd, revision: "FETCH_HEAD" });
+  });
 
   const refreshCheckedOutBranch: GitVcsDriver.GitVcsDriver["Service"]["refreshCheckedOutBranch"] =
     Effect.fn("refreshCheckedOutBranch")(function* (input) {
@@ -4149,17 +4074,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ["merge-base", "--is-ancestor", headCommit, input.targetCommit],
         { allowNonZeroExit: true },
       ).pipe(Effect.map((result) => result.exitCode === 0));
-      // A rewritten head (rebase, squash, amend) does not descend from the checkout, so it can
-      // only be taken by resetting. That is lossless exactly when the tree is clean and HEAD
-      // never left the commit the upstream held before the fetch.
+      // Rewritten heads require reset; allow only clean checkouts still at the pre-fetch upstream commit.
       if (!isAncestor && headCommit !== input.resetWhenHeadCommit) {
         return { headCommit, moved: false, onTarget: false };
       }
 
       if (!isAncestor) {
-        // The commit being reset away is about to be reachable from nothing. It is only ever a
-        // commit the remote already held, but "the remote held it" stops being a way back once
-        // the head it belonged to has been rewritten, so a ref keeps it findable.
+        // Retain the reset-away commit; rewritten remote heads no longer provide a path back.
         yield* executeGit(
           "GitVcsDriver.refreshCheckedOutBranch.keepPrevious",
           input.cwd,
@@ -4171,10 +4092,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       yield* executeGit(
         "GitVcsDriver.refreshCheckedOutBranch.move",
         input.cwd,
-        // `--merge` rather than `--hard`: the cleanliness check above is a snapshot, and another
-        // thread may edit a tracked file between it and this move. Git itself refuses a `--merge`
-        // reset that would overwrite such an edit — the same guarantee `--ff-only` gives the
-        // other branch — so a race loses nothing; the refresh fails and is reported instead.
+        // reset --merge refuses tracked edits racing our cleanliness check, preserving work like --ff-only does.
         isAncestor
           ? ["merge", "--ff-only", input.targetCommit]
           : ["reset", "--merge", input.targetCommit],
@@ -4207,8 +4125,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         },
       );
       return run.pipe(
-        Effect.flatMap((result) =>
-          result.exitCode !== 0 && isRefLockFailure(result.stderr) ? run : Effect.succeed(result),
+        Effect.filterOrElse(
+          (result) => !(result.exitCode !== 0 && isRefLockFailure(result.stderr)),
+          (_result) => run,
         ),
       );
     };
@@ -4422,12 +4341,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.provideService(Path.Path, path),
     );
     if (result.exitCode === 0) {
-      // Git for Windows never descends into NTFS junctions, such as pnpm's
-      // node_modules links. It reports success but leaves them and their parent
-      // directories behind, so a resumed thread would find a stub instead of
-      // recreating its checkout. Git has already unregistered the worktree, so
-      // anything left here is logged rather than returned: a retry could never
-      // succeed.
+      // Git for Windows reports success without removing NTFS junctions or their parent directories.
+      // Log leftover cleanup failures: Git already unregistered the worktree, so removal cannot be retried.
       if (yield* fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false))) {
         const removed = yield* removeLeftoverLinks(target).pipe(
           Effect.catch((error) =>
@@ -4446,9 +4361,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       return;
     }
-    // Threads can share a worktree path, and worktrees get removed or pruned
-    // outside the app, so a worktree that is already gone is a no-op rather
-    // than an error.
+    // Threads share paths and outside Git can remove worktrees; already-gone removals are no-ops.
     const alreadyGone =
       isMissingWorktreeStderr(result.stderr) &&
       !(yield* fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false)));
@@ -4652,8 +4565,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const listWorktreePaths: GitVcsDriver.GitVcsDriver["Service"]["listWorktreePaths"] = (cwd) =>
     executeWorktreeList("GitVcsDriver.listWorktreePaths", cwd, []).pipe(
-      // One record per worktree, each ended by an empty field. A `prunable`
-      // record's directory is gone, and another checkout may now sit there.
+      // A `prunable` record's directory is gone; another checkout may now sit there.
       Effect.map(({ stdout }) =>
         stdout.split("\0\0").flatMap((record) => {
           const fields = record.split("\0");
@@ -4691,27 +4603,32 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ),
     );
 
+  // Forwarders retain the underlying Git operation spans.
   return GitVcsDriver.GitVcsDriver.of({
     execute,
-    // These read the working tree and nothing else, so re-running one after a
-    // host-overload timeout costs a second read and answers the same question.
-    // A zero-work `rev-parse` is the command that most often times out when the
-    // machine is saturated, and until now nothing on this path retried it —
-    // which is most of the repeated status noise in the log.
-    //
-    // `statusDetailsRemote` is deliberately NOT here: it reaches the network,
-    // and retrying a fetch that timed out under overload is how a slow host
-    // becomes a fetch storm.
-    status: (input) => retryTransientRead(status(input)),
-    statusDetails: (cwd) => retryTransientRead(statusDetails(cwd)),
-    statusDetailsLocal: (cwd, options) => retryTransientRead(statusDetailsLocal(cwd, options)),
+    // Read-only working-tree commands, safe to re-run after a host-overload timeout; a zero-work
+    // `rev-parse` is what most often times out. `statusDetailsRemote` is deliberately NOT here:
+    // retrying a timed-out fetch is how a slow host becomes a fetch storm.
+    status: Effect.fn("GitVcsDriver.GitVcsDriver.status")((input) =>
+      retryTransientRead(status(input)),
+    ),
+    statusDetails: Effect.fn("GitVcsDriver.GitVcsDriver.statusDetails")((cwd) =>
+      retryTransientRead(statusDetails(cwd)),
+    ),
+    statusDetailsLocal: Effect.fn("GitVcsDriver.GitVcsDriver.statusDetailsLocal")((cwd, options) =>
+      retryTransientRead(statusDetailsLocal(cwd, options)),
+    ),
     statusDetailsRemote,
     prepareCommitContext,
-    commit: (cwd, subject, body, options) =>
-      withListRefsInvalidation(cwd, commit(cwd, subject, body, options)),
-    pushCurrentBranch: (cwd, fallbackBranch, options) =>
-      withListRefsInvalidation(cwd, pushCurrentBranch(cwd, fallbackBranch, options)),
-    pullCurrentBranch: (cwd) => withListRefsInvalidation(cwd, pullCurrentBranch(cwd)),
+    commit: Effect.fnUntraced(function* (cwd, subject, body, options) {
+      return yield* withListRefsInvalidation(cwd, commit(cwd, subject, body, options));
+    }),
+    pushCurrentBranch: Effect.fnUntraced(function* (cwd, fallbackBranch, options) {
+      return yield* withListRefsInvalidation(cwd, pushCurrentBranch(cwd, fallbackBranch, options));
+    }),
+    pullCurrentBranch: Effect.fnUntraced(function* (cwd) {
+      return yield* withListRefsInvalidation(cwd, pullCurrentBranch(cwd));
+    }),
     readRangeContext,
     getReviewDiffPreview,
     getReviewDiffFileContents,
@@ -4722,21 +4639,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     writeConfigValue,
     readBranchReflog,
     listBranchNamesPointingAt,
+    readBranchBase,
     resolveBranchName,
     listRefs,
-    createWorktree: (input, options) =>
-      withListRefsInvalidation(input.cwd, createWorktree(input, options)),
-    fetchPullRequestBranch: (input) =>
-      withListRefsInvalidation(input.cwd, fetchPullRequestBranch(input)),
-    fetchPullRequestHeadCommit,
+    createWorktree: Effect.fnUntraced(function* (input, options) {
+      return yield* withListRefsInvalidation(input.cwd, createWorktree(input, options));
+    }),
+    fetchRefIntoBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, fetchRefIntoBranch(input));
+    }),
+    fetchRefCommit,
     resolveCommit,
-    refreshCheckedOutBranch: (input) =>
-      withListRefsInvalidation(input.cwd, refreshCheckedOutBranch(input)),
-    ensureRemote: (input) => withListRefsInvalidation(input.cwd, ensureRemote(input)),
+    refreshCheckedOutBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, refreshCheckedOutBranch(input));
+    }),
+    ensureRemote: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, ensureRemote(input));
+    }),
     resolvePrimaryRemoteName,
     resolveDefaultBranchName,
-    fetchRemote: (input) =>
-      withListRefsInvalidation(
+    fetchRemote: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(
         input.cwd,
         fetchRemote(input).pipe(
           Effect.flatMap((fetched) =>
@@ -4745,23 +4668,42 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               : fetchRemote({ cwd: input.cwd, remoteName: input.remoteName }).pipe(Effect.asVoid),
           ),
         ),
-      ),
+      );
+    }),
     remoteExists,
     remoteBranchExists,
     resolveRemoteTrackingCommit,
     resolveWorktreeBaseRemote,
-    fetchWorktreeBaseCommit: (input) =>
-      withListRefsInvalidation(input.cwd, fetchWorktreeBaseCommit(input)),
-    fetchRemoteBranch: (input) => withListRefsInvalidation(input.cwd, fetchRemoteBranch(input)),
-    fetchRemoteTrackingBranch: (input) =>
-      withListRefsInvalidation(input.cwd, fetchRemoteTrackingBranch(input)),
-    setBranchUpstream: (input) => withListRefsInvalidation(input.cwd, setBranchUpstream(input)),
-    removeWorktree: (input) => withListRefsInvalidation(input.cwd, removeWorktree(input)),
-    pruneWorktrees: (input) => withListRefsInvalidation(input.cwd, pruneWorktrees(input)),
-    deleteLocalBranch: (input) => withListRefsInvalidation(input.cwd, deleteLocalBranch(input)),
-    renameBranch: (input) => withListRefsInvalidation(input.cwd, renameBranch(input)),
-    createRef: (input) => withListRefsInvalidation(input.cwd, createRef(input)),
-    switchRef: (input) => withListRefsInvalidation(input.cwd, switchRef(input)),
+    fetchWorktreeBaseCommit: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, fetchWorktreeBaseCommit(input));
+    }),
+    fetchRemoteBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, fetchRemoteBranch(input));
+    }),
+    fetchRemoteTrackingBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, fetchRemoteTrackingBranch(input));
+    }),
+    setBranchUpstream: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, setBranchUpstream(input));
+    }),
+    removeWorktree: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, removeWorktree(input));
+    }),
+    pruneWorktrees: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, pruneWorktrees(input));
+    }),
+    deleteLocalBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, deleteLocalBranch(input));
+    }),
+    renameBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, renameBranch(input));
+    }),
+    createRef: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, createRef(input));
+    }),
+    switchRef: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, switchRef(input));
+    }),
     initRepo: initRepoWithListRefsInvalidation,
     listLocalBranchNames,
     listWorktreePaths,

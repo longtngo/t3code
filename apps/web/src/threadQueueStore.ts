@@ -1,15 +1,8 @@
 /**
- * The sidebar Queue: threads (started or still drafts) waiting to send their composer draft while
- * fewer threads are busy than the queue's slots.
- *
- * Where it lives is the store's mode (`resolveThreadQueueMode`):
- * - local: this device only (the v1 key), shared by its tabs; a claim is "write, wait, re-read".
- * - server: the primary's server holds the document. This tab shows it with its own unconfirmed
- *   changes on top and writes them one at a time by compare-and-set. v1 is neither read nor
- *   written, so an old-bundle tab and a rollback both find their own queue untouched.
- * - pending: before the live document arrives, or while the primary is disconnected. The last
- *   mirror is shown read-only; only what already happened (a hand send's removal, a send's
- *   outcome) is kept, and applied later.
+ * Sidebar Queue: threads waiting to send their draft while fewer threads are busy than its slots.
+ * Modes (`resolveThreadQueueMode`): local (v1 key, write-wait-re-read claims); server (primary
+ * holds the document, CAS writes one at a time, v1 untouched for old tabs and rollback); pending
+ * (read-only last mirror; only hand-send removals and send outcomes are kept and applied later).
  */
 import {
   THREAD_QUEUE_FAILURE_MESSAGE_MAX_LENGTH,
@@ -199,11 +192,9 @@ let writer: ThreadQueueWriter | null = null;
 let chainRunning = false;
 
 /**
- * `writer.write`, rejecting once the app's slow-request mark passes without a reply (about 7x the
- * slowest comparable server write seen live; a socket loss fails sooner on its own). The write may
- * still land, so the timeout takes the failed-request path and is never re-run: a re-run could
- * undo another device's later change. The subscription shows what landed. The request itself is
- * abandoned, not cancelled (the RPC command has no cancel), and stays on the slow-request toast.
+ * Rejects once the slow-request mark passes (about 7x the slowest live write). The write may still
+ * land, so a timeout takes the failed-request path and is never re-run, which could undo another
+ * device's later change. The request is abandoned, not cancelled (no RPC cancel).
  */
 function writeWithin(
   active: ThreadQueueWriter,
@@ -490,12 +481,9 @@ export const useThreadQueueStore = create<ThreadQueueState>()(
       };
 
       /**
-       * Waits for this tab's `kind` write for `claimId` to leave the chain; true when the server
-       * then `holds` it. A lost reply is settled by the compare-and-set itself: the adopted
-       * document is re-sent unchanged (outside the chain, which skips a no-op), and the reply,
-       * accepted or refused, carries the current document. Re-sent with backoff while the request
-       * fails; any adopted document that `holds` settles it, and leaving server mode or becoming
-       * read-only gives up.
+       * True when the server `holds` this tab's `kind` write for `claimId` once it leaves the chain. A
+       * lost reply is settled by re-sending the adopted document unchanged (outside the chain); any reply
+       * carries the current document. Retried with backoff; leaving server mode or read-only gives up.
        */
       const settle = async (
         kind: Settled,
@@ -750,11 +738,9 @@ useThreadQueueStore.persist.onFinishHydration(() => {
 if (useThreadQueueStore.getState().mode === "local") void useThreadQueueStore.persist.rehydrate();
 
 /**
- * A thread the user sent by hand leaves the queue (a draft may have moved machine since it joined).
- * A claim on it whose send has not started is taken over: marked sent by hand, so no tab sends it
- * again and every tab holds the slot until that message lands. Call the returned function when
- * the hand send fails: it frees the slot that claim still holds. A removal held while pending
- * returns a no-op: that slot waits for the landing cap.
+ * A hand-sent thread leaves the queue; an unstarted claim on it is marked sent by hand so no tab
+ * re-sends it and every tab holds the slot until it lands. Call the returned function if the hand
+ * send fails, to free that slot. A removal held while pending returns a no-op.
  */
 export function removeSentThreadFromQueue(threadKey: string, draftId: DraftId | null): () => void {
   const queue = useThreadQueueStore.getState();

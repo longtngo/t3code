@@ -70,12 +70,10 @@ export const layer: Layer.Layer<
     }) {
       const { run, rootNode, scope, providerThread, readyCheckpointOrdinals } =
         yield* projections.getCheckpointCaptureContext(input.threadId, input);
-      // A stopped run is already terminal. Its checkpoint is the rollback point
-      // for the message after it, so capture leaves its status alone.
+      // Stopped runs remain terminal; their checkpoint is the next message's rollback point.
       const stopped = run?.status === "interrupted" || run?.status === "cancelled";
 
-      // The effect is at-least-once. A settled run with a checkpoint proves
-      // that an earlier execution committed its result.
+      // A checkpoint on a settled run proves this at-least-once effect already committed.
       if (
         run !== undefined &&
         run.checkpointId !== null &&
@@ -83,9 +81,7 @@ export const layer: Layer.Layer<
       ) {
         return;
       }
-      // Rollback shares this effect lane, so it can only land before a capture
-      // runs, e.g. while a failed capture waits to retry. The workspace now
-      // holds the rollback target, and the run must stay discarded.
+      // Rollback uses the same lane and can precede a capture retry; preserve the restored workspace and discarded run.
       if (run?.status === "rolled_back") {
         return;
       }
@@ -131,17 +127,13 @@ export const layer: Layer.Layer<
         appRunOrdinal: run.ordinal,
         capturedAt,
       });
-      // Fork: recorded, not snapshotted. Enough to tell at rollback time whether
-      // restoring this checkout alone still produces the tree this describes.
-      // Read after the capture and before the finalization sweep moves any
-      // member branch.
+      // Fork: recorded, not snapshotted, so rollback can tell whether restoring this
+      // checkout alone reproduces the tree. Read after capture, before the
+      // finalization sweep moves any member branch.
       const memberStates = yield* workspaceMembers.checkpointStates({ threadId: input.threadId });
       const checkpoint =
         memberStates === undefined ? capturedCheckpoint : { ...capturedCheckpoint, memberStates };
-      // Match RunExecutionService: capture loaded the waiting run before
-      // materializing baselines. Omit delegatedCompletion so a newer cohort
-      // write during capture is not overwritten by this stale snapshot
-      // (ProjectionStore preserves the field when absent from the payload).
+      // Omit delegatedCompletion to preserve cohort writes made after capture loaded the run.
       const { delegatedCompletion: _delegatedCompletion, ...runWithoutDelegatedCompletion } = run;
       const commandId = CommandId.make(`command:effect:checkpoint.capture:${run.id}`);
       yield* eventSink.commitCommand({
@@ -249,14 +241,15 @@ export const layer: Layer.Layer<
     });
 
     return CheckpointCaptureServiceV2.of({
-      execute: (input) =>
-        execute(input).pipe(
+      execute: Effect.fn("CheckpointCaptureServiceV2.execute")(function (input) {
+        return execute(input).pipe(
           Effect.mapError((cause) =>
             isCheckpointCaptureExecutionError(cause)
               ? cause
               : new CheckpointCaptureExecutionError({ ...input, cause }),
           ),
-        ),
+        );
+      }),
     });
   }),
 );

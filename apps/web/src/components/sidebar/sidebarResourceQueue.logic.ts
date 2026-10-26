@@ -1,11 +1,9 @@
 import type { ResourceQueueItem } from "@t3tools/contracts";
 
 /**
- * A resctl job carries only free-form text (`reason`) plus timing anchors — there is no
- * structured "name / description / estimated-duration" split. These pure helpers derive the
- * richer row presentation (a wrapped name + optional description line, and a running/estimated
- * progress ring) from that free text, so the sidebar component stays a thin renderer and the
- * derivation is unit-tested in isolation.
+ * A resctl job carries only free-form `reason` text plus timing anchors. These pure helpers
+ * derive the row presentation (name, optional description, progress ring) from it, so the
+ * component stays a thin renderer.
  */
 
 /** The accent classes a pool is drawn with: its label badge and its capacity bar. */

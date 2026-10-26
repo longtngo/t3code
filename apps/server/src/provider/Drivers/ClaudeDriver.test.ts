@@ -175,20 +175,25 @@ describe("ClaudeDriver idle compaction wiring", () => {
     });
     const onUserDialog = options?.onUserDialog;
     if (onUserDialog === undefined) return yield* Effect.die("The query opened no dialog handler");
-    const abort = new AbortController();
-    const answer = onUserDialog(
-      {
-        dialogKind: "resume_return",
-        payload: { sessionAgeMinutes: 120, estimatedTokens: 400_000 },
-      } as never,
-      { signal: abort.signal, requestId: "dialog-claude-offer" } as never,
+    // The inner scope's close aborts the dialog, which releases a pending answer.
+    const { settled, answer } = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const signal = yield* Effect.abortSignal;
+        const answer = onUserDialog(
+          {
+            dialogKind: "resume_return",
+            payload: { sessionAgeMinutes: 120, estimatedTokens: 400_000 },
+          } as never,
+          { signal, requestId: "dialog-claude-offer" } as never,
+        );
+        // An offered question becomes a pending runtime request; an auto-answer settles.
+        const settled = yield* Effect.raceFirst(
+          Effect.promise(() => answer),
+          Deferred.await(asked),
+        );
+        return { settled, answer };
+      }),
     );
-    // An offered question becomes a pending runtime request; an auto-answer settles.
-    const settled = yield* Effect.raceFirst(
-      Effect.promise(() => answer),
-      Deferred.await(asked),
-    );
-    abort.abort();
     yield* Effect.promise(() => answer.catch(() => undefined));
     return settled;
   });

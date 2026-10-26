@@ -116,28 +116,14 @@ export function SidebarQueueBlock(props: {
       <li
         ref={setDropRef}
         className={cn(
-          // The header is the drop target for a drag from the main list, matched by a strict
-          // pointer-inside-its-rect test with no tolerance. That test resolves against the LIVE
-          // rect (see Sidebar.drag.ts), so a stale or short measurement cannot decide it, and a
-          // shrink-0 guard tried here measured inert: the column's height is content-driven and the
-          // scroller absorbs the overflow, so the header holds 32px at every viewport height
-          // sampled, at rest and mid-drag.
+          // The header is the drop target for a main-list drag, hit-tested against the LIVE rect (see
+          // Sidebar.drag.ts), so a stale measurement cannot decide it. A shrink-0 guard here measured
+          // inert: the scroller absorbs overflow, and the header holds 32px at every height sampled.
           "mx-0.5 h-8 list-none rounded-md",
-          // Pushed into the empty space below the rows while a main-list drag runs: the preview
-          // opens space where the Queue sits, and a zone that moves with it is a target the
-          // pointer chases. It shares the free space with the shelves' own auto margin.
-          // Above the sorting preview AND opaque. The preview moves rows by TRANSFORM, which cannot
-          // push this header aside: it only takes the shift of the content above it, never a row's
-          // room. So whenever the list already scrolls at drag start the collapse below is skipped, the header
-          // stays inline under the last Active row, and a shifted row lands on top of it - covering
-          // 810 of 810 sampled header pixels and 100% of the Queue toggle.
-          //
-          // `z-20` beats the transformed li, which is its own stacking context (NOT the row card's
-          // `z-10`, which that context already caps). But z alone only wins the HIT TEST: both
-          // elements are transparent, so the row's title still rendered across the drop zone and the
-          // leaked ink barely moved. `bg-sidebar` is what actually hides it - and it must stay a
-          // whole token, since `bg-sidebar/50` is see-through and defeated both gates written for
-          // this.
+          // Pushed below the rows during a main-list drag so the drop zone does not move with the
+          // preview. Above the preview AND opaque: rows shift by TRANSFORM, so a shifted row can land on
+          // the header (it covered the whole Queue toggle when sampled). `z-20` wins the hit test over the
+          // transformed li; whole-token `bg-sidebar` hides its ink (`bg-sidebar/50` is see-through).
           props.dragging &&
             "relative z-20 border border-dashed border-sidebar-foreground/25 bg-sidebar",
           props.collapse && "mt-auto",

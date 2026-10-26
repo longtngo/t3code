@@ -1,14 +1,7 @@
 /**
- * Remembers what each thread last reported for each kind of checkpoint capture failure.
- *
- * A capture failure is usually a property of the workspace rather than of the turn - a
- * member repository that no longer exists, or a git that keeps timing out - so it
- * reproduces every turn and reads identically each time. Measured on the developer's own
- * history: one thread recorded 37 of these across 37 consecutive turns spanning three and
- * a half days, another 18 across 18. The first one carries the whole message; the rest
- * only bury it.
- *
- * @module CaptureFailureLog
+ * What each thread last reported per kind of checkpoint capture failure. Such failures are usually
+ * a property of the workspace, so they repeat identically every turn (one thread logged 37 across
+ * 37 turns); the first carries the message and the rest only bury it.
  */
 
 /** The three failures a capture can report. The kind is the dedup key. */

@@ -21,15 +21,9 @@ export interface ThreadProviderSource {
 }
 
 /**
- * The provider instance a thread is currently on.
- *
- * A live runtime's provider outranks the thread's stored selection: when a session is running,
- * the provider actually serving the thread is the truthful answer, and the two can differ (a
- * locked continuation keeps its original instance after the stored selection moves on). This
- * mirrors the composer's precedence so the rail and the composer never disagree.
- *
- * Total by construction — `modelSelection` is non-nullable on a thread shell and its `instanceId`
- * is required — so there is no "unknown provider" case to render.
+ * The provider instance a thread is currently on. A live runtime's provider outranks the
+ * stored selection (a locked continuation keeps its instance after the selection moves),
+ * mirroring the composer so the two never disagree. Total: `instanceId` is always present.
  */
 export function resolveThreadProviderInstanceId(thread: ThreadProviderSource): ProviderInstanceId {
   return thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
@@ -81,12 +75,8 @@ function qualifyDisplayName(
 }
 
 /**
- * Presentation for a thread's provider, or `undefined` when the rail should not render.
- *
- * Absent whenever the instance is unknown to this environment or carries no valid accent: a
- * neutral bar on such rows would be visual weight conveying nothing. `normalizeProviderAccentColor`
- * rejects anything that is not a `#rrggbb` literal, so a malformed accent is treated as absent
- * rather than reaching the DOM as an invalid style.
+ * Presentation for a thread's provider, or `undefined` when the instance is unknown here or
+ * has no valid `#rrggbb` accent (a neutral bar would carry no information).
  */
 export function resolveThreadProviderPresentation(
   instanceId: ProviderInstanceId,

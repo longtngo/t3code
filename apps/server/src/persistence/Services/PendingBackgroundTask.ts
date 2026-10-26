@@ -1,9 +1,6 @@
 /**
- * PendingBackgroundTaskRepository - Repository for in-flight background tasks.
- *
- * Owns the durable record of background tasks (backgrounded shell watchers,
- * fire-and-forget `Agent`/Task subagents) that the recovery heartbeat
- * reconciles after a server restart. See migration 033 for the rationale.
+ * PendingBackgroundTaskRepository - durable in-flight background tasks the recovery heartbeat
+ * reconciles after a restart. See migration 033 for the rationale.
  *
  * @module PendingBackgroundTaskRepository
  */

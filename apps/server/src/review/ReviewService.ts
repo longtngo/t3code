@@ -28,23 +28,10 @@ export class ReviewService extends Context.Service<
 >()("t3/review/ReviewService") {}
 
 /**
- * Review reads are NOT bound to the server's own working directory.
- *
- * There used to be an `assertWorkspaceBoundCwd` here allowing only paths under
- * `config.cwd` or `config.worktreesDir`. `config.cwd` is `process.cwd()`, which
- * for a service-managed server is wherever the launcher happened to point it —
- * so every project the user actually reviews sat outside it and every diff
- * failed. Worse, the client papered over that by retrying at the server's own
- * cwd, rendering one repository's changes under another's name.
- *
- * Restoring it as a real boundary would mean sourcing the roots from the
- * projects projection (workspace roots + attached members + thread worktrees),
- * and it still would not bound anything: `projectsReadTrustedFile` reads any
- * file the process can read under `filesystem:read`, the same scope these RPCs
- * require. What authorizes a review read is that scope, the same as every
- * sibling filesystem RPC.
- *
- * @public Service construction is part of the canonical Effect module API.
+ * Review reads are NOT bound to the server's cwd (often no project's, so every diff failed).
+ * `filesystem:read`, which these RPCs require, already reads any file the process can, so that
+ * scope is what authorizes a review read.
+ * @public
  */
 export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;

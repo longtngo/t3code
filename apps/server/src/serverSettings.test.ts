@@ -387,10 +387,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const at = "2026-10-07T00:00:00.000Z";
-      yield* Effect.all(
-        ["first", "second"].map((id) =>
+      yield* Effect.forEach(
+        ["first", "second"],
+        (id) =>
           serverSettings.updateSettings({ sidebarSections: { [id]: { name: id, createdAt: at } } }),
-        ),
         { concurrency: "unbounded" },
       );
       assert.deepEqual(
@@ -468,8 +468,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const instanceId = ProviderInstanceId.make("acpRegistry_shared");
-      const results = yield* Effect.all(
-        ["First", "Second"].map((displayName) =>
+      const results = yield* Effect.forEach(
+        ["First", "Second"],
+        (displayName) =>
           serverSettings
             .updateProviderInstance({
               operation: "create",
@@ -481,7 +482,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
               },
             })
             .pipe(Effect.result),
-        ),
         { concurrency: "unbounded" },
       );
 
@@ -753,7 +753,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
-  // A backend behind a custom model may refuse the built-in default (#12651).
+  // A backend behind a custom model may refuse the built-in default.
   it.effect("falls back to the thread default when it is a custom model on that instance", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
@@ -1068,12 +1068,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
 
-      // `disableAuthentication` is startup-only (--disable-auth / T3CODE_DISABLE_AUTH), but
-      // boot falls back to the persisted settings file. While it was patchable, any client
-      // holding the ordinary settings-write scope could switch authentication off for the
-      // next restart. Decode first, exactly as the RPC does: `applyServerSettingsPatch`
-      // spreads the patch object blindly, so the schema boundary is what has to drop the
-      // field — asserting against the service directly would skip the only real guard.
+      // `disableAuthentication` is startup-only, but boot reads the settings file, so a patch
+      // would let any settings-write client disable auth. Decode first, like the RPC:
+      // `applyServerSettingsPatch` spreads blindly, so the schema is the only real guard.
       const patch = yield* decodeSettingsPatch({ disableAuthentication: true });
       assert.deepEqual(patch, {});
 
@@ -1412,7 +1409,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         assert.notInclude(yield* fs.readFileString(config.settingsPath), value);
         assert.notInclude(JSON.stringify(client), value);
       }
-      // Editing another field from the client's copy keeps the saved password.
       const clientConfig = client.providerInstances[opencode]?.config as Record<string, unknown>;
       const edited = yield* service.updateProviderInstance({
         operation: "upsert",
@@ -1903,10 +1899,14 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         runOnWorktreeCreate: false,
       };
       const model = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5");
-      const modelJson = yield* Schema.encodeEffect(Schema.fromJsonString(ModelSelection))(model);
-      const scriptsJson = yield* Schema.encodeEffect(
+      const encodeModelSelection = Schema.encodeEffect(Schema.fromJsonString(ModelSelection));
+
+      const modelJson = yield* encodeModelSelection(model);
+      const encodeProjectScripts = Schema.encodeEffect(
         Schema.fromJsonString(Schema.Array(ProjectScript)),
-      )([script]);
+      );
+
+      const scriptsJson = yield* encodeProjectScripts([script]);
       for (const [projectId, modelColumn, envMode, autoPull, scripts] of [
         [legacyProject, modelJson, "worktree", 1, scriptsJson],
         [scriptedProject, null, null, 0, scriptsJson],

@@ -6,13 +6,10 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { renderDom } from "../../testing/renderDom";
 
-// The panel resolves its group through `buildSidebarProjectSnapshots`, so stubbing that one
-// function supplies the whole fixture without also mocking projects, environments and settings.
-// The router and the atom-command dispatcher have no test doubles in this app. `ui/select` is
-// replaced by a native `<select>` because the real one renders its options through a portal,
-// outside the container this harness queries - and switching checkout is exactly what these
-// tests need to do. Everything under test - the row, `WorkspaceMembersControl` and its editor -
-// is real.
+// Stubbing `buildSidebarProjectSnapshots` supplies the whole fixture. `ui/select` is a native
+// `<select>` because the real one portals its options outside the queried container, and
+// switching checkout is what these tests do. The row, `WorkspaceMembersControl` and its
+// editor are real.
 const dispatched: Array<unknown> = [];
 
 // The real Select drives selection through a portalled listbox this harness cannot reach, and

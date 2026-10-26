@@ -79,8 +79,7 @@ export function shouldShowComposerContextStrip(input: {
   );
 }
 
-// Labels collapse to icons when the strip's content no longer fits. A small
-// hysteresis on the way back out keeps the boundary from flapping.
+// Hysteresis prevents labels and icons from flapping at the width boundary.
 const CONTEXT_STRIP_COMPACT_EXPAND_HYSTERESIS_PX = 16;
 
 export function resolveContextStripLabelsCompact(input: {
@@ -94,16 +93,9 @@ export function resolveContextStripLabelsCompact(input: {
 }
 
 /**
- * Whether the context strip is actually on screen, as opposed to merely
- * applicable to this thread.
- *
- * Callers need both answers and they are not the same. The composer footer
- * shows its collapse toggle whenever the strip is *available*, so the control
- * does not appear and vanish as the strip opens and closes; the shell's
- * `ComposerSurface.Shell` `contextStrip` prop and the strip itself follow the
- * *rendered* answer, because that prop reserves the dock extension and clips
- * the composer's bottom edge — keyed to availability it would leave a notch
- * cut out of the composer with nothing docked into it.
+ * Whether the context strip is on screen, not merely applicable. The collapse toggle follows
+ * availability so it does not flicker; `ComposerSurface.Shell`'s `contextStrip` prop must follow
+ * this, because it clips the composer's edge and would leave an empty notch otherwise.
  */
 export function shouldRenderComposerContextStrip(input: {
   stripAvailable: boolean;

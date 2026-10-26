@@ -27,7 +27,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, realpath: vi.fn(actual.realpath) };
 });
 
-// Temp folders count as known workspaces unless named as unknown.
 const UNKNOWN_WORKSPACE_PREFIX = "t3code-unknown-workspace-";
 const layerKnownWorkspacesTest = Layer.mock(KnownWorkspaces.KnownWorkspaces)({
   assertContains: (cwd) =>
@@ -389,12 +388,9 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
 
     it.effect("rejects a file carrying a NUL byte, and says so specifically", () =>
       Effect.gen(function* () {
-        // Not hypothetical. One stray NUL in a markdown report -- written by a
-        // non-raw Python string turning `\0` into chr(0) -- made the viewer
-        // answer the generic "Failed to read '<path>'", which read as a server
-        // regression and cost an RCA. The guard is right to refuse the file; the
-        // requirement is that the refusal be *nameable*, so the caller can say
-        // "not text" instead of "something went wrong".
+        // A stray NUL in a markdown report once made the viewer answer the generic "Failed to
+        // read", which read as a server regression. Refusing is right; the refusal must be nameable
+        // as "not text".
         const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
         const path = yield* Path.Path;
         const dir = yield* makeTempDir;
@@ -709,7 +705,6 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
         const path = yield* Path.Path;
         const cwd = yield* makeTempDir;
         yield* writeTextFile(cwd, ".git/config", "[core]\n");
-        // A bare repository named `.bare`, and a linked worktree's git folder inside it.
         yield* writeTextFile(cwd, ".bare/HEAD", "ref: refs/heads/main\n");
         yield* writeTextFile(cwd, ".bare/objects/info/packs");
         yield* writeTextFile(cwd, ".bare/refs/heads/main");
@@ -783,7 +778,6 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const parentDir = yield* makeTempDir;
-        // A bare repository with a worktree checked out inside it.
         const bare = path.join(parentDir, "repo.git");
         yield* writeTextFile(bare, "HEAD", "ref: refs/heads/main\n");
         yield* writeTextFile(bare, "objects/info/packs");

@@ -45,13 +45,10 @@ export function useQueueSlots() {
 }
 
 /**
- * One slot count. Commits on blur, Enter, stepper or arrows; the store clamps, and a cleared field
- * restores the value. One write is in flight at a time: a commit made meanwhile waits, and only the
- * newest waiting value is sent next, so a held arrow key costs two writes, not one per repeat. A
- * waiting value is dropped once any field for the same `setting` (the popover and the Settings tab,
- * or a remount) commits after it: that later commit is sent after it would have been. The field keeps its own draft until the last write settles, so an echo of an earlier write cannot step
- * it back; then it shows `pick` of the newest successful reply, or the effective value if every
- * write failed.
+ * One slot count, committed on blur, Enter, stepper or arrows. One write in flight; only the newest
+ * waiting value is sent next, and it is dropped if any field for the same `setting` commits later.
+ * The field keeps its draft until the last write settles so an earlier echo cannot step it back,
+ * then shows `pick` of the newest successful reply (or the effective value if all failed).
  */
 /** The newest commit per setting across every mounted field. */
 const latestCommit = new Map<string, number>();

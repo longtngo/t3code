@@ -14,14 +14,9 @@ function isAbsoluteOrHomePath(path: string): boolean {
 }
 
 /**
- * Strips trailing separators so `~/src/uni/x` and `~/src/uni/x/` are one path.
- *
- * This is not cosmetic. The path picker browses by appending a separator to the
- * folder you click, so the field holds the trailing form every time a path is
- * chosen by clicking rather than typing. Storing that form unchanged would let
- * the same repository be attached twice — `validateMemberDraft`'s duplicate
- * check compares paths as strings — and would leave two members whose titles
- * and git state are identical.
+ * Strips trailing separators so `~/src/uni/x` and `~/src/uni/x/` are one path. The picker
+ * appends a separator on every click, and `validateMemberDraft` compares paths as strings, so
+ * storing the trailing form would let one repository be attached twice.
  */
 export function normalizeMemberPath(path: string): string {
   const trimmed = path.trim();
@@ -66,18 +61,9 @@ export function splitMemberPath(path: string): { readonly parent: string; readon
 }
 
 /**
- * Null when the draft is attachable; otherwise a message to show the user.
- *
- * `editingId` excludes a member from the duplicate check so that re-saving an
- * existing entry without changing its path is not rejected as a duplicate of
- * itself.
- *
- * This is a fast convenience check, NOT the security boundary: the server
- * re-resolves every member path through the same normalization it applies to a
- * project's workspace root, and rejects anything that does not exist or is not
- * a directory. Home-relative paths are accepted here because the server expands
- * `~` — rejecting them client-side turned away the form the design doc's own
- * examples use.
+ * Null when the draft is attachable; otherwise a message to show. `editingId` excludes a member
+ * from the duplicate check so re-saving it unchanged is allowed. A convenience check, NOT the
+ * security boundary: the server re-resolves and validates every path, and expands `~`.
  */
 export function validateMemberDraft(
   draft: WorkspaceMemberDraft,
@@ -147,15 +133,9 @@ export function removeMember(
 }
 
 /**
- * The branch names to offer for what is currently in the field.
- *
- * Filtering applies only to a partial name still being typed. Once the field
- * holds a real branch — which it does immediately after an autofill — reopening
- * the list must offer every branch, or the control could show you nothing but
- * the branch you already had and leave no way to change it.
- *
- * A name that matches nothing is still returned last, because an integration
- * branch does not have to exist yet.
+ * The branch names to offer for the field. Only a partial name being typed filters; once it
+ * holds a real branch (e.g. after autofill) reopening offers every branch so it can be changed.
+ * A name matching nothing is returned last, since an integration branch need not exist yet.
  */
 export function resolveBranchOptions(
   refNames: ReadonlyArray<string>,
@@ -169,31 +149,18 @@ export function resolveBranchOptions(
 }
 
 /**
- * Whether picking a repository may overwrite the branch field with that
- * repository's checked-out branch.
- *
- * Across the six repositories this feature was built for, the checked-out
- * branch was the integration branch every time, so filling it turns the common
- * case into a confirmation instead of a second lookup. It stays safe by only
- * writing over a field the user has not typed into: either empty, or still
- * holding the value a previous autofill put there.
+ * Whether picking a repository may overwrite the branch field with its checked-out branch
+ * (the integration branch in every repository this was built for). Safe because it only
+ * overwrites an empty field or one still holding a previous autofill.
  */
 export function canAutofillBranch(branchValue: string, autofilledValue: string | null): boolean {
   return branchValue.trim().length === 0 || branchValue === autofilledValue;
 }
 
 /**
- * The one-line explanation under the branch field.
- *
- * Every state answers, including "still reading". An earlier version returned
- * nothing while the branch query was in flight, which read as *no element*. In
- * the legacy sidebar's vertically-centred dialog that moved the whole modal by
- * half its height and moved it back a frame later — once per keystroke, which is
- * the flicker. On the settings page it only reflows the rows below, but a hint
- * line that disappears mid-typing is still worse than one that says "reading".
- *
- * The caller renders the returned value in a slot that reserves a line even when
- * this is null, so no state can collapse the layout.
+ * The one-line explanation under the branch field. Every state answers, including "still
+ * reading": returning nothing mid-query collapsed the line and made the centred dialog flicker
+ * per keystroke. The caller also reserves the line when this is null.
  */
 export function resolveBranchHint(input: {
   /** The resolved repository directory, or null while the path is unusable. */

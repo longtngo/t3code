@@ -1,14 +1,7 @@
-// The pointer sweeps through the Snoozed shelf's zones with the real detector, strategy,
-// drag-over reducer and pickup rules, wired as Sidebar.tsx wires them:
-// - the strategy is rebuilt on every over change (handleThreadDragOver -> dragState -> the
-//   sidebarSortingStrategy useMemo), with the sticky over read from the drag state, and one
-//   replay leaves the drag state a frame behind dnd-kit's over (the intermediate frame);
-// - each sample is judged against the paint the detector saw: the previous frame;
-// - the DOM around the sortable list is laid out too: the Queue block where
-//   sidebarQueuePlacement puts it (docked, collapsed, before the sections or after every row),
-//   "Show N more", the at-end hint target, and the auto margins that share the free space;
-// - the pickup values (hint state, docked Queue height, trailing height) are read off that layout
-//   the way measureSidebarPickup reads the DOM, and the Queue count is frozen at pickup.
+// Sweeps the pointer through the Snoozed shelf's zones with the real detector, strategy, drag-over
+// reducer and pickup rules wired as in Sidebar.tsx: strategy rebuilt per over change with drag
+// state a frame behind, samples judged against the previous frame's paint, and the surrounding DOM
+// (Queue placement, "Show N more", hint target, auto margins) laid out and measured at pickup.
 import type { CollisionDetection } from "@dnd-kit/core";
 import type { SortingStrategy } from "@dnd-kit/sortable";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";

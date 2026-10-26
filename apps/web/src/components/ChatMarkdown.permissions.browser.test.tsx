@@ -66,7 +66,6 @@ vi.mock(import("../browser/previewRuntime"), async (original) => ({
   ...(await original()),
   isPreviewAvailableFor: () => state.previewAvailable,
 }));
-// Atoms derived from the server config run in the real registry over this config.
 vi.mock(import("../state/server"), async (original) => {
   const actual = await original();
   const { Atom } = await import("effect/reactivity");
@@ -103,20 +102,10 @@ vi.mock(import("../localApi"), async (original) => ({
       shell: { openExternal: state.openExternal },
     }) as never,
 }));
-vi.mock(import("~/lib/openPullRequestLink"), async (original) => ({
+vi.mock(import("@t3tools/client-runtime/change-request-links"), async (original) => ({
   ...(await original()),
   resolvePullRequestPreviewTarget: () => null,
   findProjectForChangeRequest: ((projects: readonly { id: ProjectId }[]) => projects[0]) as never,
-  matchesLinkedPullRequestUrl: (candidate: ThreadLinkedPullRequest, href: string) =>
-    candidate.url === href,
-  parseChangeRequestUrl: ((href: string) =>
-    href === linkedPullRequest.url
-      ? {
-          host: "github.com",
-          repository: linkedPullRequest.repository,
-          number: linkedPullRequest.number,
-        }
-      : null) as never,
 }));
 
 import ChatMarkdown from "./ChatMarkdown";

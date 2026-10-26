@@ -160,7 +160,7 @@ function SidebarUtilityItem({
   );
 }
 
-export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -203,11 +203,9 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   };
   const footerRowRef = useRef<HTMLDivElement | null>(null);
 
-  // Escape and outside-click dismissal for whichever panel is open. This lives here rather than in
-  // each panel because the footer already owns which one is open, and both draw into the same row
-  // wrapper — so one listener and one containment test cover both, and a panel cannot ship as an
-  // overlay that has no way out. (Local models did exactly that when it stopped being an inline
-  // expansion.)
+  // Escape and outside-click dismissal for whichever panel is open. It lives here because the
+  // footer owns which one is open and both draw into the same row wrapper, so one listener covers
+  // both and no panel can ship as an overlay with no way out.
   useEffect(() => {
     if (openFooterPanel === null) return;
     const dismiss = () => setOpenFooterPanel(null);
@@ -229,15 +227,10 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   return (
     <>
-      {/* This wrapper is the positioning context for the two floating fork-only panels in the
-       row below. Their trigger items opt out of `relative`, so each panel draws at exactly
-       footer width above the whole row instead of against its own ~40px button — correct
-       on the 16rem desktop sidebar and the wider mobile drawer alike, with no width
-       arithmetic.
-
-       The row wraps: six controls plus the Electron update pill do not always fit 240px,
-       and wrapping to a second line beats overflowing or shrinking the badges past
-       legibility. */}
+      {/* Positioning context for the two floating fork panels: their triggers opt out of
+       `relative`, so each panel draws at footer width above the whole row with no width
+       arithmetic. The row wraps because six controls plus the update pill do not always
+       fit 240px. */}
       <div className="relative" ref={footerRowRef}>
         <SidebarMenu className="flex-row flex-wrap items-center">
           {isOnUtilityPage ? (
@@ -257,7 +250,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               {pullRequestsSupported ? (
                 <SidebarUtilityItem
                   icon={<PullRequestGlyph.pullRequest />}
-                  label="Pull Requests"
+                  label="Pull requests"
                   onClick={handlePullRequestsClick}
                 />
               ) : null}
@@ -268,16 +261,10 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               />
             </>
           )}
-          {/* Fork-only, and OUTSIDE the branch above on purpose. Settings, Pull Requests and
-            Usage are navigation, so "Back" rightly replaces them once you are on one of
-            those pages. Subagents, Local models and Resource Queue are live status readouts —
-            hiding them there would be a silent capability loss for no gain.
-            `SidebarUpdatePill` below sits outside for the same reason.
-
-            Local models' and Resource Queue's open state lives in this component rather than
-            in each panel: both anchor to the wrapper above with identical insets, so two open
-            panels would occupy the same box. Subagents keeps its own state; its panel is an
-            in-flow first item of this row, not an overlay. */}
+          {/* Fork-only, OUTSIDE the branch above on purpose: "Back" replaces navigation, but
+            these are live status readouts. Local models and Resource Queue share open state
+            here because both anchor to the wrapper above with identical insets; Subagents'
+            panel is in-flow and keeps its own. */}
           <SidebarSubagentBackend />
           <SidebarLocalModels
             isOpen={openFooterPanel === "models"}
@@ -294,10 +281,14 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   );
 });
 
-export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
+export const SidebarChromeFooter = memo(function SidebarChromeFooter({
+  showUndoNotice = false,
+}: {
+  showUndoNotice?: boolean;
+}) {
   return (
     <SidebarFooter>
-      <SidebarThreadUndoNotice />
+      {showUndoNotice ? <SidebarThreadUndoNotice /> : null}
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />

@@ -25,9 +25,8 @@ type ProjectFileMember = readonly [
   physicalProjectKey: string,
 ];
 
-// Keyed by the members' identifying fields so each render reads the same atom. FORK: a loaded
-// grant without `filesystem:read` is never asked and settles as having no file, as its refused
-// read did; a grant still loading or failing to refresh is asked.
+// FORK: a loaded grant without `filesystem:read` is never asked and settles as having no file,
+// as its refused read did; a grant still loading or failing to refresh is asked.
 const memberProjectFilesAtom = Atom.family((membersKey: string) => {
   const members = JSON.parse(membersKey) as ReadonlyArray<ProjectFileMember>;
   return Atom.make((get) => {

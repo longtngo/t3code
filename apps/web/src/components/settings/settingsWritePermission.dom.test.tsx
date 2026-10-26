@@ -31,9 +31,12 @@ vi.mock("../ui/tooltip", () => {
 import { CursorEnableButton } from "../usage/UsagePage";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { SourceControlHostSettings } from "./SourceControlHostSettings";
-import { GitHubAccountSettings } from "./GitHubAccountSettings";
-import { GitHubTokenSettings } from "./GitHubTokenSettings";
+import { SourceControlAccountSettings } from "./SourceControlAccountSettings";
+import { SourceControlTokenSettings } from "./SourceControlTokenSettings";
 
+const github = sourceControlClients.get("github");
+if (!github.credentials) throw new Error("GitHub client definition declares no credentials");
+const githubCredentials = github.credentials;
 const bitbucket = sourceControlClients.find("bitbucket");
 if (!bitbucket?.settings) throw new Error("Bitbucket client definition declares no settings");
 const bitbucketDefinition = { ...bitbucket, settings: bitbucket.settings };
@@ -49,13 +52,22 @@ const legacy = session(["orchestration:read", "orchestration:operate"]);
 const controls: ReadonlyArray<readonly [string, () => ReactNode, string]> = [
   [
     "GitHub token",
-    () => <GitHubTokenSettings environmentId={environmentId} onSaved={() => {}} />,
+    () => (
+      <SourceControlTokenSettings
+        environmentId={environmentId}
+        definition={github}
+        credentials={githubCredentials}
+        onSaved={() => {}}
+      />
+    ),
     "#github-token-env-1",
   ],
   [
     "GitHub accounts",
     () => (
-      <GitHubAccountSettings
+      <SourceControlAccountSettings
+        definition={github}
+        credentials={githubCredentials}
         environmentId={environmentId}
         onSaved={() => {}}
         auth={
@@ -111,7 +123,9 @@ describe("settings saves under a login without settings:write", () => {
       { host: "github.com", account: "bot", active: false, authenticated: true },
     ];
     const dom = await renderDom(
-      <GitHubAccountSettings
+      <SourceControlAccountSettings
+        definition={github}
+        credentials={githubCredentials}
         environmentId={environmentId}
         onSaved={() => {}}
         auth={{ status: "authenticated", accounts } as never}

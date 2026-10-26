@@ -56,16 +56,10 @@ export class WorkspaceMemberBranches extends Context.Service<
     /** Reads a member's branch state. Never fails. */
     readonly inspect: (target: MemberBranchTarget) => Effect.Effect<MemberBranchReport>;
     /**
-     * Puts a member on a feature branch when it is carrying uncommitted work on
-     * its integration branch, recording the base and the owning thread.
-     * Idempotent, and never fails.
-     *
-     * `cutOn` is the difference between the two callers. The post-turn sweep
-     * passes `tracked`, because a stray untracked file the user left lying
-     * around is not evidence a turn wrote here and must not move their
-     * checkout. The git panel passes `any`, because there the user has asked
-     * to commit in this repository — and `git add -A` would otherwise land
-     * those same untracked files directly on the integration branch.
+     * Puts a member carrying uncommitted work on its integration branch onto a feature branch.
+     * Idempotent, never fails. `cutOn`: the post-turn sweep passes `tracked` (a stray untracked
+     * file must not move the user's checkout); the git panel passes `any`, since its
+     * `git add -A` would otherwise commit those files directly onto the integration branch.
      */
     readonly ensureFeatureBranch: (
       target: MemberBranchTarget & {
@@ -83,14 +77,9 @@ export class WorkspaceMemberBranches extends Context.Service<
       readonly integrationBranch: string;
     }) => Effect.Effect<MemberPrBase | null>;
     /**
-     * Where each member stands right now, for recording on a checkpoint or for
-     * comparing against one. Every member asked for comes back, including ones
-     * that could not be read: those carry no `headSha`, and the comparison
-     * treats that as drift — a revert cannot restore what it cannot see.
-     *
-     * Omitting them instead is what this used to do, and it silently disarmed
-     * the guard: the comparison walks the recorded list, so a member missing
-     * from the record can never drift.
+     * Where each member stands now, for recording on or comparing against a checkpoint. Every
+     * member asked for comes back; an unreadable one carries no `headSha`, which counts as drift.
+     * Omitting them disarmed the guard, since the comparison walks only the recorded list.
      */
     readonly readCheckpointStates: (
       members: ReadonlyArray<{ readonly id: string; readonly path: string }>,
@@ -110,17 +99,9 @@ export class WorkspaceMemberBranches extends Context.Service<
 const MAX_BRANCH_NAME_ATTEMPTS = 5;
 
 /**
- * How many member repositories a read-only fan-out inspects at once.
- *
- * Reading a member costs several git subprocesses, so inspecting a six-member
- * workspace one repository at a time takes as long as the six repositories
- * added together — long enough for the client to raise its slow-request
- * warning. The members are independent checkouts and the reads take no locks,
- * so they overlap safely. The cap keeps a large workspace from spawning one git
- * process per member all at once.
- *
- * Only the read-only paths fan out. `sweepWorkspaceMembers` writes to the
- * user's own checkouts and stays deliberately sequential.
+ * How many members a read-only fan-out inspects at once. Each costs several git subprocesses, so
+ * a sequential six-member read was slow enough to trip the client's slow-request warning; the cap
+ * stops one process per member at once. `sweepWorkspaceMembers` writes, so it stays sequential.
  */
 export const MEMBER_READ_CONCURRENCY = 8;
 
@@ -214,11 +195,9 @@ export const make = Effect.gen(function* () {
       threadId: target.threadId,
       threadTitle: target.threadTitle,
     });
-    // The name is a pure function of the thread, so it can already exist: from
-    // an earlier attempt that failed after creating the ref, or from another
-    // member backed by the same repository. Reusing our own and stepping aside
-    // from anyone else's is what keeps a second attempt from failing forever on
-    // "a branch named X already exists".
+    // The name is a pure function of the thread, so it may already exist (an earlier failed attempt
+    // or another member on the same repository). Reuse ours and step aside from others, or a retry
+    // fails forever on "a branch named X already exists".
     const branch = yield* resolveFreeBranchName(target.cwd, preferredBranch, target.threadId);
     const existed = branch === preferredBranch && (yield* branchExists(target.cwd, branch));
 
@@ -257,12 +236,8 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * The branch this one was cut from, per the reflog.
-   *
-   * `Created from` records a name when the user branched from one, but `HEAD`
-   * or a sha when they did not. Those resolve through the branches pointing at
-   * the commit on that same reflog line, which is where the branch actually
-   * started — not the branch's current tip.
+   * The branch this one was cut from, per the reflog. A `HEAD` or sha origin resolves through the
+   * branches at the commit on that same reflog line, where the branch started, not its tip.
    */
   const resolveCreationBranch = Effect.fn("WorkspaceMemberBranches.resolveCreationBranch")(
     function* (cwd: string, branch: string, integrationBranch: string) {
@@ -323,11 +298,9 @@ export const make = Effect.gen(function* () {
                 return { memberId: member.id, headSha, isDirty: local.isDirty };
               }
             }
-            // Both reads are git subprocesses under a timeout with their errors
-            // swallowed, so this is a transient host-saturation shape as much as
-            // a missing checkout. Recorded either way. `isDirty` is not a claim
-            // here: the absent head short-circuits the comparison before it is
-            // ever reached.
+            // Both reads are timed-out git subprocesses with errors swallowed, so this may be
+            // transient host saturation as much as a missing checkout; recorded either way.
+            // `isDirty` is not a claim here: the absent head short-circuits the comparison.
             yield* Effect.logWarning("workspace member could not be read for a checkpoint", {
               memberId: member.id,
               path: member.path,

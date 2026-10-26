@@ -4,20 +4,23 @@ import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
+// Hermes copies the string on every `trim()`, even when nothing changes.
+// Returning the original keeps repeated IDs shared after decode.
+const trim = (value: string) => {
+  const trimmed = value.trim();
+  return trimmed.length === value.length ? value : trimmed;
+};
+
 export const TrimmedString = Schema.String.pipe(
   Schema.decodeTo(
     Schema.String,
     SchemaTransformation.transformEffect({
-      decode: (value) => Effect.succeed(value.trim()),
-      encode: (value) => Effect.succeed(value.trim()),
+      decode: (value) => Effect.succeed(trim(value)),
+      encode: (value) => Effect.succeed(trim(value)),
     }),
   ),
 );
-/**
- * A `TrimmedString` only trims when decoding or encoding, so `make` and encode see the untrimmed
- * value: a plain `isNonEmpty` would accept `" "` there and encode it to `""`, which no longer
- * decodes.
- */
+// `make` and encode see untrimmed values; `isNonEmpty` would accept whitespace that encodes to an invalid empty string.
 const isNonBlank = Schema.makeFilter((value: string) => value.trim().length > 0, {
   expected: "a non-blank string",
   toJsonSchema: () => [{ minLength: 1 }, true],
@@ -26,23 +29,9 @@ const isNonBlank = Schema.makeFilter((value: string) => value.trim().length > 0,
 export const TrimmedNonEmptyString = TrimmedString.check(isNonBlank);
 
 /**
- * A filesystem path carried exactly as given.
- *
- * Deliberately not `TrimmedNonEmptyString`: that one TRANSFORMS rather than
- * rejects, so a request to read `notes ` silently becomes a request to read
- * `notes`. On POSIX both can exist side by side, which makes the failure a
- * quiet read of the WRONG file rather than an error anyone would notice.
- * `FilesystemBrowseEntry.name` already says such names are real and is
- * untrimmed for the same reason; these are the request and result fields that
- * have to agree with it.
- *
- * Whitespace a human typed by accident is trimmed where it is typed — see
- * `viewerPath.ts` — which is the only layer that knows it was a typo and not
- * a name.
- *
- * Error payloads keep `TrimmedNonEmptyString`: they echo a path back as
- * diagnostic prose, nothing addresses a file with them, and a tidy message is
- * worth more there than a faithful one.
+ * A path carried exactly as given. Not `TrimmedNonEmptyString`, which TRANSFORMS: `notes ` would
+ * quietly read `notes`, a different POSIX file. Accidental whitespace is trimmed where typed
+ * (`viewerPath.ts`). Error payloads may keep the trimmed type: they only echo paths as prose.
  */
 export const FilePathString = Schema.String.check(Schema.isNonEmpty());
 
@@ -92,12 +81,7 @@ export const ForwardCompatibleNullable = <Value extends Schema.Top>(value: Value
   );
 };
 
-/**
- * A nullable setting whose null is "unset" and never crosses the wire: it
- * decodes from a missing or unknown key and encodes back to a missing key.
- * For a field that older clients decode as a required literal, so a null
- * on the wire would fail their whole settings snapshot.
- */
+/** Missing or unknown values decode to null; null encodes as absent for older clients requiring a literal. */
 export const OmittedWhenNull = <Value extends Schema.Top>(value: Value) => {
   const decodeValue = Schema.decodeUnknownOption(value as never);
   return Schema.optionalKey(Schema.Unknown).pipe(
@@ -117,10 +101,7 @@ export const OmittedWhenNull = <Value extends Schema.Top>(value: Value) => {
   );
 };
 
-/**
- * For a tagged union, prefer {@link ForwardCompatibleUnion}: it drops only values whose tag this
- * build does not know, so a known member with a broken payload still fails loudly.
- */
+/** Prefer {@link ForwardCompatibleUnion} for tagged unions so malformed known members still fail. */
 export const ForwardCompatibleArray = <Element extends Schema.Top>(element: Element) =>
   Schema.Array(
     Schema.UndefinedOr(element).pipe(
@@ -134,9 +115,7 @@ export const ForwardCompatibleArray = <Element extends Schema.Top>(element: Elem
           Schema.catchEncoding(() => Effect.succeedSome(undefined)),
         ),
       ).check(
-        // The holes above are an encoding detail: a decoded value has none, so
-        // `Schema.is` and `make` still reject an array that does. Aborts, so a
-        // later check on the array never sees a hole.
+        // Schema.is/make must reject holes; abort before later array checks.
         Schema.makeFilter(
           (values) => {
             // Every index, not `every`, which skips the holes of a sparse array.
@@ -165,10 +144,7 @@ export type ForwardCompatibleArray<Element extends Schema.Top> = Schema.Codec<
   Element["EncodingServices"]
 >;
 
-/**
- * A class, so only the codec can make one: no decoded payload, however it is shaped, is ever
- * mistaken for it.
- */
+/** Class identity prevents decoded payloads from impersonating unknown members. */
 export class UnknownUnionMember<Tag extends string = string> {
   readonly tag: Tag;
   readonly value: string;
@@ -178,9 +154,7 @@ export class UnknownUnionMember<Tag extends string = string> {
   }
 }
 
-/**
- * Unknown members are decode-only; encoding one fails.
- */
+/** Unknown members are decode-only; encoding one fails. */
 export const ForwardCompatibleUnion = <
   const Members extends ReadonlyArray<Schema.Top & { readonly fields: object }>,
   const Tag extends string,
@@ -300,6 +274,10 @@ export const RunAttemptId = makeEntityId("RunAttemptId");
 export type RunAttemptId = typeof RunAttemptId.Type;
 export const NodeId = makeEntityId("NodeId");
 export type NodeId = typeof NodeId.Type;
+export const GuestShareId = makeEntityId("GuestShareId");
+export type GuestShareId = typeof GuestShareId.Type;
+export const GuestMessageId = makeEntityId("GuestMessageId");
+export type GuestMessageId = typeof GuestMessageId.Type;
 export const AuthSessionId = makeEntityId("AuthSessionId");
 export type AuthSessionId = typeof AuthSessionId.Type;
 export const RpcClientId = NonNegativeInt.pipe(Schema.brand("RpcClientId"));

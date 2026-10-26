@@ -108,11 +108,9 @@ describe("reconcileBackend", () => {
       "does not rewrite on a second reconcile once an unresolvable binary is already recorded as degraded",
       () =>
         Effect.gen(function* () {
-          // A still-enabled, still-cursor instance whose binary can't be resolved on
-          // this process's PATH: reconcile keeps `backend: cursor` but marks `degraded`.
-          // Before persisting `degraded`, the file read back always decoded it as
-          // `null`, so `haveReconcilableFieldsChanged` saw a diff on every settings
-          // change forever, even when nothing dispatch-relevant had actually changed.
+          // An enabled cursor instance whose binary is not on PATH: reconcile keeps `backend: cursor`
+          // and marks `degraded`. When `degraded` was not persisted, every settings change looked like
+          // a diff to `haveReconcilableFieldsChanged`.
           yield* writeBackendFile({ ...CURSOR, binaryPath: "definitely-not-on-path" });
           const unresolvable = withInstances({
             cursor: {

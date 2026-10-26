@@ -61,11 +61,8 @@ describe("subagentBackendReconciler", () => {
       "reconciles once at startup against current settings, with no settings change ever published",
       () =>
         Effect.gen(function* () {
-          // Simulates an instance deleted (or `settings.json` hand-edited) while
-          // the server was down: the flag file still names it, but nothing
-          // publishes a settings change after boot, so only the explicit
-          // startup reconcile — not the change stream, which the test layer's
-          // `subscribeChanges` never emits on — can catch this before the
+          // An instance deleted (or settings hand-edited) while the server was down: nothing publishes
+          // a change after boot, so only the explicit startup reconcile can catch it before the
           // wrapper dispatches to a Cursor instance that no longer exists.
           yield* writeBackendFile(CURSOR);
 

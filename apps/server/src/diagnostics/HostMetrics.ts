@@ -24,11 +24,9 @@ const BOOTSTRAP_DELAY_MS = 300;
 /** Default cadence when the subscriber doesn't request one — a "feels live" first look. */
 const DEFAULT_INTERVAL_MS = 1500;
 /**
- * Low-bandwidth cadence ramp: the stream starts at the requested interval (a fast,
- * "feels live" first look) and relaxes toward this ceiling as it runs, so a
- * long-lived idle-but-foreground subscription costs a fraction of the bytes. The
- * client tears the stream down when the tab hides and resubscribes fresh when it
- * shows again, so returning to the tab naturally resets the ramp to the fast rate.
+ * Cadence ceiling: the stream starts at the requested interval and relaxes toward this, so a
+ * long-lived idle subscription costs a fraction of the bytes. The client resubscribes when
+ * the tab shows again, which resets the ramp.
  */
 const RAMP_MAX_INTERVAL_MS = 5000;
 /** Each tick lengthens the next interval by this much until the ceiling is reached. */
@@ -161,11 +159,9 @@ export function rampSampleInterval(currentMs: number, maxMs: number): number {
 }
 
 /**
- * A per-subscriber stream of host CPU/GPU/memory samples. Carrying the previous
- * CPU-times snapshot in the unfold state lets each tick report busy % over the
- * interval just elapsed. The stream never completes on its own; it ends when the
- * subscriber's scope closes (i.e. the client unsubscribes), which also stops
- * sampling — no background work runs without a listener.
+ * Per-subscriber host CPU/GPU/memory samples; the previous CPU-times snapshot in the unfold
+ * state gives busy % per interval. Never completes on its own: it ends with the subscriber's
+ * scope, so no sampling runs without a listener.
  */
 export function hostMetricsStream(
   intervalMs: number,

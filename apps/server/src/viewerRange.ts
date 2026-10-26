@@ -1,20 +1,7 @@
 /**
- * HTTP Range parsing for the `/viewer` byte route.
- *
- * Ported from effect's own `HttpStaticServer` `parseRange`, which is not exported.
- * Ported rather than reinvented because the edge cases are all in the parser and
- * getting them wrong fails badly: an unclamped end makes the platform declare a
- * `content-length` it never sends and hold the socket open indefinitely, and a
- * start past EOF produces a negative content-length that destroys the connection.
- *
- * Deliberately NOT ported: `serveFile`, which evaluates `if-none-match` /
- * `if-modified-since` and can answer 304 before the range branch — a 304 in front
- * of a range request breaks seeking. (The route sends `Cache-Control: no-store`,
- * so a conforming client holds no validator to revalidate with and would not send
- * one anyway; the exclusion is about not adopting the branch, not about a request
- * we expect to see.)
- *
- * @module viewerRange
+ * HTTP Range parsing for `/viewer`, ported from effect's unexported `HttpStaticServer` parser: an
+ * unclamped end hangs the socket and a start past EOF destroys the connection. Deliberately NOT
+ * ported: `serveFile`'s 304 branch, which would answer before the range and break seeking.
  */
 
 export interface ViewerByteRange {
@@ -23,15 +10,9 @@ export interface ViewerByteRange {
 }
 
 /**
- * `"overflow"` is distinct from `undefined` on purpose.
- *
- * A digit string too large for a safe integer is not malformed — it names a
- * position past any real file, and each of the three positions clamps somewhere
- * different. Collapsing it into `undefined` made every such header fall back to
- * the FULL representation, which quietly defeated the per-response clamp: a
- * `bytes=8-<huge>` on a 500 MB video sent 500 MB instead of a two-byte tail.
- * Upstream #8919's BigInt parser has no such cliff; this keeps `number` and
- * names the overflow instead.
+ * `"overflow"` is distinct from `undefined` on purpose: a digit string too large for a safe integer
+ * names a position past any file, and each position clamps differently. Collapsing it made
+ * `bytes=8-<huge>` on a 500 MB video send all 500 MB instead of a two-byte tail.
  */
 function parseInteger(value: string): number | "overflow" | undefined {
   if (!/^\d+$/.test(value)) return undefined;
@@ -40,15 +21,9 @@ function parseInteger(value: string): number | "overflow" | undefined {
 }
 
 /**
- * Parse one byte range against a known file size.
- *
- * `undefined` means "no usable range" — a malformed, multi-range, or wrong-unit
- * header, all of which RFC 9110 permits answering with the full representation.
- * `"unsatisfiable"` means the client named a range this file cannot supply, which
- * is a 416, NOT a full body.
- *
- * `suffix` reports which branch produced the result, because the two clamp in
- * opposite directions. effect's original does not return it.
+ * Parse one byte range against a known file size. `undefined` means no usable range (full body is
+ * permitted); `"unsatisfiable"` is a 416, NOT a full body. `suffix` reports which branch produced
+ * the result, because the two clamp in opposite directions.
  */
 function parseViewerRange(
   header: string,
@@ -77,12 +52,9 @@ function parseViewerRange(
   if (start === undefined) return undefined;
   const end = endPart === "" ? "open" : parseInteger(endPart);
   if (end === undefined) return undefined;
-  // Syntax before satisfiability. An inverted spec is invalid rather than
-  // unsatisfiable (RFC 9110 14.1.1), so the header is ignored and the client
-  // gets the whole representation — not a 416 telling it the file is shorter
-  // than it asked for.
-  // An overflowing start is still larger than any concrete end, so it inverts
-  // the spec exactly as a plain `bytes=100-50` does.
+  // Syntax before satisfiability: an inverted spec is invalid, not unsatisfiable (RFC 9110 14.1.1),
+  // so the client gets the whole representation rather than a 416. An overflowing start inverts
+  // the spec exactly as `bytes=100-50` does.
   const inverted =
     typeof end === "number" && (start === "overflow" || (typeof start === "number" && start > end));
   if (inverted) return undefined;

@@ -144,9 +144,8 @@ describe("composeTurnStart", () => {
       lineEnd: 4,
       text: "npm ERR! boom",
     };
-    // Upstream #11265 moved contexts out of the prompt and onto the message as
-    // records, so the terminal output must NOT be appended to the text any more;
-    // the title seed is the only thing composeTurnStart still derives from it.
+    // Contexts moved out of the prompt and onto the message as records, so the terminal output
+    // must NOT be appended to the text any more; the title seed is the only thing still derived.
     const withText = composeTurnStart(input({ terminalContexts: [context] }));
     expect(withText.outgoingMessageText).toBe("fix the build");
     expect(withText.outgoingMessageText).not.toContain("npm ERR! boom");

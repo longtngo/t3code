@@ -30,6 +30,8 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeTypedServerSettings = Schema.decodeSync(ServerSettings);
+const decodeTypedServerSettingsPatch = Schema.decodeSync(ServerSettingsPatch);
 
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
@@ -375,7 +377,7 @@ describe("server model preferences", () => {
   });
 });
 
-// FORK-owned settings tests (upstream #22557 pruned the upstream tests around them).
+// FORK-owned settings tests (upstream pruned the upstream tests around them).
 describe("ClaudeSettings auto-compaction", () => {
   it("uses Claude's default threshold when no override is configured", () => {
     expect(decodeClaudeSettings({}).autoCompactWindow).toBe("");
@@ -391,15 +393,9 @@ describe("ClaudeSettings auto-compaction", () => {
   it.each(["99999", "1000001", "300k", "invalid", "60", "0%", "101%", "%60"])(
     "recovers to Claude's default rather than failing the document: %s",
     (value) => {
-      // Deliberately NOT a throw. This schema decodes the whole settings file,
-      // and `loadSettingsFromDisk` answers a failure by keeping the defaults
-      // and writing them back on the next unrelated change — so one unreadable
-      // value here would cost every provider path, every custom instance and
-      // the local-model config, permanently.
-      //
-      // That containment is what lets the accepted set above change at all: a
-      // value a newer build writes (a percentage) has to be survivable by an
-      // older one, and a rollback is enough to make that happen.
+      // Not a throw: a failed settings-file decode makes `loadSettingsFromDisk` keep
+      // the defaults and write them back, losing every unrelated setting. This
+      // containment also lets an older build survive a value a newer one wrote.
       expect(decodeClaudeSettings({ autoCompactWindow: value }).autoCompactWindow).toBe("");
     },
   );
@@ -519,7 +515,7 @@ describe("ServerSettings Jira link settings", () => {
 
   it("accepts Jira link settings in a patch", () => {
     expect(
-      Schema.decodeUnknownSync(ServerSettingsPatch)({
+      decodeTypedServerSettingsPatch({
         jiraBaseUrl: "https://x",
         jiraProjectKeys: "OPS",
       }),
@@ -581,16 +577,10 @@ describe("ServerSettings notification categories", () => {
 
 // Schema / patch mirror parity
 
-/**
- * Every settings struct has a hand-written `*Patch` mirror, and the RPC decodes
- * edits through the mirror. A field present in the schema but absent from the
- * mirror is therefore silently dropped on save — no error, no warning, nothing
- * persisted. That has already shipped twice.
- *
- * Walk `ast.propertySignatures` directly on each node: `.fields` is erased by
- * `withDecodingDefault`, and following `ast.encoding[0].to` lands on a Union
- * with no property signatures, so a walker that does either passes vacuously.
- */
+// A schema field missing from its hand-written `*Patch` mirror is silently dropped
+// on save. Walk `ast.propertySignatures` directly: `.fields` is erased by
+// `withDecodingDefault` and `ast.encoding[0].to` is a Union with no signatures,
+// so a walker using either passes vacuously.
 function schemaPropertySignatures(
   ast: unknown,
 ): ReadonlyArray<{ name: PropertyKey; type: unknown }> {
@@ -632,7 +622,7 @@ describe("settings schema / patch parity", () => {
       // Read once at startup as a privilege-escalation guard; deliberately not
       // editable over the settings RPC. See ServerSettingsPatch's own comment.
       "disableAuthentication",
-      // Upstream #8569: the environment's default theme is owned by `t3 theme set`,
+      // The environment's default theme is owned by `t3 theme set`,
       // which rewrites settings.json directly (apps/server/src/cli/theme.ts) and
       // removes both keys when cleared. Clients only READ them, so routing them
       // through the patch RPC would give two writers for one pair of fields.
@@ -683,7 +673,7 @@ describe("subagent offload settings", () => {
   });
 
   it("decodes a settings file written before the fields existed", () => {
-    const decoded = Schema.decodeUnknownSync(ServerSettings)({});
+    const decoded = decodeTypedServerSettings({});
     expect(decoded.subagentBackendEnabled).toBe(true);
     expect(decoded.subagentBackendThreadModes).toEqual({});
   });
@@ -692,7 +682,7 @@ describe("subagent offload settings", () => {
     // A mode a newer build wrote, or a hand-edited non-boolean master, must cost only its
     // own field: a failed `ServerSettings` decode makes `loadSettingsFromDisk` keep
     // DEFAULT_SERVER_SETTINGS and write them back, losing every unrelated setting.
-    const decoded = Schema.decodeUnknownSync(ServerSettings)({
+    const decoded = decodeServerSettings({
       subagentBackendThreadModes: { t1: "on-with-model" },
       subagentBackendEnabled: "true",
       enableProviderUpdateChecks: false,
@@ -706,17 +696,15 @@ describe("subagent offload settings", () => {
     // Strict validation lives in the patch schema, where a bad value fails only the
     // update that introduced it and is reported to the user.
     expect(() =>
-      Schema.decodeUnknownSync(ServerSettingsPatch)({
+      decodeServerSettingsPatch({
         subagentBackendThreadModes: { t1: "cursor" },
       }),
     ).toThrow();
-    expect(() =>
-      Schema.decodeUnknownSync(ServerSettingsPatch)({ subagentBackendEnabled: "true" }),
-    ).toThrow();
+    expect(() => decodeServerSettingsPatch({ subagentBackendEnabled: "true" })).toThrow();
   });
 
   it("accepts a single-key thread-mode patch", () => {
-    const patch = Schema.decodeUnknownSync(ServerSettingsPatch)({
+    const patch = decodeTypedServerSettingsPatch({
       subagentBackendThreadModes: { t1: "inherit" },
     });
     expect(patch.subagentBackendThreadModes).toEqual({ t1: "inherit" });
@@ -794,7 +782,7 @@ describe("allow spending credits setting", () => {
   });
 
   it("decodes a settings file written before the field existed", () => {
-    const decoded = Schema.decodeUnknownSync(ServerSettings)({});
+    const decoded = decodeTypedServerSettings({});
     expect(decoded.allowSpendingCredits).toBe(true);
   });
 
@@ -802,7 +790,7 @@ describe("allow spending credits setting", () => {
     // Same containment as `subagentBackendEnabled` above: a failed `ServerSettings`
     // decode makes `loadSettingsFromDisk` keep DEFAULT_SERVER_SETTINGS and write them
     // back, losing every unrelated setting.
-    const decoded = Schema.decodeUnknownSync(ServerSettings)({
+    const decoded = decodeServerSettings({
       allowSpendingCredits: "false",
       enableProviderUpdateChecks: false,
     });
@@ -811,13 +799,11 @@ describe("allow spending credits setting", () => {
   });
 
   it("still rejects a non-boolean at the RPC boundary", () => {
-    expect(() =>
-      Schema.decodeUnknownSync(ServerSettingsPatch)({ allowSpendingCredits: "false" }),
-    ).toThrow();
+    expect(() => decodeServerSettingsPatch({ allowSpendingCredits: "false" })).toThrow();
   });
 
   it("accepts a boolean patch", () => {
-    const patch = Schema.decodeUnknownSync(ServerSettingsPatch)({ allowSpendingCredits: false });
+    const patch = decodeTypedServerSettingsPatch({ allowSpendingCredits: false });
     expect(patch.allowSpendingCredits).toBe(false);
   });
 });

@@ -260,11 +260,9 @@ describe("VitalsGauge detail", () => {
     );
     const text = view.text();
     expect(text).toContain("CPU");
-    // The caption runs straight into the live/paused toggle. Asserting only
-    // `not.toContain("undefined")` was close to vacuous — React renders nothing
-    // for an undefined child, so only an explicit String()/template coercion
-    // could ever have tripped it. This pins the whole slot instead, so a
-    // placeholder like "unknown" or a stray separator fails too.
+    // The caption runs straight into the live/paused toggle. Pins the whole slot because
+    // `not.toContain("undefined")` was near vacuous (React renders nothing for undefined),
+    // so a placeholder like "unknown" or a stray separator fails too.
     expect(text).toContain("Machinelive");
   });
 

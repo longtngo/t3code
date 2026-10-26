@@ -277,13 +277,9 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
   compactsAutomatically: Schema.optional(Schema.Boolean),
   autoCompactThreshold: Schema.optional(PositiveInt),
   /**
-   * How the provider resolved the window it auto-compacts against.
-   *
-   * Claude Code reports `"auto"` when it has no window it trusts, and that is
-   * exactly the case where it refuses to compact at all - so this, not
-   * {@link compactsAutomatically}, is what says whether compaction is armed.
-   * `autoCompactThreshold` is computed without consulting it and reads the same
-   * either way.
+   * Claude Code reports `"auto"` when it has no trusted window, exactly when it refuses to compact,
+   * so this (not {@link compactsAutomatically}) says whether compaction is armed.
+   * `autoCompactThreshold` is computed without it.
    */
   autoCompactSource: Schema.optional(Schema.String),
   cost: Schema.optional(
@@ -331,10 +327,7 @@ const TurnStartedPayload = Schema.Struct({
 });
 export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 
-/**
- * Input includes cache reads and writes. Output includes reasoning, and
- * reasoningTokens is an optional subset.
- */
+// Input includes cache reads/writes; output includes the optional reasoningTokens subset.
 const TurnTokenUsageCommonFields = {
   usageScope: Schema.Literal("main_agent"),
   cachedInputTokens: Schema.optional(NonNegativeInt),
@@ -511,10 +504,7 @@ const UserInputResolvedPayload = Schema.Struct({
 });
 export type UserInputResolvedPayload = typeof UserInputResolvedPayload.Type;
 
-/**
- * Claude reports per-activation deltas; Codex reports cumulative totals — the
- * merge strategy is provider-specific and lives in client-runtime.
- */
+/** Claude reports activation deltas; Codex reports cumulative totals. Merge per provider in client-runtime. */
 export const RuntimeTaskUsage = Schema.Struct({
   totalTokens: NonNegativeInt,
   inputTokens: Schema.optional(NonNegativeInt),
@@ -536,26 +526,19 @@ export const TaskRunHandles = Schema.Struct({
   runId: Schema.optional(TrimmedNonEmptyStringSchema),
   scriptPath: Schema.optional(TrimmedNonEmptyStringSchema),
   transcriptDir: Schema.optional(TrimmedNonEmptyStringSchema),
-  /** Only http/https URLs may be stored here — sanitized at the adapter. */
+  /** Only http/https URLs, sanitized by the adapter. */
   sessionUrl: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskRunHandles = typeof TaskRunHandles.Type;
 
-/**
- * Repeated on progress and terminal rows (not just start) so client folds can
- * reconstruct an agent even when its start row aged out of activity retention.
- */
+// Repeat on progress and terminal rows so agents survive start-row eviction.
 const taskAgentLinkageFields = {
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
   agentKind: Schema.optional(Schema.Literals(["agent", "background"])),
   agentId: Schema.optional(TrimmedNonEmptyStringSchema),
   /**
-   * True when the task was launched from inside a subagent rather than by the
-   * thread's main agent. Distinct from `agentId`, which names WHICH subagent:
-   * the provider tells us a task exists without telling us who owns it, so we
-   * can know a task is foreign to the main agent while being unable to
-   * attribute it. Consumers that only need "is this the main agent's work"
-   * read this; `agentId` stays for the cases where the owner is known.
+   * True when a subagent launched the task. Distinct from `agentId` (WHICH subagent): the provider can
+   * tell us a task is foreign to the main agent without naming its owner.
    */
   subagentOwned: Schema.optional(Schema.Boolean),
   title: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -573,10 +556,7 @@ const taskAgentLinkageFields = {
   runHandles: Schema.optional(TaskRunHandles),
   outputFile: Schema.optional(TrimmedNonEmptyStringSchema),
   agentPath: Schema.optional(TrimmedNonEmptyStringSchema),
-  /**
-   * Set on provider-synthesized child-agent events (Codex) whose activity
-   * belongs in the Agents surface, never the parent timeline.
-   */
+  /** Provider-synthesized child events belong in Agents, never the parent timeline. */
   timelineBypass: Schema.optional(Schema.Boolean),
 } as const;
 
@@ -639,18 +619,9 @@ const TaskCompletedPayload = Schema.Struct({
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 
-// The fork's own TaskUpdatedPayload lived here — same wire event, but typed
-// with the provider's RAW status words ("killed"/"paused"). Removed as
-// SUPERSEDED by upstream's definition above, which types `status` as the shared
-// RuntimeTaskStatus and carries description/error/endedAt/isBackgrounded too.
-// Both sides added this independently and the file merged CLEANLY, so the
-// duplicate only surfaced as a redeclaration error at typecheck.
-//
-// The fork's use of this payload (clearing a persisted pending-background-task
-// row on a terminal status) still works, but its terminal-status test had to
-// move to the mapped vocabulary — see isTerminalRuntimeTaskStatus in
-// ProviderRuntimeIngestion.ts. Left unchanged it would have silently stopped
-// matching, because "killed" now arrives as "cancelled".
+// No fork TaskUpdatedPayload: upstream's above types `status` as RuntimeTaskStatus, so the fork's
+// terminal-status check uses the mapped vocabulary ("killed" arrives as "cancelled"); see
+// isTerminalRuntimeTaskStatus in ProviderRuntimeIngestion.ts.
 
 const HookStartedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,

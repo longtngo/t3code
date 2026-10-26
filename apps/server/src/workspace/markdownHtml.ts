@@ -1,14 +1,7 @@
 /**
- * markdownHtml - pure helpers for on-demand markdown→HTML rendering.
- *
- * `renderMarkdownDocument` turns markdown source into a complete, self-contained
- * `<!doctype html>` document (GitHub-flavored body + embedded styles) suitable
- * for the file-viewer's sandboxed iframe and for "open in new tab". The document
- * carries no external resources, so it renders identically offline and when
- * popped out. `createMarkdownHtmlCache` is a small LRU used by the workspace file
- * system to avoid re-converting an unchanged file within a server process.
- *
- * @module markdownHtml
+ * Pure helpers rendering markdown to a self-contained `<!doctype html>` document for the
+ * file viewer's sandboxed iframe and "open in new tab"; no external resources, so it renders
+ * the same offline. `createMarkdownHtmlCache` is a small LRU avoiding re-conversion.
  */
 import { marked } from "marked";
 
@@ -70,14 +63,10 @@ const HTML_HEAD =
 const HTML_TAIL = "</article></body></html>";
 
 /**
- * Render markdown source to a complete standalone HTML document. Synchronous:
- * `marked` is configured without async extensions, so `parse` returns a string.
- * Raw HTML inside the markdown is passed through unchanged, so the sandbox around the
- * output IS the trust boundary. Both consumers have to hold it up, and each does it
- * differently — a change to either is a security change:
- *  - the in-app viewer frames this in `sandbox=""` (`TrustedFileView.tsx`);
- *  - the `/viewer` route serves it top-level under `VIEWER_MARKDOWN_CSP`, which omits
- *    `allow-scripts` for exactly this reason (`http.ts`).
+ * Render markdown to a standalone HTML document, synchronously (no async `marked` extensions).
+ * Raw HTML passes through, so the sandbox IS the trust boundary and changing either consumer is a
+ * security change: the viewer frames it in `sandbox=""` (`TrustedFileView.tsx`), and `/viewer`
+ * serves it under `VIEWER_MARKDOWN_CSP`, which omits `allow-scripts` (`http.ts`).
  */
 export function renderMarkdownDocument(markdown: string): string {
   const body = marked.parse(markdown, { async: false, gfm: true, breaks: false });

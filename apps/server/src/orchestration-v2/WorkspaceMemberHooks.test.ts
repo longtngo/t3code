@@ -1,7 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
-  type GitCommandError,
   type OrchestrationV2ThreadShell,
   ProjectId,
   ThreadId,
@@ -10,7 +9,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { ServerConfig } from "../config.ts";
@@ -36,23 +34,21 @@ const TestLayer = WorkspaceMemberHooks.live.pipe(
     Layer.mergeAll(
       Layer.mock(ProjectStore.ProjectStoreV2)({
         get: () =>
-          Effect.succeed(
-            Option.some({
-              projectId,
-              title: "Workspace",
-              workspaceRoot: "/workspace",
-              defaultModelSelection: null,
-              defaultThreadEnvMode: null,
-              autoPull: false,
-              faviconPath: null,
-              projectIcon: null,
-              scripts: [],
-              members,
-              createdAt: "2026-06-21T00:00:00.000Z",
-              updatedAt: "2026-06-21T00:00:00.000Z",
-              deletedAt: null,
-            }),
-          ),
+          Effect.succeedSome({
+            projectId,
+            title: "Workspace",
+            workspaceRoot: "/workspace",
+            defaultModelSelection: null,
+            defaultThreadEnvMode: null,
+            autoPull: false,
+            faviconPath: null,
+            projectIcon: null,
+            scripts: [],
+            members,
+            createdAt: "2026-06-21T00:00:00.000Z",
+            updatedAt: "2026-06-21T00:00:00.000Z",
+            deletedAt: null,
+          }),
       }),
       Layer.mock(ProjectionStore.ProjectionStoreV2)({
         getThreadShell: () =>

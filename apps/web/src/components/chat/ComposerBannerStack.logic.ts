@@ -14,13 +14,9 @@ function noticeRank(item: ArrangeableBanner) {
 }
 
 /**
- * Splits the stack into what is always on screen and what folds behind the peek.
- *
- * The front row is attached to the composer. Status rows (connection, message sync)
- * describe whether the thread is usable right now, so they never fold: they stack
- * above the front in their given order. Everything else folds behind the peek.
- * Urgent notices, then activity, keep the front; otherwise the first status row takes
- * it, so a passive notice never sits closer to the composer than the connection.
+ * Splits the stack into what is always on screen and what folds behind the peek. Status rows
+ * (connection, message sync) never fold. Urgent notices, then activity, take the front row;
+ * otherwise the first status row does, so a passive notice never sits closer than the connection.
  */
 export function arrangeComposerBannerStack<T extends ArrangeableBanner>(
   items: ReadonlyArray<T>,

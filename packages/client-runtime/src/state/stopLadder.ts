@@ -1,10 +1,6 @@
 /**
- * The Stop ladder, shared by every client.
- *
- * Web and mobile both dispatch Stop, and both need the same escalation, or a
- * turn wedged inside a tool is only recoverable from one of them. The rule
- * lived in `apps/web/src/components/ChatView.logic.ts`, where mobile could not
- * reach it.
+ * The Stop ladder, shared so web and mobile escalate identically; otherwise a turn wedged in a
+ * tool is recoverable from only one of them.
  */
 
 export const STOP_ESCALATION_MIN_MS = 500;
@@ -23,28 +19,10 @@ export const STOP_ESCALATION_WINDOW_MS = 10_000;
 export const STOP_FORCE_STOPPING_STALE_MS = 60_000;
 
 /**
- * Decide what a Stop-button press should dispatch. The first press for a thread sends
- * `run.interrupt` with `mode: "cooperative"`, which ends the turn but keeps the provider session;
- * a deliberate second press (while that interrupt is still pending escalation) sends
- * `mode: "hard"`, which restarts the provider runtime and so kills a turn wedged inside a tool.
- * The server also escalates on its own once a cooperative interrupt has not ended the turn
- * within its grace (`COOPERATIVE_INTERRUPT_GRACE`, 8 s). The second press is the faster way
- * out: a hard `run.interrupt` cancels the cooperative interrupt still waiting out that grace.
- *
- * Escalation is valid only inside a BAND, not merely "second press ever":
- *
- *   |<- ignore ->|<---------- hardStop ----------->|<- interrupt (stale, re-arms) ->
- *   0          500ms                              10s
- *
- * The ceiling alone would be a downgrade. Expiring the arming after a few seconds makes two
- * presses in quick succession the *only* way to reach the force-stop — which is precisely the
- * reflexive double-click that fires it by accident. The floor is what keeps the destructive rung
- * behind a deliberate act; the ceiling is what stops it going stale. Neither works alone.
- *
- * Deciding from a TIMESTAMP rather than a countdown is what makes this correct without depending
- * on a timer having fired: a backgrounded tab throttles timers, and the arming must still have
- * expired when the user comes back. The timer in the component only reverts the button's
- * appearance.
+ * First press: cooperative `run.interrupt`. A second press inside the band [500ms, 10s) is a hard
+ * interrupt that restarts the runtime (faster than the server's own 8 s escalation). The floor keeps
+ * a reflexive double-click off the destructive rung; the ceiling stops arming going stale. Decided
+ * from a TIMESTAMP, not a timer, because background tabs throttle timers.
  */
 export type StopAction = "interrupt" | "hardStop" | "ignore";
 
@@ -87,11 +65,8 @@ export function nextStopAction(input: {
 export type StopRung = "idle" | "armed" | "forceStopping";
 
 /**
- * The Stop button's look, decided from the same arming and clock as
- * `nextStopAction`, so the armed rung shows exactly while a press would take
- * it: not during the 500 ms floor, and not after the window. `changesInMs` is
- * when the look next changes; a client schedules one repaint there (no
- * continuous animation).
+ * Same arming and clock as `nextStopAction`, so the armed look shows exactly while a press would
+ * hard-stop. `changesInMs` is when to schedule the one repaint (no continuous animation).
  */
 export function stopRungAt(input: {
   readonly threadId: string | null;

@@ -4,12 +4,9 @@ import type * as Scope from "effect/Scope";
 
 export interface BackgroundTaskRecoveryWatchdogShape {
   /**
-   * Start the background-task recovery heartbeat within the provided scope.
-   *
-   * On startup and on a periodic sweep it reconciles persisted
-   * `pending_background_tasks` rows: any row owned by a dead process (boot-id
-   * mismatch), a dead session, or silent past the stale threshold is recovered
-   * by auto-resuming its idle thread.
+   * Start the background-task recovery heartbeat in the provided scope. At startup and per
+   * sweep, rows owned by a dead process, a dead session, or silent past the stale threshold
+   * are recovered by auto-resuming their idle thread.
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 }

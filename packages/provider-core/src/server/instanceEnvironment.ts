@@ -5,14 +5,9 @@ import * as Effect from "effect/Effect";
 import { expandHomePath } from "./pathExpansion.ts";
 
 /**
- * Builds the environment a provider instance's child processes run under.
- *
- * The server's inherited `NODE_OPTIONS` is dropped first. It tunes *this*
- * process, and forwarding it breaks any provider CLI whose runtime rejects a
- * flag we happen to use — a Bun-built `claude` inheriting `--inspect-port`
- * exits 1 writing nothing at all, which silently broke every Claude text
- * generation. Instance overrides are applied after the strip, so an instance
- * that deliberately sets `NODE_OPTIONS` still gets it.
+ * Drops the server's inherited `NODE_OPTIONS`: a Bun-built `claude` rejects flags
+ * such as `--inspect-port` and exits 1 silently. Instance overrides apply after the
+ * strip, so an instance that deliberately sets `NODE_OPTIONS` still gets it.
  */
 export const mergeProviderInstanceEnvironment = Effect.fn(function* (
   environment: ProviderInstanceEnvironment | undefined,
@@ -21,9 +16,7 @@ export const mergeProviderInstanceEnvironment = Effect.fn(function* (
   const home = yield* HostProcess.HomeDirectory;
   const next: NodeJS.ProcessEnv = { ...baseEnv };
 
-  // Windows resolves env names case-insensitively, but this spread is an
-  // ordinary object, so match on the normalized name instead of deleting a
-  // single spelling.
+  // Windows env names are case-insensitive but this spread is a plain object.
   for (const name of Object.keys(next)) {
     if (name.toUpperCase() === "NODE_OPTIONS") {
       delete next[name];
@@ -31,7 +24,6 @@ export const mergeProviderInstanceEnvironment = Effect.fn(function* (
   }
 
   for (const variable of environment ?? []) {
-    // Child processes do not apply shell expansion to environment values.
     next[variable.name] =
       variable.name === "CODEX_HOME" || variable.name === "CLAUDE_CONFIG_DIR"
         ? expandHomePath(variable.value, home)

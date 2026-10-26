@@ -181,11 +181,8 @@ const APPEARANCE_LABELS: Readonly<Record<PreviewAppearancePreference, string>> =
 
 const zoomLabel = (zoomFactor: number) => `${Math.round(zoomFactor * 100)}%`;
 
-/**
- * IPC flattens the failure to its message, so the reason token travels inside
- * it. Anything unrecognised reads as a plain read failure rather than leaking
- * the raw message into a toast.
- */
+/** IPC carries reason tokens inside messages; treat unknown tokens as read failures without exposing raw
+ * text. */
 class ProfileLimitReachedError extends Error {
   constructor() {
     super("Browser profile limit reached.");
@@ -231,9 +228,7 @@ async function importBrowserCookiesIntoTarget(
               (profile) => profile.id === input.target.profileId,
             );
             if (existing) return current;
-            // The wizard refuses a new target at the cap, but the cap can be
-            // reached while the import runs; the updater sees the newest
-            // settings, so this is the check that holds.
+            // The profile cap may be reached during import; enforce it against the updater's latest settings.
             if (current.browserProfiles.length >= BROWSER_PROFILE_MAX_COUNT) {
               throw new ProfileLimitReachedError();
             }
@@ -254,9 +249,8 @@ async function importBrowserCookiesIntoTarget(
             persisted.browserProfiles.find((profile) => profile.id === input.target.profileId)
               ?.name ?? source.name;
         } catch (cause) {
-          // This target id belongs only to the attempted new profile. Clear
-          // its partition so a failed registration cannot strand imported
-          // cookies behind a profile that disappears on restart.
+          // Clear the new target's partition on registration failure so imported cookies cannot outlive its
+          // profile.
           await clearBrowserProfileData(bridge, [environmentId], input.target.profileId).catch(
             () => undefined,
           );
@@ -293,11 +287,7 @@ const viewportSelectValue = (viewport: PreviewViewportSetting): string => {
   return RESPONSIVE_VALUE;
 };
 
-/**
- * The trigger renders this rather than a bare `SelectValue`, which would fall
- * back to printing the raw stored value ("fill") because the options are built
- * inline instead of from an `items` map.
- */
+/** Inline options lack an items map; bare SelectValue would display the stored fill token. */
 const viewportSelectLabel = (viewport: PreviewViewportSetting): string => {
   const value = viewportSelectValue(viewport);
   if (value === FILL_VALUE) return "Fill panel";
@@ -355,9 +345,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
     });
   };
 
-  // Committed on blur rather than per keystroke: typing "2560" passes through
-  // "256", which is a legal dimension, so an onValueChange handler would
-  // persist that intermediate size and churn the settings file on every key.
+  // Commit on blur to avoid persisting valid intermediate dimensions and rewriting settings per keystroke.
   const commitDimension = (axis: "width" | "height", value: number | null) => {
     if (value === null || !isValidDimension(value)) return;
     const next = { ...presentedSize, [axis]: value };
@@ -785,7 +773,7 @@ function PullRequestLinksOpenInAppSetting() {
   return (
     <SettingsRow
       {...searchableSetting("pull-request-links-open-in-app")}
-      description="Clicking a pull request link opens it in T3 Code. Turn off to open pull request links like any other link, on GitHub or your git host."
+      description="Clicking a pull request link opens it in T3 Code. Turn off to open pull request links like any other link, on your git host."
       resetAction={
         openInApp ? null : (
           <SettingResetButton
@@ -1204,8 +1192,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
   const createProfile = (baseName: string) => {
     if (!settingsHydrated || importInFlightRef.current) return undefined;
     const currentProfiles = getClientSettings().browserProfiles;
-    // Checked against the live settings, not the rendered list: two clicks
-    // before a re-render would otherwise both pass the disabled control.
+    // Check live settings; repeated clicks before render can bypass the disabled control.
     if (currentProfiles.length >= BROWSER_PROFILE_MAX_COUNT) return undefined;
     const resolvedProfiles = resolveBrowserProfiles(currentProfiles);
     const taken = new Set(resolvedProfiles.map((profile) => profile.name));
@@ -1635,11 +1622,9 @@ export interface JiraSettingsRowStatuses {
 }
 
 /**
- * Status text for the Jira site URL and project keys rows. An invalid value
- * takes priority on its own row. Otherwise, when only one of the two is
- * filled in - links stay off until both are - the empty row gets a nudge to
- * finish setup. Suppressed while either value is mixed across environments,
- * since a mixed field's real value isn't known here.
+ * Status text for the Jira site URL and project keys rows. An invalid value wins on its own
+ * row; otherwise if only one is filled (links need both), the empty row nudges to finish
+ * setup. Suppressed while either value is mixed across environments.
  */
 export function jiraSettingsRowStatuses(input: {
   readonly baseUrl: string;
@@ -1651,11 +1636,8 @@ export function jiraSettingsRowStatuses(input: {
   const { baseUrl, projectKeys, mixed, invalidBaseUrl, invalidProjectKeys } = input;
   const baseUrlEmpty = baseUrl === "";
   const projectKeysInvalidStatus = jiraProjectKeysStatus(invalidProjectKeys);
-  // A placeholder valid URL isolates "does this string resolve to at least
-  // one usable key" from whether the URL field itself is filled in or valid.
-  // `projectKeys !== ""` isn't enough: "," is non-empty but resolves to zero
-  // keys, and a fully invalid entry like "123" resolves to zero keys too, in
-  // which case filling in the URL would not turn links on.
+  // A placeholder valid URL isolates "does this resolve to a usable key" from the URL field.
+  // `projectKeys !== ""` is not enough: "," and "123" are non-empty but resolve to zero keys.
   const hasValidProjectKey = resolveJiraTicketLinks("https://example.com", projectKeys) !== null;
   return {
     baseUrlStatus: invalidBaseUrl

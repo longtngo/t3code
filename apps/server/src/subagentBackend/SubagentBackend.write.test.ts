@@ -63,11 +63,9 @@ it.live(
   "orders concurrent writes through backendWriteSemaphore rather than letting them overlap",
   () =>
     Effect.gen(function* () {
-      // `writeFileStringAtomically` already makes a single write tear-free (covered
-      // by atomicWrite.test.ts), so racing writes without instrumentation would pass
-      // whether or not the semaphore exists and would prove nothing about ordering.
-      // Instead, delay inside a recorded `writeFileString` and assert no two writes
-      // are ever in flight at once - the semaphore's actual job.
+      // A single write is already tear-free, so racing uninstrumented writes would pass with or
+      // without the semaphore. Delay inside a recorded `writeFileString` and assert no two writes
+      // are ever in flight at once.
       const events: string[] = [];
       let inFlight = 0;
       let maxInFlight = 0;

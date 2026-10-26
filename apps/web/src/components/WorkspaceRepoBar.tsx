@@ -79,16 +79,9 @@ export default function WorkspaceRepoBar({
 }
 
 /**
- * One repository's tab, which owns its own status subscription.
- *
- * Subscribing per tab rather than lifting every repository's status into the
- * bar keeps this a fixed number of hooks per component — React forbids the
- * loop the lifted version would need — and means a repository stops being
- * watched the moment it leaves the list.
- *
- * The subscription is local-only. Ahead/behind counts and pull request state
- * reach the network, and the panel already subscribes to the full status of
- * whichever repository is selected.
+ * One repository's tab, owning its own status subscription: a fixed hook count per component
+ * (React forbids the loop a lifted version needs), and watching stops when it leaves the list.
+ * Local-only; the panel already subscribes to the selected repository's full status.
  */
 function WorkspaceRepoTab({
   environmentId,
@@ -103,11 +96,9 @@ function WorkspaceRepoTab({
   readonly repo: WorkspaceRepo;
   readonly report: WorkspaceMemberBranchReport | null;
 }) {
-  // A server that does not honour `includeRemote: false` drops the flag and starts a
-  // remote poller for this subscription instead. Seven attached repositories
-  // would then fetch seven remotes on a timer, which is the shape of the fetch
-  // storm that once made this backend read as unresponsive — so against such a
-  // server this tab shows no status rather than quietly paying for it.
+  // A server that ignores `includeRemote: false` starts a remote poller per subscription, so
+  // seven repositories would fetch seven remotes on a timer (the fetch-storm shape that once made
+  // this backend unresponsive). Against such a server the tab shows no status instead.
   const supportsLocalOnlyStatus = useEnvironmentSupportsLocalOnlyStatus(environmentId);
   const statusQuery = useEnvironmentQuery(
     supportsLocalOnlyStatus

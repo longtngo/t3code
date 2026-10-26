@@ -25,17 +25,9 @@ import {
 import { searchableSetting } from "./settingsSearch";
 
 /**
- * Settings → Notifications.
- *
- * Owns every notification control: the two delivery switches (a per-browser
- * foreground toggle and a per-device Web Push toggle) and the per-category
- * switches that gate what either of them is allowed to raise.
- *
- * The category rows deliberately render regardless of `pushAvailable`. That gate
- * exists because the Web Push master switch is meaningless without a service
- * worker and a VAPID key, but the categories also gate the foreground notifier —
- * which is exactly the desktop path — so hiding them there would leave desktop
- * with no control at all.
+ * Settings → Notifications: the two delivery switches and the per-category switches. Category
+ * rows render regardless of `pushAvailable`: they also gate the foreground notifier (the
+ * desktop path), so hiding them without Web Push would leave desktop with no control.
  */
 export function NotificationsSettingsPanel() {
   const settings = usePrimarySettings();

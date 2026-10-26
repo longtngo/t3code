@@ -265,11 +265,8 @@ export const layer: Layer.Layer<
           checkpointId: input.checkpointId,
         });
       }
-      // Fork: admission already refused with the member names; this re-check
-      // covers a member that moved while the rollback waited in the lane. A
-      // member that moves after this read and before the file restore below is
-      // not caught: the provider rollback runs in between, and members are
-      // only read, never locked.
+      // Fork: re-check for a member that moved while the rollback waited in the lane. A move
+      // between this read and the file restore is not caught: members are read, never locked.
       const memberRefusal =
         input.restoreFiles === false
           ? null
@@ -331,9 +328,7 @@ export const layer: Layer.Layer<
         yield* checkpoints.deleteStaleRefs({ scope, checkpoints: staleCheckpoints });
       }
 
-      // Thread commands write full provider thread rows under this lock. Without
-      // it, a message sent during the rollback can plan against the old native
-      // session and commit after this, undoing the provider's fork.
+      // Lock against full-row thread writes that could restore the old native session after rollback.
       yield* threadCommands.withLock(
         input.threadId,
         Effect.gen(function* () {

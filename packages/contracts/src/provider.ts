@@ -42,12 +42,9 @@ export const ProviderSession = Schema.Struct({
   runtimeMode: RuntimeMode,
   cwd: Schema.optional(TrimmedNonEmptyString),
   /**
-   * The workspace member paths this session was actually granted, echoed back
-   * from `ProviderSessionStartInput`. It is part of the session's identity, not
-   * decoration: without it, attaching a member to a running thread cannot be
-   * detected as a change (the session would keep its old grant and the next
-   * tool call would prompt), and a session recovered after a server restart
-   * would silently drop the grant.
+   * Member paths this session was granted, echoed from `ProviderSessionStartInput`. Part of its
+   * identity: without it, attaching a member mid-thread is not seen as a change (the next tool call
+   * prompts), and a session recovered after restart silently drops the grant.
    */
   workspaceMemberPaths: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   model: Schema.optional(TrimmedNonEmptyString),
@@ -92,16 +89,10 @@ export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
 export const ProviderSendTurnInput = Schema.Struct({
   threadId: ThreadId,
-  /**
-   * The orchestration message this turn was started for.
-   *
-   * Optional because it only reaches adapters that queue: an adapter holding a
-   * turn behind a running one needs a name for it that the client also knows,
-   * or a queued message can be listed but never withdrawn.
-   */
+  /** The orchestration message this turn serves; queueing adapters need it so a queued
+   * message can be withdrawn, not only listed. */
   messageId: Schema.optional(MessageId),
-  /** Internal recovery signal. Allows an empty turn only for adapters that
-      explicitly support promptless continuation. */
+  /** Internal recovery: permits empty turns only for adapters supporting promptless continuation. */
   continuation: Schema.optional(Schema.Boolean),
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),

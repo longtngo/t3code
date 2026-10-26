@@ -42,7 +42,7 @@ export class NetService extends Context.Service<NetService, NetServiceShape>()(
   "@t3tools/shared/Net/NetService",
 ) {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = () => {
   const canListenOnHost = (port: number, host: string): Effect.Effect<boolean> =>
     Effect.callback<boolean>((resume) => {
@@ -167,19 +167,9 @@ export const make = () => {
     });
 
   /**
-   * Reserve an ephemeral loopback port and release it immediately.
-   *
-   * The bind is single-family, but {@link isPortAvailableOnLoopback} - which
-   * every consumer of this port ends up going through - requires the port to be
-   * free on BOTH 127.0.0.1 and ::1. The kernel keeps a separate ephemeral space
-   * per family, so a v4 bind will hand out a port that already has an IPv6-only
-   * listener, and the two helpers then disagree about the very same number.
-   * Measured on this machine: port 58153 was free on 127.0.0.1 and occupied on
-   * ::1 by a `tcp6 *.58153` listener, which is exactly how `findAvailablePort`
-   * came to reject the port `reserveLoopbackPort` had just handed it.
-   *
-   * So re-draw until both families agree. An explicit `host` means the caller
-   * wants that family specifically and is left alone.
+   * Re-draws until the port is free on BOTH 127.0.0.1 and ::1, as {@link isPortAvailableOnLoopback}
+   * requires: families have separate ephemeral spaces, so a v4 bind can return a port with an
+   * IPv6-only listener (measured: 58153). An explicit `host` picks that family and is left alone.
    */
   const reserveLoopbackPort = (host?: string): Effect.Effect<number, NetError> =>
     host !== undefined

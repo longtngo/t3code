@@ -1,5 +1,7 @@
 import { WORKSPACE_VIDEO_PREVIEW_EXTENSIONS } from "@t3tools/shared/filePreview";
 
+import { sourceControlClients, type ReferenceAutolink } from "./sourceControlClients.ts";
+
 /** `id` is positional on purpose: the same attachment can be embedded twice in one body. */
 export type PullRequestBodySegment =
   | { readonly id: string; readonly kind: "markdown"; readonly text: string }
@@ -26,8 +28,7 @@ const VIDEO_EXTENSION_PATTERN = new RegExp(
   `\\.(?:${WORKSPACE_VIDEO_PREVIEW_EXTENSIONS.map((extension) => extension.slice(1)).join("|")})(?:$|[?#])`,
   "iu",
 );
-/** A dropped video becomes a bare asset link; a dropped image becomes an `<img>` tag. */
-const GITHUB_ASSET_PATTERN = /^https:\/\/github\.com\/user-attachments\/assets\/[\w-]+$/iu;
+
 const VIDEO_TAG_SRC_PATTERN = /<(?:video|source)\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/iu;
 
 const STANDALONE_VIDEO_TAG_PATTERN = /^\s*<video\b/iu;
@@ -48,7 +49,7 @@ function attachmentFromLine(
   const url =
     BARE_URL_PATTERN.exec(line.trim())?.[1] ?? MARKDOWN_LINK_PATTERN.exec(line.trim())?.[1];
   if (url === undefined || !isWebUrl(url)) return null;
-  if (VIDEO_EXTENSION_PATTERN.test(url) || GITHUB_ASSET_PATTERN.test(url)) {
+  if (VIDEO_EXTENSION_PATTERN.test(url) || sourceControlClients.mediaUrl(url)?.kind === "video") {
     return { url, media: "video" };
   }
   if (IMAGE_EXTENSION_PATTERN.test(url)) return { url, media: "image" };
@@ -135,4 +136,20 @@ export function splitPullRequestBody(body: string): ReadonlyArray<PullRequestBod
 
   flushMarkdown();
   return segments;
+}
+
+/**
+ * Finds the references the change request's host links in plain text, resolved against the change
+ * request's repository. Null when the host links none.
+ */
+export function changeRequestReferenceAutolinker(
+  changeRequest: { readonly provider: string; readonly url: string } | null | undefined,
+): ((text: string) => ReadonlyArray<ReferenceAutolink>) | null {
+  if (!changeRequest) return null;
+  const find = sourceControlClients.get(changeRequest.provider).referenceAutolinks;
+  const repositoryUrl = sourceControlClients.parseChangeRequestUrl(changeRequest.url)?.link
+    .repositoryUrl;
+  return find === undefined || repositoryUrl === undefined
+    ? null
+    : (text) => find(text, repositoryUrl);
 }

@@ -27,24 +27,10 @@ const isAlive = (pid: number): boolean => {
   }
 };
 
-// This is the premise the manager's unload path rests on, so it is measured
-// rather than read out of the option's documentation. With `forceKillAfter`
-// unset, closing the scope of a process that ignores SIGTERM never returns, and
-// `unload` — plus the shutdown finalizer, which closes the same scopes — hangs
-// with it. Measured directly against this fixture:
-//
-//     forceKillAfter: 1s   close returned after 1007ms, process dead
-//     omitted              close had not returned after 5000ms, process alive
-//
-// A plain timeout on our side would return but leave the process alive holding
-// its weights, so both halves have to hold at once: the wait terminates AND the
-// process is gone.
-//
-// Top-level `it.live` with the layer provided explicitly, rather than `it.effect`
-// inside `it.layer`: this needs the real clock, and `it.live` is not available on
-// the layer-scoped tester. Under the default TestClock the grace period is
-// virtual time that never elapses, and an earlier version of this test passed
-// identically with `forceKillAfter` removed entirely.
+// The unload path's premise, measured: without `forceKillAfter`, closing a SIGTERM-ignoring
+// process's scope never returns (1s: returned in 1007ms, process dead; omitted: still alive
+// at 5000ms). Both must hold: the wait ends AND the process is gone. `it.live` because under
+// TestClock the grace never elapses and the test passed with `forceKillAfter` removed.
 it.live("reaps a model server that ignores SIGTERM, instead of waiting on it forever", () =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -52,12 +38,9 @@ it.live("reaps a model server that ignores SIGTERM, instead of waiting on it for
 
     const child = yield* spawner
       .spawn(
-        // Survives a SIGTERM delivered to the whole process GROUP, which is
-        // what `detached: true` makes the spawner signal. `trap "" TERM; sleep
-        // 600` is not enough: the group signal kills the untrapped `sleep`
-        // child, the trapping shell falls through and exits on its own, and
-        // the escalation is never reached. The loop restarts the sleep, so the
-        // shell really does outlive SIGTERM.
+        // Must survive SIGTERM to the whole process GROUP (`detached: true`). `trap "" TERM; sleep`
+        // is not enough: the group signal kills `sleep` and the shell exits on its own. The loop
+        // restarts the sleep so the shell really outlives SIGTERM.
         ChildProcess.make("/bin/sh", ["-c", 'trap "" TERM; while true; do sleep 0.2; done'], {
           detached: true,
           shell: false,
@@ -102,16 +85,9 @@ it("bounds the production stop with a real, positive grace period", () => {
   assert.isBelow(ms, 60_000);
 });
 
-// A source-shape guard, and only because there is no cheaper runtime observable:
-// nothing here builds `LlmServeManager` (its layer wants the whole server's
-// settings and registry), so the spawn options cannot be captured without a
-// harness larger than the thing under test. The convention matches `http.test.ts`.
-//
-// It exists because the two tests above do NOT pin production. Measured: deleting
-// `forceKillAfter` from the real spawn leaves this file and
-// `LlmServeManager.logic.test.ts` fully green and `tsgo` at zero errors - the
-// mechanism test builds its own fixture, and the constant test only reads the
-// constant. Both can pass with the defect reintroduced.
+// A source-shape guard, because building `LlmServeManager` needs the whole server's layers.
+// Measured: deleting `forceKillAfter` from the real spawn leaves the two tests above, the
+// logic tests and tsgo all green, so only this pins production.
 it("passes the grace period to the real model-server spawn", () => {
   const source = NodeFS.readFileSync(new URL("./LlmServeManager.ts", import.meta.url), "utf8");
   const spawnIndex = source.indexOf(".spawn(");

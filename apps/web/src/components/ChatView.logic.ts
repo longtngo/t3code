@@ -116,7 +116,7 @@ type ThreadStructureRow = ThreadStructure["visibleTurnItems"][number];
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 
-const ENVIRONMENT_RECONNECT_WARNING_GRACE_MS = 2_000;
+export const ENVIRONMENT_RECONNECT_WARNING_GRACE_MS = 2_000;
 
 export function agentControlledBrowserCloseConfirmation(
   surfaces: readonly RightPanelSurface[],
@@ -243,12 +243,8 @@ export function resolveProactiveTurnDiffAction(input: {
   return input.checkpoint.files.length >= 3 || changedLines >= 50 ? "open" : "ignore";
 }
 
-/**
- * Clicking back to an existing Diff tab resumes the review in progress, so the
- * generic-open reset to Changes must skip it. A diff that is already active is
- * left unmarked: the reset never runs for it, and the marker would linger into
- * the next generic open.
- */
+/** Mark reactivated Diff tabs to preserve review scope. Already-active tabs must not leave a marker for
+ * the next open. */
 export function resolveExplicitDiffOpenOnActivate(input: {
   readonly surfaceKind: RightPanelSurface["kind"];
   readonly diffOpen: boolean;
@@ -351,11 +347,7 @@ export function resolveDraftHeroState(input: {
   );
 }
 
-/**
- * Remounting LegendList (or handing it an empty first paint) punches a hole
- * through the chat pane — white in light mode — so cmd+1/2/3 spam flashes even
- * when the destination is already cached.
- */
+/** Remounting or initially emptying LegendList flashes the chat pane, even for cached threads. */
 export type HeldThreadTimeline<T extends readonly unknown[]> = {
   threadKey: string | null;
   entries: T;
@@ -478,18 +470,6 @@ export function resolveDraftPromotionNavigationTarget(input: {
     latestRun?.status === "cancelled";
   const messagePersisted = input.serverThread?.latestUserMessageAt != null;
   return runStarted || startupStopped || messagePersisted ? input.serverThreadRef : null;
-}
-
-export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {
-  const timeoutId = globalThis.setTimeout(showWarning, ENVIRONMENT_RECONNECT_WARNING_GRACE_MS);
-  return () => globalThis.clearTimeout(timeoutId);
-}
-
-export function hasEnvironmentReconnectWarningGraceElapsed(
-  activeEnvironmentId: EnvironmentId | null,
-  elapsedEnvironmentId: EnvironmentId | null,
-): boolean {
-  return activeEnvironmentId !== null && activeEnvironmentId === elapsedEnvironmentId;
 }
 
 export function startNewThreadForProject(
@@ -675,12 +655,9 @@ export type PendingRevertRestore = {
 };
 
 /**
- * Decides what to do with a revert whose text is waiting to go back in the composer.
- *
- * The message leaving the thread is the signal that the revert landed, but absence alone is not
- * enough: a re-window, a reconnect, a cold subscribe or a withdraw can all empty the message list
- * without a revert. The checkpoint check is what separates them - only a landed revert removes the
- * checkpoints newer than the target.
+ * Decides what to do with a revert whose text is waiting to go back in the composer. The message
+ * leaving is not enough (a re-window, reconnect, cold subscribe or withdraw also empties the list);
+ * only a landed revert also removes the checkpoints newer than the target.
  */
 export function resolvePendingRevertRestore(input: {
   readonly pending: PendingRevertRestore | null;
@@ -879,34 +856,14 @@ export {
 export type { ArmedStopEscalation, StopAction } from "@t3tools/client-runtime/state/stop-ladder";
 
 /**
- * What an Escape press in the chat surface should do.
- *
- * The rungs run recall -> stop -> force-stop, and Escape only ever supplies the
- * press. Deciding between stop and force-stop stays with `nextStopAction`, so
- * the keyboard and the Stop button share one ladder and one 500ms floor: two
- * deliberate presses force-stop, an accidental double-tap does not, and Escape
- * held down (which auto-repeats) cannot reach the destructive rung at all.
- *
- * Recall comes first because it is the reversible rung. A message still waiting
- * has not cost the agent anything yet, so taking it back is a cheaper answer to
- * "I did not mean that" than killing the turn - and once the queue is empty the
- * next press stops, exactly as if the queue had never been there.
+ * Escape's rungs run recall -> stop -> force-stop. Recall is first because it is reversible; stop
+ * vs force-stop stays with `nextStopAction`, so Escape and the Stop button share one ladder and
+ * one 500ms floor, and an auto-repeating held Escape never reaches the destructive rung.
  */
 /**
- * Whether an Escape press belongs to the chat rather than to something layered
- * over it.
- *
- * Decided by FOCUS, not by an inventory of overlays. Every control that owns
- * Escape - dialog, menu, model picker, terminal pane - takes focus into a DOM
- * subtree that is not the composer's, and portalled content is never inside it.
- * So "focus is in the composer, or nowhere" is exactly the set of presses the
- * chat should answer, and it stays correct as overlays are added.
- *
- * Nowhere means `document.body`: clicking the transcript leaves focus there,
- * and Escape should still stop the turn you were reading.
- *
- * `hasOpenDialog` covers the single gap focus alone leaves - a modal that is
- * open while focus has not landed inside it yet.
+ * Whether Escape belongs to the chat, decided by FOCUS rather than an overlay inventory: every
+ * Escape-owning control takes focus out of the composer, so "in the composer, or on body" (a
+ * transcript click) is the chat's set. `hasOpenDialog` covers a modal focus has not reached yet.
  */
 export function isChatSurfaceFocused(input: {
   readonly activeElement: Node | null;
@@ -1055,16 +1012,10 @@ export function branchMismatchKey(
   return `${threadId}:${mismatch.threadBranch}:${mismatch.currentBranch}`;
 }
 
-// A composer banner that warns about what *sending* will do only matters when
-// the user is about to send: passive reading of an old thread carries no risk,
-// and the ambient surfaces (the branch picker tint, the repository bar) already
-// cover awareness. Draft content is the intent signal — composer focus is
-// useless here because ChatView autofocuses the composer on every thread open.
-// `wasShownForCurrentCondition` keeps the banner mounted once revealed so it
-// doesn't flicker away when the draft is cleared.
-//
-// Shared by the branch-mismatch banner and the workspace-member guard, which
-// gate on the same intent for the same reason.
+// A banner about what *sending* will do shows only with draft content, the intent signal: composer
+// focus is useless because ChatView autofocuses it. `wasShownForCurrentCondition` keeps it mounted
+// once revealed so it does not flicker away when the draft clears. Shared by the branch-mismatch
+// banner and the workspace-member guard.
 export function shouldShowComposerIntentBanner(input: {
   hasCondition: boolean;
   isDismissed: boolean;
@@ -1107,9 +1058,7 @@ export function isBranchMismatchDismissedForSession(key: string | null): boolean
   return key !== null && sessionDismissedBranchMismatchKeys.has(key);
 }
 
-// Git status for a checkout arrives after the composer paints, and the branch
-// strip mounts on the assumption that a project is a Git repo. Without a
-// memory, a non-Git project would mount the strip and drop it on every visit.
+// Remember non-Git checkouts to avoid flashing the branch strip before delayed Git status arrives.
 const sessionCheckoutIsRepo = new Map<string, boolean>();
 
 function checkoutIsRepoKey(environmentId: EnvironmentId, cwd: string): string {
@@ -1149,8 +1098,7 @@ export function threadShellHasStarted(
   );
 }
 
-// Imported history has no session until its first prompt. Resolve its instance
-// through the environment's provider catalog before locking to a driver.
+// Imported history lacks a session until its first prompt; resolve its instance before locking the driver.
 export function deriveLockedProvider(input: {
   thread: Thread | null | undefined;
   selectedProvider: string | null;
@@ -1181,8 +1129,7 @@ export function deriveLockedProviderForThread(input: {
   if (sessionProvider && isProviderDriverKind(sessionProvider)) {
     return sessionProvider;
   }
-  // Preserve the existing lock while an instance is missing from the catalog;
-  // a started thread must not silently fall back to a different driver.
+  // Missing catalog entries must not switch a started thread's driver.
   const threadProvider =
     input.providers.find((provider) => provider.instanceId === input.threadProvider)?.driver ??
     input.threadProvider;
@@ -1375,12 +1322,8 @@ export function createLocalDispatchSnapshot(
   };
 }
 
-/**
- * The timeline renders committed user rows from `visibleTurnItems`, but
- * `message.updated` can land in `projection.messages` one event earlier than
- * the matching `turn-item.updated`. Basing optimistic eviction on visible user
- * turn items avoids dropping steer rows in that gap.
- */
+/** Projection messages can precede visible turn items by one event; evict optimistic rows only when
+ * visible. */
 export function deriveCommittedServerUserMessageIds(
   visibleTurnItems: ReadonlyArray<ThreadStructureRow>,
 ): ReadonlySet<ChatMessage["id"]> {
@@ -1449,14 +1392,9 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 }
 
 /**
- * Whether a send attempted while the environment is disconnected can be safely
- * queued for replay on reconnect.
- *
- * The full send pipeline does network work a queued turn cannot reproduce
- * offline (attachment upload, worktree preparation) and derives state a replay
- * would skip (auto-title on the first message). So v1 queues only the case that
- * actually matters day-to-day and is self-describing in a single command: a
- * plain-text follow-up on a thread the server already knows about.
+ * Whether a disconnected send can be queued for replay. Only a plain-text follow-up on a known
+ * thread qualifies: uploads and worktree preparation cannot run offline, and a replay would skip
+ * first-message auto-titling.
  */
 export function canQueueOfflineTurn(input: {
   readonly hasText: boolean;
@@ -1467,12 +1405,9 @@ export function canQueueOfflineTurn(input: {
   readonly needsWorktree: boolean;
   readonly hasPendingProgress: boolean;
   /**
-   * Whether the composer's runtime/interaction modes already match the thread's
-   * persisted ones. The server derives a turn's modes from the THREAD, not from
-   * the turn-start command, and the online path keeps them in step by persisting
-   * the composer's modes just before sending. A queued replay skips that step, so
-   * a pending mode change would silently run the turn in the old mode — refuse to
-   * queue instead, leaving the text in the composer.
+   * Whether the composer's modes match the thread's. The server reads a turn's modes from the
+   * THREAD, which the online path persists just before sending; a replay skips that, so a pending
+   * mode change would run in the old mode. Refuse to queue instead.
    */
   readonly modesMatchThread: boolean;
   // No per-thread limit: replays dispatch with `queue`, which v2 turns into
@@ -1494,20 +1429,9 @@ export function canQueueOfflineTurn(input: {
 export type OfflineQueueInput = Parameters<typeof canQueueOfflineTurn>[0];
 
 /**
- * Whether `onSend` must return before it reaches the offline-queue branch.
- *
- * This exists as a named predicate rather than an inline `if` because an
- * unavailable environment is deliberately NOT a reason to bail: bailing is
- * exactly what the offline outbox exists to prevent, and the queue branch sits
- * further down the same function. An upstream reconcile silently re-added
- * `activeEnvironmentUnavailable` to that inline guard once (756b9c9af), which
- * made the whole outbox unreachable while every one of its unit tests kept
- * passing — the queue logic was covered, its REACHABILITY was not. The tests
- * on this function are that missing coverage.
- *
- * The one offline case that still bails is a direct annotation: it carries an
- * image and a preview payload that `canQueueOfflineTurn` refuses anyway, so it
- * stays attached to the draft and the caller explains that with a toast.
+ * Whether `onSend` returns before the offline-queue branch. Named and tested because an unavailable
+ * environment must NOT bail (registry invariant 4b): a reconcile once re-added that to an inline
+ * guard and made the outbox unreachable with its tests green. A direct annotation still bails.
  */
 export function shouldAbortSendBeforeOfflineQueue(input: {
   readonly hasActiveThread: boolean;
@@ -1521,7 +1445,7 @@ export function shouldAbortSendBeforeOfflineQueue(input: {
   readonly sendInFlight: boolean;
   readonly environmentUnavailable: boolean;
   readonly hasDirectAnnotation: boolean;
-  /** A Codex feedback upload already running for this thread (upstream #7949). */
+  /** A Codex feedback upload already running for this thread. */
   readonly feedbackUploadInFlight: boolean;
 }): boolean {
   return (
@@ -1594,11 +1518,6 @@ export interface PlanFollowUpComposerSnapshot {
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
 }
 
-/**
- * The caller clears the composer before awaiting the send, so every field it
- * held has to be written back here: a dropped field silently discards user
- * context.
- */
 export function restorePlanFollowUpComposer(input: {
   readonly snapshot: PlanFollowUpComposerSnapshot;
   readonly writePrompt: (prompt: string) => void;
@@ -1796,11 +1715,7 @@ export function outboxTimelineMessages(input: {
     }));
 }
 
-/**
- * Adds a directly sent preview annotation to the composer's images and
- * annotations. Its screenshot rides along only while the turn has room for
- * another attachment; over the cap the server rejects the whole turn.
- */
+/** Includes the annotation screenshot only within the attachment cap; exceeding it rejects the whole turn. */
 export function mergeDirectPreviewAnnotation(input: {
   readonly images: ReadonlyArray<ComposerImageAttachment>;
   readonly fileCount: number;
@@ -1832,8 +1747,6 @@ export function mergeDirectPreviewAnnotation(input: {
         ...input.previewAnnotations,
         {
           ...direct.annotation,
-          // Claim an attached crop only when the screenshot really rides
-          // along; a cap-dropped image must not produce a lying prompt.
           screenshot:
             direct.annotation.screenshot && (imageAppended || imageAlreadyAttached)
               ? { ...direct.annotation.screenshot, dataUrl: "" }

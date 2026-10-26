@@ -3,15 +3,10 @@ import * as Option from "effect/Option";
 
 import { getPropertyName, isIdentifier, unwrapExpression } from "../utils.ts";
 
-// effect `Stream` combinators that lower to `aggregateWithin` → `stepToBuffer`
-// (installed effect@4.0.0-beta.78 `dist/Stream.js:5868`/`:5887`), a schedule loop
-// that is NOT stack-safe: on an idle source every scheduled tick self-recurses
-// inside `flatMap(() => Effect.never)`, pinning +2 continuation frames on the
-// consuming fiber's `_stack` FOREVER (growth tracks the timer, not the element
-// rate). That was the confirmed t3code server OOM on `subscribeThread`
-// (~1.9 GB/hr → crash every ~13-14 h). Replace with `batchWithinStackSafe`
-// (apps/server/src/orchestration/Layers/batchWithinStackSafe.ts): a bounded Queue
-// + backpressure-driven pull, no timer, stack-safe, memory-bounded.
+// These lower to `aggregateWithin` -> `stepToBuffer`, which is NOT stack-safe: on an idle source
+// each tick pins 2 frames on the fiber's `_stack` forever (growth tracks the timer). That was the
+// confirmed server OOM on `subscribeThread` (~1.9 GB/hr). Use `batchWithinStackSafe`
+// (apps/server/src/orchestration/Layers/batchWithinStackSafe.ts) instead.
 const UNSAFE_STREAM_METHODS = new Set([
   "groupedWithin", //         Stream.js:5595 → aggregateWithin(Sink.take, Schedule.spaced)
   "aggregate", //             Stream.js:5838 → aggregateWithin(sink, Schedule.forever)
@@ -54,12 +49,8 @@ export default defineRule({
   },
   create(context) {
     /**
-     * Local names that stand for the `Stream` namespace.
-     *
-     * Seeded with `Stream` itself so a file that obtains the namespace some
-     * other way — a re-export, a local rebinding — is still covered; that is
-     * how this rule worked before it read imports at all, and the dominant
-     * spelling in this repo. Import aliases are added on top.
+     * Seeded with `Stream` so a namespace obtained another way (re-export, local rebinding) is still
+     * covered, as it was before this rule read imports; import aliases are added on top.
      */
     const namespaceNames = new Set<string>(["Stream"]);
     /**

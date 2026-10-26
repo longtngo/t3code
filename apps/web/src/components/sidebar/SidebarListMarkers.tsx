@@ -3,12 +3,14 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { type ReactNode } from "react";
 import { cn } from "~/lib/utils";
+import { useClientSettings } from "../../hooks/useSettings";
 import {
   animateSidebarLayoutChanges,
   sidebarListItemId,
   type SidebarListItem,
 } from "../Sidebar.logic";
 import { SIDEBAR_SORTABLE_DRAG_DISABLED } from "./SidebarThreadRow";
+import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 
 export function SortableSidebarMarker(props: {
   item: Extract<SidebarListItem, { kind: "marker" }>;
@@ -104,11 +106,15 @@ export function SidebarDragBoundary(props: {
 export function SidebarSectionHeader(props: {
   marker: "working-header" | "snoozed-header" | "settled-header";
   label: string;
+  /** FORK: the `active/total` count, shown in both states (registry 67). The New design puts it
+   * in upstream's trailing slot, classic after the label. */
   count: string;
   className?: string;
   dragging?: boolean;
   isDropTarget?: boolean;
   toggle: { expanded: boolean; onToggle: () => void };
+  /** The first shelf at the bottom of the list hosts the undo notice just above itself. */
+  hostsUndoNotice?: boolean;
 }) {
   const shelf =
     props.marker === "working-header"
@@ -116,21 +122,25 @@ export function SidebarSectionHeader(props: {
       : props.marker === "snoozed-header"
         ? "snoozed"
         : "settled";
-  const snoozed = shelf === "snoozed";
+  const redesign = useClientSettings((s) => s.redesignEnabled);
   return (
     <SortableSidebarMarker
       item={{ kind: "marker", marker: props.marker }}
       data-testid={`sidebar-${props.marker}`}
-      className={cn("mx-0.5 h-8", props.className)}
+      className={cn("relative mx-0.5 h-8", props.className)}
     >
+      {props.hostsUndoNotice ? (
+        <SidebarThreadUndoNotice className="absolute inset-x-0 bottom-full bg-sidebar surface-grain" />
+      ) : null}
       <CollapsibleSectionHeader
         onClick={props.toggle.onToggle}
         expanded={props.toggle.expanded}
-        tone={
-          props.isDropTarget ? "accent" : props.dragging ? "emphasized" : snoozed ? "info" : "muted"
-        }
+        tone={props.isDropTarget ? "accent" : props.dragging ? "emphasized" : "muted"}
         data-testid={`sidebar-${shelf}-shelf-toggle`}
-        count={props.count}
+        count={redesign ? undefined : props.count}
+        accessory={
+          redesign ? <span className="font-normal tabular-nums">{props.count}</span> : null
+        }
       >
         {props.label}
       </CollapsibleSectionHeader>

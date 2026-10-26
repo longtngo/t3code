@@ -14,11 +14,9 @@ import { searchableSetting } from "./settingsSearch";
 const ACTIVE_SLOTS_ANCHOR = searchableSetting("queue-slots").id;
 
 /**
- * The queue's slot settings. Rows deliberately set neither `serverScoped` nor `settingKeys`: the
- * control must keep working with no primary environment, where the store holds the value locally.
- * The rows gate on the primary's `settings:write` grant themselves, because `serverScoped` checks
- * the settings scope's environments, not the primary. They also stay editable while the primary
- * has no queue value yet (see `useQueueSlotsAccess`).
+ * The queue's slot settings. Rows set neither `serverScoped` nor `settingKeys` so they work with
+ * no primary environment (the store holds the value locally); they gate on the primary's
+ * `settings:write` grant themselves and stay editable before it has a queue value.
  */
 export function QueueSettingsView(props: ReturnType<typeof useQueueSlots>) {
   const { slots, perProvider, providerSlots, instances, writable, notice } = props;

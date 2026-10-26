@@ -36,6 +36,7 @@ import { environmentSession, readEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom, primaryServerConfigAtom } from "../state/server";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { orchestrationEnvironment } from "../state/orchestration";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -339,6 +340,10 @@ export function useThreadActions() {
   const loadSessionState = useAtomQueryRunner(environmentSession.sessionStateAtom, {
     reportFailure: false,
   });
+  const loadWorktreeThreadIds = useAtomQueryRunner(orchestrationEnvironment.worktreeThreadIds, {
+    reportFailure: false,
+    refresh: true,
+  });
   const refreshVcsStatus = useAtomCommand(vcsEnvironment.refreshStatus, {
     reportFailure: false,
   });
@@ -503,16 +508,32 @@ export function useThreadActions() {
       deletedIds && deletedIds.size > 0
         ? threads.filter((entry) => entry.id === threadRef.threadId || !deletedIds.has(entry.id))
         : threads;
-    const orphanedWorktreePath = getOrphanedWorktreePathForThread(
-      survivingThreads,
-      threadRef.threadId,
-    );
-    const displayWorktreePath = orphanedWorktreePath
-      ? formatWorktreePathForDisplay(orphanedWorktreePath)
-      : null;
     const environmentConfig = appAtomRegistry
       .get(environmentServerConfigsAtom)
       .get(threadRef.environmentId);
+    let orphanedWorktreePath = getOrphanedWorktreePathForThread(
+      survivingThreads,
+      threadRef.threadId,
+    );
+    // A shell that leaves idle subagent children out cannot prove nobody else uses the worktree,
+    // so the server's list decides. A failed read keeps the worktree.
+    if (orphanedWorktreePath !== null && environmentConfig?.shellThreadFamilies === true) {
+      const occupants = await loadWorktreeThreadIds({
+        environmentId: threadRef.environmentId,
+        input: { worktreePath: orphanedWorktreePath },
+      });
+      if (
+        occupants._tag !== "Success" ||
+        occupants.value.threadIds.some(
+          (threadId) => threadId !== threadRef.threadId && deletedIds?.has(threadId) !== true,
+        )
+      ) {
+        orphanedWorktreePath = null;
+      }
+    }
+    const displayWorktreePath = orphanedWorktreePath
+      ? formatWorktreePathForDisplay(orphanedWorktreePath)
+      : null;
     const localApi = readLocalApi();
     let canDeleteWorktree = false;
     if (
@@ -666,8 +687,7 @@ export function useThreadActions() {
             : message,
         }),
       );
-      // The thread was deleted. Cleanup has its own toast; returning its
-      // failure would make callers incorrectly report a thread deletion error.
+      // Cleanup has its own toast; reporting its failure would falsely imply deletion failed.
     }
     return deleteResult;
   };
@@ -684,8 +704,7 @@ export function useThreadActions() {
       );
     }
     ThreadUndo.invalidate("settle", scopedThreadKey(target));
-    // reason "user" pins the thread active: auto-settle (PR merged /
-    // inactivity) stays suppressed until real activity clears the pin.
+    // reason "user" pins active until real activity, suppressing auto-settle.
     return unsettleThreadMutation({
       environmentId: target.environmentId,
       input: { threadId: target.threadId, reason: "user" },
@@ -720,8 +739,7 @@ export function useThreadActions() {
         ),
       );
     }
-    // orderKey rides only to servers that decode it; pre-reorder servers get the bare pin they
-    // understand and the thread stays keyless.
+    // Older servers cannot decode orderKey, so send only the pin to them.
     const orderKey = readEnvironmentSupportsPinReorder(target.environmentId)
       ? (opts.orderKey ?? topOfPinnedRunOrderKey())
       : undefined;
@@ -799,6 +817,7 @@ export function useThreadActions() {
       );
     }
     const resolved = resolveThreadTarget(target);
+    // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
     const now = new Date().toISOString();
     const wokeAt = resolved ? threadWokeAt(resolved.thread, { now }) : null;
     // The server's settle drops the pin but keeps the snooze, so a snoozed thread would stay
@@ -918,12 +937,9 @@ export function useThreadActions() {
   };
 
   /**
-   * Move to section / Move to Active: membership first, then clear what outranks it, and toast
-   * the step that failed. `sectionName` is null for Active. The unpin offers no Undo: re-pinning
-   * would take the thread back out of the section it was moved to. Resolves true when the
-   * membership landed (a later clear may still have failed and was toasted; the pin, settle or
-   * snooze it left then still outranks the section) or was already there; false when nothing
-   * moved: a deleted section, an unknown thread, or a failed membership write.
+   * Move to section (`sectionName` null is Active): membership first, then clear what outranks it,
+   * toasting the failed step; the unpin has no Undo (re-pinning would undo the move). True when the
+   * membership landed or was already there; false for a deleted section, unknown thread or failed write.
    */
   const moveThreadToSidebarSection = async (
     target: ScopedThreadRef,
@@ -987,6 +1003,7 @@ export function useThreadActions() {
       );
     }
     const resolved = resolveThreadTarget(target);
+    // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
     if (resolved && !canSnooze(resolved.thread, { now: new Date().toISOString() })) {
       return AsyncResult.failure(
         Cause.fail(

@@ -75,7 +75,6 @@ vi.mock("expo-file-system", () => {
   };
 });
 
-import { modelSelectionsEqual } from "@t3tools/shared/model";
 import {
   decodeQueuedThreadMessage,
   encodeQueuedThreadMessage,
@@ -1150,6 +1149,19 @@ describe("thread outbox", () => {
     ).toBe("send");
   });
 
+  it("removes a missing-thread message only after a settled family read when idle children can be omitted", () => {
+    const missing = {
+      message: deliverySubject({ isCreation: false, createdAt: "2026-01-01T00:00:00.000Z" }),
+      threadExists: false,
+      shellStatus: "live",
+      environmentConnected: true,
+      nowMs: Date.parse("2026-01-01T00:00:01.000Z"),
+    } as const;
+    expect(resolveThreadOutboxDeliveryAction({ ...missing, familyRead: "pending" })).toBe("wait");
+    expect(resolveThreadOutboxDeliveryAction({ ...missing, familyRead: "failed" })).toBe("wait");
+    expect(resolveThreadOutboxDeliveryAction({ ...missing, familyRead: "settled" })).toBe("remove");
+  });
+
   // Connectivity is the only gate on an existing thread. A message sent while a
   // turn is running still goes out immediately and is queued server-side; the
   // FIFO ordering that produces is pinned by ClaudeAdapter's queued-follow-up
@@ -1214,11 +1226,8 @@ describe("thread outbox", () => {
     ).toBe("remove");
   });
 
-  // The mobile outbox had no age bound of any kind, while web retires queued
-  // turns after MAX_QUEUED_TURN_AGE_MS. Mobile's queue is durable on disk and
-  // only ever removed on successful delivery, so a turn queued on a plane
-  // months ago would still be delivered verbatim into a thread that had moved
-  // on. It carries its original createdAt, so the agent could not tell either.
+  // Mobile's queue is durable and only removed on delivery, so without an age bound
+  // a turn queued months ago would land verbatim in a thread that has moved on.
   it("retires a queued turn once it is older than the age bound", () => {
     // Pinned literally, not derived: every other assertion here computes its
     // timestamps FROM the constant, so they hold just as well if the bound

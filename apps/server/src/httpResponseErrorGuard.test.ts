@@ -87,9 +87,7 @@ describe("guardHttpResponseWriteErrors", () => {
     });
 
     server.on("upgrade", (_request, socket) => {
-      // Simulate the client vanishing while the auth rejection response is
-      // written to the upgrade socket: the write failure surfaces as an
-      // "error" event on a socket Node's http server no longer listens to.
+      // Node's HTTP server no longer listens for errors on an upgraded socket.
       socket.destroy(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
     });
 
@@ -173,11 +171,9 @@ describe("rejectRequestsUntilServing", () => {
       shortBodyObserved.resolve();
     });
 
-    // A file that shrinks mid-stream produces exactly this: headers already
-    // declared N bytes, the body stops early, and Node considers the response
-    // complete. Left alone the connection returns to the keep-alive pool, and the
-    // next response is written inside what the client is still counting as this
-    // body — measured as a real cross-response desync.
+    // A file that shrinks mid-stream: headers declared N bytes, the body stops early, and Node
+    // calls the response complete. Back in the keep-alive pool, the next response lands inside
+    // what the client still counts as this body (a measured cross-response desync).
     server.on("request", (_request, response) => {
       response.writeHead(200, { "Content-Length": "100", "Content-Type": "text/plain" });
       response.end("short");

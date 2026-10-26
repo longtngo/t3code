@@ -174,12 +174,9 @@ function ContextBlock(props: {
             </span>
           </div>
           {/*
-            `relative` is load-bearing, and its absence is silent: an absolutely
-            positioned marker resolves against the nearest POSITIONED ancestor,
-            so without it the marker would lay itself out against the popover.
-            The overhang is inside the track's height rather than the pace
-            marker's `-top-/-bottom-[3px]` because TRACK_CLASS is
-            `overflow-hidden`, which would clip anything taller.
+            `relative` anchors the absolute marker; without it the marker lays out
+            against the popover. The overhang stays inside the track's height
+            because TRACK_CLASS is `overflow-hidden` and would clip anything taller.
           */}
           <div className={cn("relative mt-2.5 h-1.5 w-full", TRACK_CLASS)}>
             <div
@@ -206,11 +203,9 @@ function ContextBlock(props: {
         </div>
       )}
       {/*
-        `compactsAutomatically` is the provider's auto-compaction SETTING, which
-        is on by default even where the trigger is disabled - so on its own it
-        makes this sentence false. Claude Code reports `autoCompactSource:
-        "auto"` for exactly the windows it refuses to compact. Providers that
-        send no source keep the old behaviour.
+        `compactsAutomatically` is a SETTING, on even where the trigger is disabled.
+        Claude Code reports `autoCompactSource: "auto"` for exactly the windows it
+        refuses to compact; providers that send no source keep the old behaviour.
       */}
       {usage.compactsAutomatically && usage.autoCompactSource !== "auto" ? (
         <div className="mt-2 text-pretty text-2xs font-medium text-muted-foreground/70">
@@ -275,17 +270,9 @@ export function WindowRow(props: {
         ) : null}
       </div>
       {/*
-        Flex, not a bare block: the reset text is pushed to the opposite edge, and
-        `justify-between` is what actually does that — the same utility on a
-        non-flex container is silently inert.
-
-        `whitespace-nowrap` per half with no fixed column widths is the lesson of
-        the predecessor panel, whose fixed widths broke words mid-string. But the
-        two halves do not always fit one line: the worst case (7-day, a dated
-        reset, 12-hour clock — "30% used · pace 37%" + "resets 8/21 12:20 PM") is
-        ~265px against ~256px usable inside this w-72 popover. `flex-wrap` lets
-        that rare case fall to a second line, still right-aligned, instead of
-        overflowing the panel. Each half stays intact either way.
+        Flex so `justify-between` pushes the reset text to the far edge. Halves are
+        `whitespace-nowrap` with no fixed widths (fixed widths broke words); the worst
+        case (~265px vs ~256px usable) wraps to a second line via `flex-wrap`.
       */}
       <div className="flex flex-wrap items-baseline justify-between gap-x-2 font-mono text-2xs text-muted-foreground/70">
         <span className="whitespace-nowrap">
@@ -320,14 +307,9 @@ function LimitsBlock(props: {
       <div className="flex items-baseline justify-between gap-2">
         <span className={CAP_CLASS}>Usage limits</span>
         {/*
-          The `pace` legend that sat here is gone. Every row's footer already
-          reads "· pace 49%", so it labelled something self-labelling — and on a
-          window with no projection (one whose provider sends no window length)
-          it labelled nothing at all. Its space buys the refresh control a text
-          label, which is what makes the control findable: as a bare 12px icon
-          at 60% opacity beside a word, it read as decoration.
-
-          The age is the reason to press it, so it IS the label.
+          No `pace` legend: every row's footer already labels its pace. The space
+          gives the refresh control a text label (a bare icon read as decoration),
+          and the age is the reason to press it, so it IS the label.
         */}
         {refresh ? (
           <Tooltip>
@@ -504,17 +486,9 @@ function MachineBlock(props: {
 }
 
 /**
- * The detail the three summary bars leave out — per-core load, load average,
- * GPU name and VRAM, and memory in bytes.
- *
- * Collapsed by default: the three bars answer "is the machine busy", which is
- * what the gauge is for, and this answers "busy with what", which is a question
- * you ask second. Every value here already arrives on each sample, so opening
- * it costs no extra traffic.
- *
- * The per-core display is a bar per core, not a sparkline: a sample carries
- * instantaneous per-core utilization and no history, and drawing a line through
- * points we never kept would invent a trend.
+ * Per-core load, load average, GPU and memory detail, collapsed by default. Every value
+ * already arrives on each sample, so opening it costs no traffic. Bars, not a sparkline:
+ * a sample has no per-core history, so a line would invent a trend.
  */
 function MachineDetails(props: { sample: HostMetricsSample }) {
   const [open, setOpen] = useState(false);
@@ -550,8 +524,7 @@ export function MachineDetailList(props: { sample: HostMetricsSample }) {
           <dd className="mt-0.5 flex items-end gap-px" aria-label="Per-core utilization">
             {sample.cpu.perCore.map((corePct, index) => (
               <Tooltip
-                // Cores have no identity beyond their position, and the
-                // list is fixed for the life of the host.
+                // oxlint-disable-next-line react/no-array-index-key -- Cores have no identity beyond their position, and the list is fixed for the life of the host.
                 key={index}
               >
                 <TooltipTrigger
@@ -744,11 +717,9 @@ export function VitalsGauge(props: {
           <button
             type="button"
             className={cn(
-              // size-8 matches the composer's send button, so the two controls
-              // in the footer share one hit-target size. The glyph fills it:
-              // no inner wrapper and no transparent border, both of which used
-              // to inset it, because the arcs are the only thing here worth
-              // reading at a glance.
+              // size-8 matches the composer's send button so footer controls share one
+              // hit-target size. No inner wrapper or border: the glyph fills it, because
+              // the arcs are the only thing here worth reading at a glance.
               "inline-flex size-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground outline-none transition-colors",
               "hover:bg-accent data-[pressed]:bg-accent",
               "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
@@ -785,13 +756,8 @@ export function VitalsGauge(props: {
 }
 
 /**
- * Ticking wall-clock (ms) so pace projections advance.
- *
- * Runs for as long as the gauge is mounted, not just while the detail popover is
- * open: the glyph colours its two window arcs by pace, so a frozen clock leaves
- * it showing a severity the panel no longer agrees with. It previously took an
- * `active` flag whose only caller passed a literal `true`, which made the early
- * return unreachable and the docstring describe the opposite of the behaviour.
+ * Ticking wall-clock (ms) so pace projections advance. Runs while the gauge is mounted,
+ * not only while the popover is open: the glyph colours its arcs by pace too.
  */
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());

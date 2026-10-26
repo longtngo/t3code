@@ -1155,12 +1155,10 @@ describe("custom destinations, the empty-shelf hint, and a still preview over a 
       item.marker === "settled-header");
   const PLACEHOLDER = sidebarMarkerId("snoozed-placeholder");
   const isPlaceholder = (item: SidebarListItem) => sidebarListItemId(item) === PLACEHOLDER;
-  /** Geometry as the DOM lays it out: gap-px, -mb-px on zero-height markers, the free space above
-      the first shelf, and the placeholder measured as its 36px hint box above its li.
-      - `queueBefore`: the Queue's 32px header renders in the flow before that item (the list
-        length: after every row). With `queueShares` it carries its own auto margin (`collapse`)
-        and takes half the free space above it.
-      - `hintAtEnd`: the placeholder's box renders out of flow below the last row. */
+  /** Geometry as the DOM lays it out (gap-px, -mb-px markers, free space above the first shelf, the
+      36px placeholder hint above its li). `queueBefore`: the Queue's 32px header precedes that item
+      (with `queueShares`, it takes half the free space above it). `hintAtEnd`: the placeholder box
+      renders out of flow below the last row. */
   function layoutOf(
     items: readonly SidebarListItem[],
     bottom: number,

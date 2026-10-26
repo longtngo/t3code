@@ -2,16 +2,9 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 /**
- * Drops the two secondary indexes on `orchestration_command_receipts`.
- *
- * The table is reached by exactly two statements - an upsert keyed on the
- * `command_id` primary key, and a lookup by that same primary key (see
- * `Layers/OrchestrationCommandReceipts.ts`). Nothing has ever queried by
- * aggregate or by result sequence, so both indexes only ever cost: on a real
- * database they held 142 MB, and every insert paid three B-tree writes instead
- * of one at 40-100k inserts a day.
- *
- * They are cheap to bring back if a query ever needs them.
+ * Drops the two secondary indexes on `orchestration_command_receipts`. Every query uses the
+ * `command_id` primary key, so they only cost: 142 MB on a real database and three B-tree
+ * writes per insert instead of one. Cheap to bring back if a query needs them.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

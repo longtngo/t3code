@@ -72,12 +72,10 @@ function normalizedPatch(patch: QueueSlotPatch, local: QueueSlotSettings): Queue
 }
 
 /**
- * Writes the changed field(s) to the device copy, then to the primary. Every server write carries
- * the whole device copy as `queueSlotsImport`, which the server applies only when it has no value,
- * so a partial patch never lands on an absent one. Resolves to the server's value after the write,
- * or null on failure (including a server that refused to rewrite a broken or externally changed
- * settings file) or with no primary. It also returns null without sending anything when the primary
- * lacks `settings:write`; the edit then stays on this device.
+ * Writes to the device copy, then the primary, always carrying the whole device copy as
+ * `queueSlotsImport` (applied only when the server has no value), so a partial patch never lands on
+ * an absent one. Resolves to the server's value, or null on failure, no primary, a refused rewrite,
+ * or a primary lacking `settings:write` (the edit then stays on this device).
  */
 export function useSetQueueSlots(): (patch: QueueSlotPatch) => Promise<QueueSlotSettings | null> {
   const primaryId = usePrimaryEnvironment()?.environmentId ?? null;
@@ -108,11 +106,9 @@ function hasLocalQueueSlots(): boolean {
 }
 
 /**
- * Sends the device copy to a primary that has no value yet. Done only once a reply carries
- * `queueSlots`: a server that refuses the write (settings file broken or changed on disk) replies
- * success without it, and the next config change retries, up to `MAX_IMPORT_ATTEMPTS` per load: a
- * server that drops the unknown field replies the same way and broadcasts every write, so an
- * unbounded retry would loop.
+ * The device-copy import is done only once a reply carries `queueSlots`. A server that refuses the
+ * write, or drops the unknown field, replies success without it and broadcasts every write, so
+ * retries are capped per load or they would loop.
  */
 const MAX_IMPORT_ATTEMPTS = 3;
 export function useImportLocalQueueSlots(): void {

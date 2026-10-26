@@ -7,22 +7,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 export const COMPOSER_CONTEXT_STRIP_ID = "composer-context-strip";
 
 /**
- * Collapses and restores the composer's workspace/branch context strip.
- *
- * Deliberately icon-only. The strip's own labels already collapse to nothing
- * once it overflows (`useLabelsOverflow` sets `data-compact`, which animates
- * every label to `max-w-0`), so a labelled trigger would read well for `main`
- * and degrade to an ellipsis for a real branch name while competing with the
- * model picker for room. The icon costs the same width at every name length.
- *
- * Icon-only is the only way it differs from its neighbours: it is built from
- * the same `ComposerControl` primitives as the model and runtime-mode pickers,
- * so height, padding, icon size, and muted tone all come from one place rather
- * than being re-specified here and drifting out of step with the row.
- *
- * The glyph is the one piece of state that survives to zero label width, so it
- * tracks the workspace rather than being decorative: a worktree run and a local
- * checkout are visibly different while the strip is closed.
+ * Collapses and restores the composer's context strip. Icon-only because the strip's labels
+ * collapse to `max-w-0` on overflow, so a label would degrade to an ellipsis; otherwise built
+ * from the same `ComposerControl` primitives as its neighbours. The glyph tracks the workspace
+ * (worktree vs local checkout), the only state visible while the strip is closed.
  */
 export const ComposerContextStripToggle = memo(function ComposerContextStripToggle({
   collapsed,

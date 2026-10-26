@@ -73,6 +73,20 @@ guard banner, the strip toggle and the task/background panels stay in `ChatView`
 pinned Node to exactly 26.12.1 (invariant 46) and made two lint rules errors that fork code broke:
 `no-em-dash-copy` (fork copy reworded) and `no-polling-loop-in-tests` (invariant 72).
 
+The 53rd reconcile (2026-10-26, 384 commits) brought upstream's comment prune (#21514: a comment
+block over four lines, or a bare `#123` reference, fails `t3code/no-low-value-comments`), new
+Effect language-service diagnostics that typecheck as errors (`preferSucceedSomeOrNone`,
+`effectFnOpportunity`, `preferTypedSchemaDecoder`, ...), a per-file React effect ledger
+(invariant 73), and settings as a modal over the thread (`routes/_chat.settings.*`, closed by
+`AppRouteModal`). The fork's three settings routes moved under `_chat`, and its "Escape inside a
+field keeps settings open" guard now lives in `AppRouteModal`'s `onOpenChange`. Source control
+moved again: forge definitions are `shared/definition.ts` (not `client/`), GitHub media is fetched in
+`packages/source-control-github/src/server/gitHubMediaFetch.ts`, and the per-folder account still
+flows through as `cwd` on `SourceControlMediaRequest` and in the search-coverage key of
+`GitHubPullRequestProvider`. `packages/source-control-github` re-exports five server modules the
+fork's tests import (`GitHubCredentials`, `GitHubRest`, `GitHubPullRequestApi`,
+`GitHubPullRequestProvider`, `GitHubQuota`); upstream narrowed its exports to two.
+
 The 50th reconcile (2026-10-19, 861 commits) brought three cross-cutting upstream changes. A
 comment prune (#19559) touched 3,139 files. Web React tests moved to a real-browser `browser`
 project (`*.browser.test.tsx`, no jsdom or react-test-renderer), beside the fork's `dom` project
@@ -136,14 +150,15 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 77 entries, ids 1-77, unique and monotonic. Upstream's v2 schema
+Current: 78 entries, ids 1-78, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
 `061_PullRequestReviewGuides` is **70**, `062_ThreadFailureLookupIndex` is **71**,
 `063_DropUnusedV1Projections` is **72**, `064_CanonicalizeThreadPullRequestLinks` is **73**,
 `065_CodexUsageNativeTurnIndex` is **74**, `066_RepairClientSettlementTimestamps` is **75** and
-`067_WebhookDedupe` is **76** and `068_ShellStopRequestIndex` is **77**.
+`067_WebhookDedupe` is **76**, `068_ShellStopRequestIndex` is **77** and
+`069_ThreadMessageSearch` is **78**.
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
 upstream's `reconcileV2PreviewMigration` stays out.
@@ -162,7 +177,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `77 77 ok` and `1`.
+Expect `78 78 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -325,6 +340,12 @@ The fork's FIFO queue replaced upstream's steer-on-send. v2 queues server-side i
 choice; its client setting `followUpBehavior` defaults to `"queue"`. Upstream's model is adopted
 whole, including that setting and its keybindings (invariants 50 and 52 are retired with this).
 
+**Except the default (53rd reconcile).** Upstream #24718 flipped `followUpBehavior`'s default to
+`"steer"`. The fork keeps `"queue"` in `packages/contracts/src/settings.ts` and
+`apps/mobile/src/lib/followUpBehavior.ts` (both carry a `FORK-ONLY` comment): a mid-turn send has
+queued here since before v2, and a reconcile that takes upstream's one-line change silently makes
+every unset install steer instead. Steer stays one setting away.
+
 ### 5b. The fork's footer panels live inside upstream's `SidebarUtilityMenu`
 
 Upstream `#7153` extracted the sidebar footer into `SidebarUtilityMenu` and reused it from
@@ -334,9 +355,9 @@ open state and the `relative` row wrapper the status panels anchor to. `SidebarC
 only `SidebarProviderUpdatePill` and `SidebarUpdateArchitectureWarning`. Keeping the three out of
 the menu would have hidden them on the settings page, which is the one surface upstream added.
 
-`SettingsSidebarNav.tsx`'s row is `items-end`, not upstream's `items-center`: these panels open
-upward and anchor on the row's bottom edge. Upstream #9563 wrapped `T3ConnectSidebarSignIn` in a
-`Suspense` beside it — that is kept, the alignment is not.
+Since the 53rd reconcile settings is a modal over the thread (upstream #24847), so the settings nav
+no longer renders the utility menu and the panels show only in the thread sidebar's footer. The
+old `items-end` row in `SettingsSidebarNav.tsx` went with it.
 
 `sidebarChromeFooter.dom.test.tsx` covers this, and it mocks `@tanstack/react-router` — so a new
 router hook in the utility menu breaks it with "No X export is defined on the mock" rather than
@@ -1475,11 +1496,21 @@ key; dropping it turns the offer back on for a user who had switched it off. Pro
 
 ### 72. Fork tests that poll sit on a burn-down list, like upstream's
 
-Upstream #23983 made `t3code/no-polling-loop-in-tests` an error and kept a "do not add" list of its
-own files still at `warn`. Four fork test files poll (`ClaudeAdapterV2.test.ts` Stop-ladder helper,
+Upstream #23983 made `t3code/no-polling-loop-in-tests` an error; upstream has since converted and
+deleted its own list. Four fork test files poll (`ClaudeAdapterV2.test.ts` Stop-ladder helper,
 `ClaudeAdapterV2Fork.test.ts`, `ThreadLaunchService.test.ts` `waitUntil`, `GitVcsDriver.test.ts`
 waiting on a real git's `index.lock`). They are in a separate FORK block beside upstream's list in
 the root `vite.config.ts`. Convert a file, then delete its entry; never add one.
+
+### 73. Fork files with React effects sit in upstream's effect ledger
+
+Upstream's `t3code/react-effect-budget` reads `scripts/effect-budget.json`: each web/mobile file may
+hold that many `useEffect`/`useLayoutEffect` calls, and a file with no entry gets 0. Upstream bumps
+the ledger itself when its own effects land. The 53rd reconcile added the fork's files (queue,
+outbox, notifications, Vitals, subagent backend, resource queue, ...) at their counts and raised
+`ChatView.tsx` (23 -> 26) and mobile `ThreadRouteScreen.tsx` (3 -> 5) by the fork's effects. The JSON
+cannot carry comments, so this entry is the record. Lower a count when a fork effect goes; a
+reconcile that takes upstream's ledger whole turns every fork entry into a lint error.
 
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 

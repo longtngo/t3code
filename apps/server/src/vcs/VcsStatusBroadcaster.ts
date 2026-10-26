@@ -166,14 +166,9 @@ export const layerAutomaticFetchInterval = Layer.effect(
 export class VcsAutoPullPolicy extends Context.Reference<{
   readonly isEnabled: (cwd: string) => Effect.Effect<boolean, never>;
   /**
-   * Whether nothing is working in any of these checkouts right now.
-   *
-   * A pull moves HEAD under whatever is running there, so a checkout with an
-   * active thread is skipped and the next poll asks again. Takes every name the
-   * caller has for the checkout at once - the broadcaster works in realpath
-   * space while project rows record the path the user gave - and reads the
-   * projection once for all of them. Fails safe: an unreadable projection
-   * reads as busy.
+   * Whether nothing is working in any of these checkouts, since a pull moves HEAD under a running
+   * thread. Takes every name for the checkout (realpath and the user's path) and reads the
+   * projection once. Fails safe: an unreadable projection reads as busy.
    */
   readonly isIdle: (cwds: ReadonlyArray<string>) => Effect.Effect<boolean, never>;
 }>("t3/vcs/VcsAutoPullPolicy", {
@@ -267,7 +262,10 @@ export class VcsStatusBroadcaster extends Context.Service<
     readonly refreshLocalStatus: (
       cwd: string,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
-    readonly refreshStatus: (cwd: string) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
+    readonly refreshStatus: (
+      cwd: string,
+      options?: { readonly localOnly?: boolean },
+    ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
     readonly refreshPullRequestStatus: (
       cwd: string,
     ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;
@@ -287,7 +285,7 @@ const normalizeCwd = (cwd: string) =>
     Effect.orElseSucceed(() => cwd),
   );
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const automaticFetchInterval = yield* VcsAutomaticFetchInterval;
   const autoPullPolicy = yield* VcsAutoPullPolicy;
@@ -303,7 +301,7 @@ export const make = Effect.gen(function* () {
   );
   const cacheRef = yield* Ref.make(new Map<string, CachedVcsStatus>());
   // One permit per cwd for remote reads that write the cache. Without it a
-  // periodic poll that started before `gh pr create` can finish after the
+  // periodic poll that started before an agent creates a PR can finish after the
   // turn-end refresh and overwrite the fresh PR with its stale `pr: null`.
   const remoteWriteLocks = yield* KeyedLock.make<string>();
   const withRemoteWriteLock = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
@@ -503,11 +501,9 @@ export const make = Effect.gen(function* () {
       const local = yield* workflow.localStatus({ cwd });
       if (!local.isRepo || !local.isDefaultRef || local.hasWorkingTreeChanges) return null;
 
-      // Last, because it reads the whole shell projection and a pull is rarely
-      // imminent: only enabled, behind, and clean reaches here. A clean tree
-      // says nobody has written yet, not that nobody is working - an agent
-      // mid-run, or a background task in its checkout, is exactly what a
-      // moving HEAD would confuse.
+      // Last, because it reads the whole shell projection. A clean tree says nobody has written
+      // yet, not that nobody is working: an agent mid-run or a background task would be confused by
+      // a moving HEAD.
       if (!(yield* autoPullPolicy.isIdle([...new Set([cwd, ...policyCwds])]))) {
         yield* Effect.logDebug("Skipped automatic project pull", { cwd, reason: "checkout-busy" });
         return null;
@@ -530,8 +526,7 @@ export const make = Effect.gen(function* () {
             errorTag: error._tag,
           });
           if (!pullAttempted) return null;
-          // A pull or its follow-up reads can fail after local state has changed.
-          // Let a failed reconciliation reach the caller instead of publishing old status.
+          // Pull can change local state before failing; propagate reconciliation failures instead of publishing stale status.
           yield* workflow.invalidateLocalStatus(cwd);
           const local = yield* workflow.localStatus({ cwd });
           yield* updateCachedStatus(cwd, local, remote, { publish: true });
@@ -577,10 +572,25 @@ export const make = Effect.gen(function* () {
 
   const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = Effect.fn(
     "VcsStatusBroadcaster.refreshStatus",
-  )(function* (rawCwd) {
+  )(function* (rawCwd, options) {
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
-    // invalidateStatus (not the two partial invalidations) so an explicit
-    // refresh also bypasses GitManager's slow PR-lookup cache.
+    if (options?.localOnly) {
+      return yield* withRemoteWriteLock(
+        cwd,
+        Effect.gen(function* () {
+          yield* workflow.invalidateLocalStatus(cwd);
+          const local = yield* workflow.localStatus({ cwd });
+          const previous = yield* getCachedStatus(cwd);
+          if (previous?.local?.value.refName !== local.refName) {
+            yield* workflow.invalidateRemoteStatus(cwd);
+            return yield* updateCachedStatus(cwd, local, null, { publish: true });
+          }
+          yield* updateCachedLocalStatus(cwd, local, { publish: true });
+          return mergeGitStatusParts(local, previous?.remote?.value ?? null);
+        }),
+      );
+    }
+    // Full invalidation also bypasses GitManager's slow PR cache.
     return yield* withRemoteWriteLock(
       cwd,
       Effect.gen(function* () {
@@ -614,8 +624,7 @@ export const make = Effect.gen(function* () {
             { concurrency: "unbounded" },
           )).some(Boolean);
           if (!shouldRefresh) return null;
-          // Resolve the checked-out branch again. A cached PR can belong to
-          // the previous branch after an agent checks out another branch.
+          // Re-resolve the branch; cached PRs may belong to a checkout's previous branch.
           const remote = yield* workflow.remoteStatus(
             { cwd },
             { refreshUpstream: false, refreshMissingPullRequest: true },

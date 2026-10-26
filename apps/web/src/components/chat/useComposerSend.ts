@@ -433,7 +433,7 @@ export function useComposerSend(input: ComposerSendInput) {
       readPendingEnvironmentChange() !== null ||
       shouldAbortSendBeforeOfflineQueue({
         hasActiveThread: true,
-        // A send during worktree setup queues behind it rather than bailing (upstream #17654).
+        // A send during worktree setup queues behind it rather than bailing.
         isSendBusy: isSendBusy && !sendQueuesBehindSetup,
         isConnecting,
         isRevertingCheckpoint,
@@ -1291,7 +1291,13 @@ export function useComposerSend(input: ComposerSendInput) {
         environmentId,
         input: {
           threadId: threadIdForSend,
-          message: { messageId: newMessageId(), role: "user", text: "/compact", attachments: [] },
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: "/compact",
+            attachments: [],
+            idleCompaction: "onReturn",
+          },
           modelSelection: ctxSelectedModelSelection,
           runtimeMode,
           interactionMode: sendInteractionMode,

@@ -26,12 +26,15 @@ const warehouse = {
 };
 const api = { id: "member-2", path: "/tmp/api", title: "api", integrationBranch: "develop" };
 
+const decodeShell = Schema.decodeEffect(OrchestrationProjectShell);
+const decodeProject = Schema.decodeEffect(Project);
+
 describe("workspace members on project contracts", () => {
   it.effect("defaults members to an empty list for shells from servers without members", () =>
     Effect.gen(function* () {
-      const shell = yield* Schema.decodeUnknownEffect(OrchestrationProjectShell)(shellFields);
+      const shell = yield* decodeShell(shellFields);
       assert.deepStrictEqual(shell.members, []);
-      const project = yield* Schema.decodeUnknownEffect(Project)({
+      const project = yield* decodeProject({
         ...shellFields,
         deletedAt: null,
       });
@@ -41,7 +44,7 @@ describe("workspace members on project contracts", () => {
 
   it.effect("keeps every member of a multi-member project in order", () =>
     Effect.gen(function* () {
-      const shell = yield* Schema.decodeUnknownEffect(OrchestrationProjectShell)({
+      const shell = yield* decodeShell({
         ...shellFields,
         members: [warehouse, api],
       });

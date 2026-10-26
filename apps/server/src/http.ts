@@ -50,7 +50,7 @@ import {
   resolveAsset,
   type ResolvedAsset,
 } from "./assets/AssetAccess.ts";
-import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
+import { sourceControlMediaResponse } from "./assets/sourceControlMediaResponse.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
   ATTACHMENT_UPLOAD_ROUTE_PREFIX,
@@ -93,15 +93,12 @@ const PUSH_SUBSCRIPTIONS_PATH = "/api/push/subscriptions";
 const PUSH_VAPID_PUBLIC_KEY_PATH = "/api/push/vapid-public-key";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
-// The sandbox gives the document an opaque origin: scripts run, but same-origin
-// cookies, storage, and API calls are out of reach. No modals: agent HTML can
-// open without a click (inline renders, and mobile loads it as the top document),
-// and must not raise blocking dialogs.
+// Opaque origin blocks cookies, storage and API access while allowing scripts.
+// Agent HTML can open without a click, so disallow blocking modals.
 const HTML_CONTENT_SECURITY_POLICY =
   "sandbox allow-scripts allow-forms allow-popups allow-downloads";
 
-// Types a browser may render as a document if a proxy strips the disposition
-// header. Downloads of these fall back to octet-stream.
+// Proxies may strip disposition; force document-capable downloads to octet-stream.
 const DOWNLOAD_MIME_TYPE_PATTERN = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
 const isSafeDownloadMimeType = (mimeType: string): boolean =>
   DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) &&
@@ -231,15 +228,13 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
   const isMedia = /^(?:audio|video)\//i.test(headers["Content-Type"] ?? "");
   if (isMedia) {
-    // Do not invite conditional range requests with validators that cannot establish
-    // byte-for-byte identity. Attachment media carries no `file`, and must not
-    // outlive the signed URL that granted it either.
+    // Without file identity, validators cannot guarantee byte equality; attachments must also expire with their URL.
     headers["Cache-Control"] = "private, no-store";
   }
   let status = 200;
   let offset = 0n;
   let bytesToRead: bigint | undefined;
-  if (isMedia) {
+  {
     headers["Accept-Ranges"] = "bytes";
     // If-Range requires a matching validator. A full response is safe when we cannot validate it.
     if (method === "GET" && rangeHeader && ifRangeHeader === undefined) {
@@ -294,8 +289,7 @@ export const layerBrowserApiCors = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const devOrigin = config.devUrl?.origin;
-    // Dev uses credentialed requests from Vite or the Electron custom origin, so both must be
-    // explicit. Packaged desktop omits credentials and uses Effect's default wildcard origin.
+    // Credentialed dev requests need explicit Vite/Electron origins; packaged desktop uses the default wildcard.
     return HttpRouter.cors({
       ...(devOrigin
         ? {
@@ -368,8 +362,7 @@ class DecodeOtlpTraceRecordsError extends Data.TaggedError("DecodeOtlpTraceRecor
   readonly cause: unknown;
 }> {}
 
-// Renderers export up to once a second while they have spans buffered, so
-// tracing this proxy would add more server spans than it forwards.
+// Tracing once-per-second renderer exports would create more spans than it forwards.
 export const layerOtlpTracesProxyRoute = HttpRouter.add(
   "POST",
   OTLP_TRACES_PROXY_PATH,
@@ -436,11 +429,9 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
  */
 const ASSET_MAX_VIDEO_RESPONSE_BYTES = 8 * 1024 * 1024;
 /**
- * Bounds the branch a range cannot bound. A rangeless GET of a video asset —
- * "open in new tab", `curl`, a malformed or multi-range header — would otherwise
- * stream a file of any size in one response. Same value and same reason as the
- * `/viewer` route's cap: the identical file must not stall on one route and 413
- * on the other.
+ * Bounds what a range cannot: a rangeless GET of a video asset ("open in new tab", `curl`, a
+ * malformed or multi-range header) would stream any size in one response. Same value as the
+ * `/viewer` cap, so one file cannot stall on one route and 413 on the other.
  */
 const ASSET_MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 /**
@@ -450,16 +441,9 @@ const ASSET_MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 const ASSET_MAX_IMAGE_BYTES = 64 * 1024 * 1024;
 
 /**
- * Byte cap for an asset served in one unbounded response, or `null` for a kind
- * that is deliberately left uncapped.
- *
- * Only the kinds `/viewer` also serves are capped, and at the same values, so the
- * same file cannot stall on one route and 413 on the other. The browser-preview
- * kinds (`.pdf`, `.htm`, `.html`) are deliberately absent: `/viewer` never served
- * them, so there is no divergence to close, and a PDF past this bound is ordinary
- * rather than suspicious — capping it would be a new refusal, not a fix. Video is
- * absent too; its cap depends on the request's Range, so it lives in
- * `assetVideoRangeResponse`.
+ * Byte cap for an asset served in one unbounded response, or `null` when deliberately uncapped.
+ * Only kinds `/viewer` also serves are capped, at its values; browser-preview kinds (a large PDF
+ * is ordinary) stay uncapped. Video's cap depends on Range: see `assetVideoRangeResponse`.
  */
 export function assetResponseByteCap(path: string): number | null {
   return isWorkspaceImagePreviewPath(path) ? ASSET_MAX_IMAGE_BYTES : null;
@@ -477,12 +461,9 @@ export type AssetVideoRangeResponse =
   | { readonly status: 413 };
 
 /**
- * How a video asset answers one request.
- *
- * Video is the only asset kind that needs Range: without it a media element
- * cannot seek — measured on the `/viewer` route, the scrubber moves, `seeked`
- * fires, and playback snaps back to zero. Pure, so the 206/416 arithmetic is
- * testable without a live server, mirroring `viewerMediaContentType`.
+ * How a video asset answers one request. Video is the only asset kind that needs Range: without
+ * it a media element cannot seek (playback snaps back to zero). Pure, so the 206/416 arithmetic
+ * is testable without a live server.
  */
 export function assetVideoRangeResponse(
   rangeHeader: string | undefined,
@@ -514,19 +495,9 @@ export function assetVideoRangeResponse(
 }
 
 /**
- * Log the refusals a byte-serving route answers with, which are otherwise
- * completely invisible.
- *
- * These routes had three log calls between them and none on the request path, so
- * a 400, 404, 413 or 416 reached the client as a notice with nothing server-side
- * to correlate it against — and the access log that would have shown it is off by
- * default, behind a flag named `logWebSocketEvents`.
- *
- * Deliberately a wrapper around the whole handler rather than a call at each of
- * the ~20 refusal sites: a new branch cannot forget it, and it costs one status
- * comparison on the success path. Deliberately refusals only, with no per-request
- * line: these routes stream media, and a line per range request would be its own
- * problem on a 561 MB file.
+ * Log the refusals a byte-serving route answers with, otherwise invisible (the access log is off
+ * by default). A wrapper around the whole handler so a new refusal branch cannot forget it;
+ * refusals only, since a line per range request would flood the log while streaming media.
  */
 export function logRouteRefusals<E, R>(
   route: string,
@@ -553,9 +524,7 @@ export function logRouteRefusals<E, R>(
 }
 const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
 
-// TracerDisabledWhen is one predicate for the whole server, and
-// HttpRouter.serve builds its routes privately, so it is provided to the served
-// layer, never merged into the routes.
+// HttpRouter.serve builds routes privately; provide the server-wide TracerDisabledWhen to the served layer.
 const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((request) => {
   const queryIndex = request.url.indexOf("?");
   const path = queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
@@ -595,10 +564,15 @@ export const layerAssetRoute = HttpRouter.add(
         headers: { "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" },
       });
     }
-    if (asset.kind === "github-media") {
-      return yield* githubMediaResponse(asset, request.headers).pipe(
+    if (asset.kind === "source-control-media") {
+      return yield* sourceControlMediaResponse(asset, request.headers).pipe(
         Effect.tapError((cause) =>
-          Effect.logWarning("Failed to fetch GitHub media.", { url: asset.url, cause }),
+          // The URL can carry a token in its query string, and the error keeps the request it
+          // failed on; the host and the failure kind are enough to diagnose.
+          Effect.logWarning("Failed to fetch source control media.", {
+            host: URL.canParse(asset.url) ? new URL(asset.url).host : undefined,
+            reason: cause.reason._tag,
+          }),
         ),
         Effect.orElseSucceed(() =>
           HttpServerResponse.empty({
@@ -644,10 +618,9 @@ export const layerAssetRoute = HttpRouter.add(
       if (Option.isNone(info) || info.value.type !== "File") {
         return HttpServerResponse.text("Not Found", { status: 404 });
       }
-      // Two guards adopted from upstream #8919, whose competing Range implementation
-      // this branch replaces: a HEAD has no body to range, and an `If-Range` we
-      // cannot validate must degrade to the full representation rather than hand
-      // back bytes from a version the client no longer holds.
+      // Two guards adopted from upstream's competing Range implementation, which this branch
+      // replaces: a HEAD has no body to range, and an `If-Range` we cannot validate must degrade
+      // to the full representation rather than hand back bytes from a stale version.
       const rangeHeader =
         request.method === "GET" && request.headers["if-range"] === undefined
           ? request.headers["range"]
@@ -677,11 +650,9 @@ export const layerAssetRoute = HttpRouter.add(
       );
     }
 
-    // Images have no Range branch, so nothing else bounds the response. The stat
-    // is the same one the `/viewer` image branch takes, and for the same two
-    // reasons: a size bound, and a regular-file check, because a DIRECTORY named
-    // `foo.png` stats fine, emits a 200 with a bogus content-length, then errors
-    // EISDIR after the headers are already flushed.
+    // Images have no Range branch, so this stat is their only bound: a size cap, and a
+    // regular-file check, because a DIRECTORY named `foo.png` stats fine, emits a 200 with a
+    // bogus content-length, then errors EISDIR after the headers are flushed.
     const byteCap = assetResponseByteCap(asset.path);
     if (byteCap !== null) {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -721,12 +692,9 @@ const TEXT_VIEWER_EXTENSIONS = new Set<string>(WORKSPACE_TEXT_VIEWER_EXTENSIONS)
 // in-app viewer uses.
 const VIEWER_CSP = "sandbox allow-scripts allow-popups";
 /**
- * Markdown is rendered from a file the user did not write by hand — a cloned repo's README,
- * an agent-written report — and the renderer passes raw HTML through on purpose. Serving
- * that with `allow-scripts` executes markup from those sources as a top-level document.
- * The in-app viewer already renders the same output under `sandbox=""` (scripts inert), so
- * withholding scripts here costs nothing that path has; `.html` keeps them, because opening
- * an interactive report is the reason that case exists.
+ * Rendered markdown passes raw HTML through from files the user did not write (a cloned README,
+ * an agent report), so it gets no `allow-scripts`; the in-app viewer renders it script-inert too.
+ * `.html` keeps scripts, because opening an interactive report is why that case exists.
  */
 const VIEWER_MARKDOWN_CSP = "sandbox allow-popups";
 
@@ -734,13 +702,9 @@ const VIEWER_MARKDOWN_CSP = "sandbox allow-popups";
 export type ViewerPathKind = "markdown" | "html" | "text" | "image" | "video" | "audio";
 
 /**
- * The pinned `Content-Type` for an audio or video path, as a spreadable object.
- *
- * Separate from the rest of the media headers because it must reach the byte
- * responses and NOT the 416/413 ones, whose bodies are text — spreading it onto
- * those labels "Requested range not satisfiable" as `video/mp4`. Empty for an
- * extension neither map carries, which leaves the platform's own `Mime` lookup in
- * place rather than asserting a type this route cannot vouch for.
+ * The pinned `Content-Type` for an audio or video path, as a spreadable object. Kept apart from
+ * the other media headers because the text 416/413 bodies must not get it. Empty for an unmapped
+ * extension, leaving the platform's `Mime` lookup rather than asserting a type.
  */
 export function viewerMediaContentType(absolutePath: string): Record<string, string> {
   const extension = absolutePath.slice(absolutePath.lastIndexOf(".")).toLowerCase();
@@ -776,11 +740,9 @@ const VIDEO_VIEWER_EXTENSIONS = new Set<string>(WORKSPACE_VIDEO_PREVIEW_EXTENSIO
  */
 const AUDIO_VIEWER_EXTENSIONS = new Set<string>(WORKSPACE_AUDIO_PREVIEW_EXTENSIONS);
 /**
- * Per-RESPONSE bound, not a transfer bound. It does not reduce bytes served; it
- * converts one stream into sequential round trips. The value matters in both
- * directions: measured on a 561 MB video over a 60 ms link, a 64 KB clamp drops
- * playback to 0.616x realtime with 37 rebuffers and an 84x slower seek, while
- * 8 MiB is indistinguishable from no clamp at all.
+ * Per-RESPONSE bound, not a transfer bound: it turns one stream into sequential round trips.
+ * Measured on a 561 MB video over a 60 ms link, 64 KB dropped playback to 0.616x realtime, while
+ * 8 MiB is indistinguishable from no clamp.
  */
 const VIEWER_MAX_VIDEO_RESPONSE_BYTES = 8 * 1024 * 1024;
 /**
@@ -797,24 +759,10 @@ const VIEWER_MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
  * extensions the allow-list admits.
  */
 /**
- * Content types for a document's own relative assets.
- *
- * `.js` and `.css` MUST get their real types here: the main `/viewer` route serves
- * every text kind as `text/plain` with `nosniff` on purpose, and a browser refuses
- * to execute a script or apply a stylesheet served that way — which is the second
- * reason a multi-file prototype rendered blank. Giving these two their real types
- * is safe in a way `text/html` would not be: neither can be rendered as a document,
- * so the "untrusted bytes must never be parsed as HTML" rule still holds.
- *
- * This list is exhaustive, and that is the security property: `classifyViewerAssetPath`
- * answers `null` for anything not here and the route 404s it. There is deliberately
- * no `text/plain` fallback — that fallback is what let a hostile document read
- * arbitrary files under its grant.
- *
- * Its media entries overlap the viewer's video list, and folding the two together
- * was considered and rejected: this is a sub-resource allow-list for a sandboxed
- * document, so every extension added here widens what such a document can reach.
- * It must be able to stay narrower than what the viewer will play.
+ * Content types for a document's own relative assets: `.js`/`.css` need real types (a browser
+ * will not run them as `text/plain` + `nosniff`) and neither renders as a document. Exhaustive on
+ * purpose: anything else 404s, with no `text/plain` fallback that would let a hostile document
+ * read files under its grant. Kept apart from the viewer's video list so it can stay narrower.
  */
 export const VIEWER_ASSET_CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -856,65 +804,10 @@ export interface DirectoryIdentity {
 }
 
 /**
- * Whether a directory may be handed out as a viewer asset grant, decided by
- * filesystem IDENTITY rather than by comparing path strings.
- *
- * A grant covers a whole subtree, so the home directory — or anything above it —
- * is far too much to give a document that runs script: the extension allow-list
- * admits every `.json` outside a dot-directory, and on macOS
- * `~/Library/Application Support` is full of credential JSON. Refusing costs
- * nothing real: a single-file report at `~/report.html` has no relative assets to
- * resolve, and a prototype in its own directory still gets a full grant.
- *
- * **This used to compare strings, and three review rounds each found another
- * spelling that defeated it** — case (`/users/me`, because macOS `realpath(3)`
- * does not canonicalize case), Unicode normalization (NFD against NFC), and
- * duplicate separators. Each fix folded one more axis and left the next one open,
- * because the premise was wrong: two paths can name one directory while sharing
- * no prefix at all. On every macOS Catalina or later,
- * `/System/Volumes/Data/Users/me` **is** `/Users/me` — same `dev:ino`, and
- * `realpath` returns it unchanged, since a firmlink is not a symlink. No amount of
- * folding reaches that, and `/System/Volumes/Data` is the real root of all user
- * data while not being the string `"/"`.
- *
- * So the question is asked of the filesystem instead, in two parts, because an
- * alias namespace defeats each one alone.
- *
- * `homeChain` is home and each of its ancestors up to the root; a grant is refused
- * when it *is* any of them. That catches the firmlinked home, whose identity is
- * home's.
- *
- * `containsHome` covers the case the chain cannot see. `/System/Volumes/Data` is a
- * directory in its own right — its inode is not `/`'s — so walking up from home by
- * name never reaches it, yet it contains all of home. The caller answers this by
- * joining the grant with home's root-relative path and asking whether that lands
- * on home's identity: `/System/Volumes/Data` + `Users/me` is home, so refuse;
- * `/tmp` + `Users/me` does not exist, so allow. No macOS path is hardcoded.
- *
- * **What this does NOT cover, stated exactly rather than generally.** The join
- * tests one candidate, so it only fires on the directory where the alias namespace
- * reproduces home's whole root-relative path immediately below it. Home sits at
- * `Volumes/Data/Users/me` under `/System`, not at `Users/me`, so `/System` and
- * `/System/Volumes` are NOT refused even though they contain home. Both are
- * `root:wheel` on the sealed read-only system volume, so a document cannot be
- * planted there without root and SIP disabled, which is why this is recorded
- * rather than chased — but the earlier claim that "any future alias mount is
- * covered" was false, and an alias whose grandparent is user-writable would be a
- * real hole.
- *
- * A directory that is merely outside home (`/tmp/build`) stays grantable, which a
- * strict descendant-of-home test would have broken.
- *
- * **Measure this under node, not bun.** `realpath` canonicalizes a firmlink on bun
- * and returns it unchanged on node; the server runs node. Re-checking with bun
- * shows the alias collapsing and makes this whole guard look unnecessary.
- *
- * `ino` is a JS number while APFS inodes are 64-bit, and the loss is real —
- * `/System/Volumes/Data` is inode 1152921500311879682 and arrives here as
- * ...700. It cannot produce a false ALLOW: both sides go through the same
- * conversion, so two equal inodes always yield two equal numbers. The only
- * reachable error is over-refusal from a collision between distinct inodes, which
- * costs a document its grant and serves it inline.
+ * Whether a directory may be a viewer asset grant, by filesystem IDENTITY: refused at home or any
+ * ancestor, or when it contains home (macOS `/System/Volumes/Data` is a firmlink no string compare
+ * sees). Measure under node, not bun, whose `realpath` collapses it. Lossy 64-bit inodes can only
+ * over-refuse. Not covered: `/System`, `/System/Volumes` (root-owned, sealed).
  */
 export function isGrantableViewerAssetDirectory(
   grant: DirectoryIdentity,
@@ -926,22 +819,10 @@ export function isGrantableViewerAssetDirectory(
 }
 
 /**
- * The whole grant decision, with the filesystem behind one injected lookup.
- *
- * This exists because the interesting part was not the comparison — it was the
- * ancestor walk, the containment probe, and which side fails open. Those lived in
- * the route, which has no test, so every bypass in this guard's history was found
- * by running it against a real machine and none by the suite. Passing `identityOf`
- * in lets a test drive the real decision over a fake tree that can express the
- * shape which broke this repeatedly: one directory reachable by two paths.
- *
- * `identityOf` returns null for a path it cannot stat, and the three lookups do
- * NOT all fail the same way — which is the thing to know before editing this.
- * A null for home or for the grant REFUSES. A null for the containment probe
- * means "this grant does not contain home", so it ALLOWS, by design: that lookup
- * asks about a path which usually does not exist. The caller must therefore
- * supply an identity for every path this asks about; a lookup it forgot to
- * precompute would read as a legitimate absence rather than as an error.
+ * The whole grant decision with the filesystem behind one injected lookup, so a test can drive a
+ * fake tree where one directory has two paths. A null identity for home or the grant REFUSES; for
+ * the containment probe it ALLOWS (that path usually does not exist), so the caller must supply an
+ * identity for every path this asks about.
  */
 export function resolveViewerAssetGrantDecision(input: {
   readonly directory: string;
@@ -974,32 +855,10 @@ export function resolveViewerAssetGrantDecision(input: {
 }
 
 /**
- * Content type for a file the sandboxed viewer document is allowed to load, or
- * null when it is not an asset kind — which the asset route answers with a 404.
- *
- * `classifyViewerPath` applies this discipline on the `/viewer` side; this is the
- * same guard for the route `/viewer` redirects INTO, which needs it more. A grant
- * covers a whole SUBTREE (`isWithinGrantedDirectory` is a prefix test), and the
- * document reading it runs script under a `sandbox`-only CSP that restricts no
- * fetch destination — so it has both a read capability and a channel to send what
- * it reads anywhere.
- *
- * Only the portion BELOW the grant is filtered for dot segments, so a prototype
- * that itself lives under `~/.local/share` still loads its own assets while
- * nothing can descend into a `.ssh` or `.aws` sibling.
- *
- * This NARROWS that capability; it does not remove it. Everything the allow-list
- * admits is still readable anywhere under the grant — notably every `.json`
- * outside a dot-directory, and on macOS `~/Library/Application Support` is full of
- * credential JSON. Two things bound the damage: `isGrantableViewerAssetDirectory`
- * refuses to mint a grant at or above the home directory, and a prototype's own
- * directory is a much smaller blast radius. Closing it properly means giving
- * `VIEWER_CSP` a real `default-src`/`connect-src` so the exfiltration channel does
- * not exist, which needs verifying in a browser against an opaque origin.
- *
- * Callers MUST pass the realpath-resolved path, since that is what gets served,
- * and MUST have checked `isWithinGrantedDirectory` first — the relative portion is
- * computed by slicing, which assumes containment.
+ * Content type for a file the sandboxed viewer document may load, else null (404). Only the part
+ * BELOW the grant is checked for dot segments, so `.ssh` siblings stay out. This narrows, not
+ * removes, the read capability (a real `connect-src` would close it). Callers MUST pass the
+ * realpath and have checked `isWithinGrantedDirectory`, since the relative part is sliced.
  */
 export function classifyViewerAssetPath(
   directory: string,
@@ -1054,15 +913,9 @@ export function classifyViewerPath(
 }
 
 /**
- * Serve a file as a real, refreshable URL so the viewer's "Open in new tab"
- * reloads from disk instead of showing a frozen snapshot. Markdown is rendered to
- * HTML; `.html` is served as-is; everything else is served as text/plain.
- *
- * `readTrustedFile` applies no path sandbox, so the `orchestration:read` scope below is
- * the only boundary — every path this route serves is an arbitrary absolute path, and
- * every request must present the scope. There is deliberately no local-process waiver:
- * a request's locality cannot be established from what it carries, because a co-located
- * proxy is indistinguishable from a local process at every signal the server can read.
+ * Serve a file as a real, refreshable URL so "Open in new tab" reloads from disk. `readTrustedFile`
+ * has no path sandbox, so the `orchestration:read` scope is the only boundary, with no
+ * local-process waiver: a co-located proxy is indistinguishable from a local process.
  */
 export const viewerRouteLayer = HttpRouter.add(
   "GET",
@@ -1083,25 +936,9 @@ export const viewerRouteLayer = HttpRouter.add(
     }
     const { absolutePath, kind } = target;
 
-    // Unconditional, because `readTrustedFile` applies no path sandbox: every byte
-    // this route can serve is an arbitrary absolute path.
-    //
-    // This used to waive auth when the request looked like it came from a process on
-    // this machine. It cannot: a co-located reverse proxy has the same loopback peer
-    // as a local process, and nginx's default `Host: $proxy_host` rewrites the one
-    // header that distinguished them. Measured against real proxies, seven of eight
-    // configurations — including a bare `proxy_pass` with no `proxy_set_header` at
-    // all — handed a remote, unauthenticated visitor the contents of any readable
-    // text file. An L4/TCP forward (`stream`, HAProxy `mode tcp`, `socat`,
-    // `ssh -L`) is worse still: the client supplies `Host` itself and no operator
-    // configuration can intervene.
-    //
-    // Nothing shipped lost anything. "Open in new tab" opens this app's own origin
-    // (`ChatMarkdown.tsx`), so it is a same-origin top-level navigation and carries
-    // the `SameSite=Lax` session cookie; the `<img>`/`<iframe>` byte source is a
-    // different URL built against the environment's base (`viewerPath.ts`), and was
-    // never waived anyway. The waiver's stated beneficiary was a local `curl`, whose
-    // own justification was that it can already read the file directly.
+    // Unconditional: `readTrustedFile` applies no path sandbox. A loopback waiver was removed
+    // because a co-located reverse proxy (or an L4 forward) looks local and handed remote visitors
+    // any readable file; "Open in new tab" is same-origin and carries the session cookie anyway.
     yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
 
     // `nosniff` makes the text/plain guarantee robust: a code file whose bytes
@@ -1113,12 +950,9 @@ export const viewerRouteLayer = HttpRouter.add(
       "X-Content-Type-Options": "nosniff",
     };
 
-    // Images bypass the text reader entirely and stream from disk, so the NUL-byte
-    // guard that rejects them as "binary" is never consulted. `HttpServerResponse.file`
-    // does NOT re-apply the reader's guards, so the two that matter are re-added here:
-    // a regular-file check (a DIRECTORY named `foo.png` otherwise stats fine, emits a
-    // 200 with a bogus content-length, then errors EISDIR after the headers are
-    // already flushed) and a size bound.
+    // Images bypass the text reader, and `HttpServerResponse.file` re-applies none of its guards,
+    // so two are re-added: a regular-file check (a DIRECTORY named `foo.png` errors EISDIR after
+    // the headers flush) and a size bound.
     if (kind === "image") {
       const fileSystem = yield* FileSystem.FileSystem;
       const info = yield* fileSystem.stat(absolutePath).pipe(Effect.option);
@@ -1133,11 +967,8 @@ export const viewerRouteLayer = HttpRouter.add(
         status: 200,
         headers: {
           ...headers,
-          // `assetResponseHeaders` supplies the strict `default-src 'none'; …; sandbox`
-          // policy for SVG, which the asset route already serves images under. It
-          // matters only for a top-level navigation to an .svg (same-origin with the
-          // app, so unsandboxed it would be XSS against the app); an <img> embed never
-          // runs script regardless.
+          // The strict SVG policy matters for a top-level navigation to an .svg, which is
+          // same-origin with the app; an <img> embed never runs script.
           ...assetResponseHeaders(absolutePath),
           "Cache-Control": "no-store",
           ...(IMAGE_CONTENT_TYPES[extension]
@@ -1152,11 +983,8 @@ export const viewerRouteLayer = HttpRouter.add(
       );
     }
 
-    // Video carries the image branch's two re-added guards (regular file, size
-    // bound) and adds Range, without which a media element cannot seek. Everything
-    // here is after the auth call above on purpose: a `stat` ahead of it would turn
-    // 404-vs-416 into an existence oracle and `Content-Range: bytes */N` into a
-    // size oracle for a caller with no credentials.
+    // Video adds Range to the image branch's guards, so a media element can seek. All of this
+    // runs after auth on purpose: a stat ahead of it would be an existence and size oracle.
     if (kind === "video" || kind === "audio") {
       const fileSystem = yield* FileSystem.FileSystem;
       const info = yield* fileSystem.stat(absolutePath).pipe(Effect.option);
@@ -1182,8 +1010,11 @@ export const viewerRouteLayer = HttpRouter.add(
       if (range === undefined && size > VIEWER_MAX_VIDEO_BYTES) {
         return HttpServerResponse.text("Video too large to preview", { status: 413 });
       }
-      return yield* HttpServerResponse.file(absolutePath, {
-        ...(range === undefined
+      // Same funnel as the image branch: a file that vanished between stat and
+      // open fails with a PlatformError this route has no other handler for.
+      return yield* HttpServerResponse.file(
+        absolutePath,
+        range === undefined
           ? { status: 200, headers: videoHeaders }
           : {
               status: 206,
@@ -1193,10 +1024,8 @@ export const viewerRouteLayer = HttpRouter.add(
                 ...videoHeaders,
                 "Content-Range": `bytes ${range.start}-${range.end}/${size}`,
               },
-            }),
-        // Same funnel as the image branch: a file that vanished between stat and
-        // open fails with a PlatformError this route has no other handler for.
-      }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("Not Found", { status: 404 })));
+            },
+      ).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("Not Found", { status: 404 })));
     }
 
     const workspaceFileSystem = yield* WorkspaceFileSystem;
@@ -1223,29 +1052,17 @@ export const viewerRouteLayer = HttpRouter.add(
     }
 
     if (kind === "html") {
-      // Redirect the document to a token-scoped URL so its RELATIVE assets work.
-      // The sandbox CSP below gives it an opaque origin, whose subresource requests
-      // carry no session cookie — see viewerAssetTokens for the full mechanism.
-      // Minting here rather than in the client keeps the whole fix server-side: the
-      // document's own navigation is still cookie-authenticated (it inherits the
-      // top-level site), so by the time we get here the caller is already allowed
-      // to read this file.
-      // Realpath-resolved, because the asset route's containment check compares
-      // against a realpath too — comparing unresolved paths would let a symlink
-      // inside the directory point anywhere on disk.
+      // Redirect to a token-scoped URL so RELATIVE assets work from the sandbox's opaque origin,
+      // which sends no cookie (see viewerAssetTokens). The directory is realpath-resolved, as the
+      // asset route's containment check is, so a symlink inside cannot point anywhere on disk.
       const documentFileSystem = yield* FileSystem.FileSystem;
       const documentPath = yield* Path.Path;
       const parentDirectory = documentPath.dirname(absolutePath);
       const directory = yield* documentFileSystem
         .realPath(parentDirectory)
         .pipe(Effect.orElseSucceed(() => parentDirectory));
-      // Home and every ancestor up to the root, by filesystem identity. Comparing
-      // path strings cannot work here: `/System/Volumes/Data/Users/me` IS
-      // `/Users/me` on macOS, sharing no prefix and surviving `realPath` unchanged,
-      // because a firmlink is not a symlink.
-      // Stat every path once, up front: the walk and the containment probe are
-      // synchronous once identities are in hand, which is what lets the decision
-      // live in a testable pure function instead of in this handler.
+      // Every path the decision asks about is stat'ed once up front by identity (a firmlinked
+      // home shares no prefix with `/Users/me`), so the decision itself stays a pure function.
       const identityOf = (path: string) =>
         documentFileSystem.stat(path).pipe(
           Effect.map((info) =>
@@ -1267,12 +1084,8 @@ export const viewerRouteLayer = HttpRouter.add(
       for (const probePath of probePaths) {
         identities.set(probePath, yield* identityOf(probePath));
       }
-      // `probePaths` is a second, independently maintained copy of the set of
-      // paths the decision asks about. It is correct today, but a lookup added
-      // there without being added here would return `undefined`, and for the
-      // containment probe an absent identity ALLOWS. Distinguishing "not probed"
-      // from "probed and unreadable" turns that future divergence from a silent
-      // fail-open into a refusal.
+      // `probePaths` duplicates the decision's lookups, and an unprobed containment path would
+      // ALLOW; telling "not probed" from "unreadable" makes that divergence a refusal.
       let missedProbe: string | null = null;
       const grantable = resolveViewerAssetGrantDecision({
         directory,
@@ -1292,11 +1105,8 @@ export const viewerRouteLayer = HttpRouter.add(
           path: missedProbe,
         });
       }
-      // Too broad to grant: serve the document inline instead, so it still renders
-      // but gets no capability over the tree it happens to sit in. Streamed rather
-      // than echoing `file.value.contents`, which `readTrustedFile` caps at 1MiB —
-      // a self-contained report is exactly the shape that exceeds that, and it
-      // would have been cut mid-tag with no error.
+      // Too broad to grant: serve inline, with no capability over its tree. Streamed, because
+      // `readTrustedFile` caps contents at 1MiB and would cut a self-contained report mid-tag.
       if (!grantable || missedProbe !== null) {
         return yield* HttpServerResponse.file(absolutePath, {
           status: 200,
@@ -1345,16 +1155,9 @@ export const viewerRouteLayer = HttpRouter.add(
 );
 
 /**
- * Serve a sandboxed viewer document and the assets it references, authorized by a
- * path-embedded capability token rather than the session cookie the document's
- * opaque origin cannot send.
- *
- * The token is the ONLY credential here — there is deliberately no auth waiver and
- * no cookie check, because neither can work from an opaque origin. What bounds it:
- * a token authorizes one realpath-resolved directory subtree, expires in minutes,
- * and is minted only for a caller who was already allowed to read the document.
- * Files are served with `nosniff` and, apart from the document itself, never as
- * `text/html`, so nothing under the token can be turned into a second document.
+ * Serve a sandboxed viewer document and its assets, authorized only by a path-embedded token (an
+ * opaque origin sends no cookie). A token covers one realpath subtree, expires in minutes, and is
+ * minted only for a caller already allowed to read the document; assets never serve as HTML.
  */
 export const viewerAssetRouteLayer = HttpRouter.add(
   "GET",
@@ -1699,8 +1502,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
     const etag = headers.ETag;
     const lastModified = headers["Last-Modified"];
 
-    // If-None-Match takes precedence over dates and uses weak comparison for
-    // GET/HEAD, including when compression changes the transferred bytes.
+    // If-None-Match precedes dates and uses weak GET/HEAD comparison even across compression.
     const ifNoneMatch = request.headers["if-none-match"];
     const ifModifiedSince = request.headers["if-modified-since"];
     const unchanged =

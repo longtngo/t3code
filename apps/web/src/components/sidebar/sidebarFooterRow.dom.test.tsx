@@ -2,17 +2,9 @@ import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 /**
- * Both fork-only footer panels now render as controls INSIDE the sidebar's
- * bottom row, beside Settings / Pull Requests / Usage. Two structural
- * properties make that work, and neither is visible to a typecheck:
- *
- *  1. each is an `<li>`, because the row is a `<ul>` — a `<div>` there is
- *     invalid markup that React only warns about at runtime;
- *  2. each opts out of `SidebarMenuItem`'s baked-in `relative` with `static`,
- *     so its popover anchors to the footer row and is footer-width. Lose that
- *     and the panel silently shrinks to the width of its ~40px trigger.
- *
- * Both would render "fine" if broken, which is why they are pinned here.
+ * Both fork-only footer panels render inside the bottom row and depend on two properties no
+ * typecheck sees: each is an `<li>` (the row is a `<ul>`), and each uses `static` to opt out of
+ * `SidebarMenuItem`'s `relative`, or its popover shrinks to its ~40px trigger.
  */
 
 const queueState = vi.hoisted(() => ({
@@ -182,11 +174,8 @@ describe("Resource Queue in the footer row", () => {
 });
 
 describe("both footer panels are disclosures, not dialogs", () => {
-  // Each opens on hover or click and closes on a mouse-leave timer. `dialog`
-  // promises a screen reader a focus move, a focus trap and a restore on close,
-  // none of which a panel that vanishes when the pointer drifts can honour —
-  // and the honest reading of "it has no focus management" is that the role is
-  // wrong, not that a trap is missing.
+  // Each opens on hover or click and closes on a mouse-leave timer, so `dialog` would promise a
+  // focus move, trap and restore that a panel vanishing on pointer drift cannot honour.
   const open = { isOpen: true, onOpenChange: () => {} };
 
   it("does not claim a dialog role it cannot honour", async () => {

@@ -3,13 +3,9 @@ import * as NodeFS from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
 /**
- * A standing guard for the repo's "no continuously repainting animations" rule.
- *
- * Animating `transform` or `opacity` stays on the compositor and is fine forever.
- * Animating `background-position`, `filter`, `box-shadow` and friends repaints
- * every frame, and an `infinite` one never stops - on a 120Hz display that is a
- * permanent GPU cost for as long as the element is mounted. Those must at least
- * stand still under `prefers-reduced-motion: reduce`.
+ * Guards the "no continuously repainting animations" rule. `transform`/`opacity` stay on the
+ * compositor; `background-position`, `filter`, `box-shadow` and friends repaint every frame, so
+ * an `infinite` one must at least stand still under `prefers-reduced-motion: reduce`.
  */
 const CSS = NodeFS.readFileSync(new URL("./index.css", import.meta.url), "utf8");
 

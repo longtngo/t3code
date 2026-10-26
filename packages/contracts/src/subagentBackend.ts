@@ -1,13 +1,7 @@
 /**
- * Contracts for the subagent dispatch toggle.
- *
- * The state lives in a JSON file outside T3 home that a shell wrapper reads at
- * dispatch time; these types are the wire shape of that state, not the file
- * format itself. `backend` is a plain string rather than a literal union so a
- * file written by a newer build degrades to "default" instead of failing the
- * whole decode.
- *
- * @module subagentBackend
+ * Wire shape of the subagent dispatch toggle, whose state is a JSON file outside T3 home read by a
+ * shell wrapper. `backend` is a plain string so a value from a newer build degrades to "default"
+ * instead of failing the decode.
  */
 import * as Schema from "effect/Schema";
 

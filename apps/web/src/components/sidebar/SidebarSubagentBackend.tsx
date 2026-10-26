@@ -151,13 +151,9 @@ function ThreadOffloadControl(props: {
 }
 
 /**
- * Sidebar footer icon for the machine-level subagent-dispatch-backend toggle: whether subagents
- * on this host route through Cursor or the provider's default. The icon is green while Cursor
- * offload is on; clicking it expands the panel in place above the footer row. Renders two items
- * into the footer's `SidebarMenu`: the icon, and the panel while open.
- *
- * Rendered only when some connected environment reports the `subagentBackend` capability,
- * mirroring how `pullRequestsSupported` is computed in `SidebarUtilityMenu`.
+ * Sidebar footer icon for the machine-level subagent backend toggle (Cursor or the provider's
+ * default), green while Cursor offload is on; clicking expands the panel above the row.
+ * Renders only when a connected environment reports the `subagentBackend` capability.
  */
 export function SidebarSubagentBackend() {
   const { environments } = useEnvironments();
@@ -450,12 +446,9 @@ export function SidebarSubagentBackend() {
             ) : null}
 
             {threadSupported && threadRef ? (
-              /* The "Applies to Claude Code threads." note is said rather than gated on the
-                 thread's driver: only the Claude adapter injects `SUBAGENT_BACKEND_STATE`, but
-                 the shell's `session` is null until a session binds (a brand-new thread would
-                 lose the control), and resolving a driver from `modelSelection.instanceId`
-                 needs the thread environment's provider list, which only exists for the
-                 primary environment. */
+              /* "Applies to Claude Code threads." is stated, not gated on the driver: the shell's
+                 `session` is null until one binds, and resolving a driver from the instance id
+                 needs a provider list only the primary environment has. */
               <ThreadOffloadControl
                 environmentId={threadRef.environmentId}
                 threadId={threadRef.threadId}

@@ -1,28 +1,8 @@
 /**
- * Detects file paths written as plain text in chat messages and resolves them to
- * the absolute paths the file viewer needs.
- *
- * Markdown link destinations (`[label](src/main.ts)`) were already resolved by
- * `markdown-links`; this module covers the far more common case of a model
- * simply *writing* a path in prose or inline code, which rendered as dead text.
- *
- * Detection reuses the terminal link scanner's pattern, so chat and terminal
- * agree on what looks like a path (including its delimiter trimming, which keeps
- * a sentence's trailing period out of the filename).
- *
- * Resolution is a ladder, cheapest and most certain first:
- *   1. already absolute            -> used as-is
- *   2. `~/…`                       -> expanded against the home inferred from cwd
- *   3. contains a separator        -> joined onto cwd
- *   4. bare filename (`util.ts`)   -> matched by basename against paths known
- *                                     from context; ambiguous or unknown names
- *                                     are left as plain text
- *
- * Step 4 is deliberately conservative. Joining a bare filename onto cwd is what
- * a naive resolver does, and it fabricates a plausible path that usually does not
- * exist — a link that opens an error is worse than no link at all.
- *
- * @module chatFilePathLinks
+ * Detects file paths written in chat prose and resolves them to absolute paths, using the terminal
+ * link scanner's pattern. Resolution ladder: absolute as-is; `~/` against the inferred home; with a
+ * separator, joined onto cwd; a bare filename only by an unambiguous basename match from context,
+ * because joining it onto cwd fabricates a path that usually does not exist.
  */
 import {
   formatFilePathPosition,
@@ -79,14 +59,8 @@ function basenameOf(path: string): string {
 }
 
 /**
- * Collapse `.` and `..` segments. Joining cwd with `./src/main.ts` otherwise
- * yields `/cwd/./src/main.ts`, which reads badly and leaves `..` for whatever
- * reads the path next; resolving it here keeps the path the viewer receives
- * canonical.
- *
- * Not a safety measure. There is no server-side sandbox to escape — the read
- * RPC is bounded by request scope, not by path — so this is about giving the
- * viewer one canonical spelling of a location, nothing more.
+ * Collapse `.` and `..` segments so the viewer receives one canonical spelling of a path.
+ * Not a safety measure: the read RPC is bounded by request scope, not by path.
  */
 function normalizeDotSegments(path: string): string {
   const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
@@ -144,20 +118,10 @@ export function resolveChatFilePathMention(
   const { path } = position;
   if (path.length === 0) return null;
 
-  // The curated extension allow-list is the primary gate for "is this an openable
-  // document". Linkifying any path-shaped token instead was tried and rejected:
-  // it chips prose like `example.com` and `v1.2`. See lib/codeFileTypes.ts.
-  //
-  // Widened by exactly the shapes that cannot be prose, so a FOLDER — which has no
-  // extension and so can never pass the allow-list — is clickable here as it
-  // already is inside backticks and markdown links. Measured over 82,872 real
-  // messages, 93.3% of what this admits is a genuine path; `/chat/thread-123`,
-  // `/api/v1.2` and `origin/main` all stay plain text, because the root list
-  // deliberately excludes app-route-shaped prefixes.
-  //
-  // A `~/` path is not absolute by `isAbsolute`, hence the separate test: it is
-  // the exact spelling the reported case used, and zero English-prose false
-  // positives were measured across that corpus.
+  // The extension allow-list (lib/codeFileTypes.ts) is the main gate; linkifying any path-shaped
+  // token chipped prose like `example.com`. Widened only by shapes that cannot be prose, so folders
+  // are clickable (93.3% genuine paths over 82,872 messages; app-route prefixes excluded). `~/` is
+  // tested separately because `isAbsolute` rejects it.
   if (
     classifyFileViewerKind(path) === null &&
     !isKnownFilesystemRootPath(path) &&

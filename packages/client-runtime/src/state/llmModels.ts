@@ -8,12 +8,9 @@ import {
 } from "./runtime.ts";
 
 /**
- * Environment atoms for the local-model manager. `samples` is a subscription-atom
- * family over the `subscribeLlmModels` stream (mirrors host-metrics): the atom holds
- * the latest probe sample and the server probes only while a subscriber is attached,
- * so mounting the atom starts probing and disposing it stops it. `idleTtlMs: 0`
- * disposes promptly on unmount / tab-hide. `load`/`unload` are one-shot command RPCs
- * that spawn / kill the managed process for a model config id.
+ * `samples` subscribes to `subscribeLlmModels` (like host metrics): the server probes only while
+ * subscribed, and `idleTtlMs: 0` stops it promptly on unmount or tab-hide. `load`/`unload` are
+ * one-shot commands that spawn or kill the managed process for a model config id.
  */
 export function createLlmModelsEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,

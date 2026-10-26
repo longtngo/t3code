@@ -6,12 +6,9 @@ import { parsePositiveIntEnv } from "../provider/Layers/parsePositiveIntEnv.ts";
 export const DEFAULT_GIT_RETRY_ATTEMPTS = 3;
 
 /**
- * Whether a VCS process failure is *transient* — a host-overload timeout
- * (`VcsProcessTimeoutError`) or a fork/exec spawn starvation (`VcsProcessSpawnError`) — and
- * therefore safe to retry for an idempotent operation. Matches the existing tagged error
- * types structurally by `_tag`, so it accepts the whole capture error union without a schema
- * dependency. `VcsProcessExitError` (a real non-zero git exit) and decode/detection/unsupported
- * failures are NOT transient and must not be retried.
+ * Whether a VCS failure is transient (timeout or spawn starvation) and so safe to retry for an
+ * idempotent operation. Matches by `_tag` to accept the whole capture error union. A real git exit
+ * and decode/detection/unsupported failures are NOT transient.
  */
 export const isTransientVcsError = (error: {
   readonly _tag: string;
@@ -20,26 +17,17 @@ export const isTransientVcsError = (error: {
   if (error._tag === "VcsProcessTimeoutError" || error._tag === "VcsProcessSpawnError") {
     return true;
   }
-  // The read-only status and detection paths fail with `GitCommandError`, not
-  // the VCS-tagged errors, so a host-overload timeout on `rev-parse` used to be
-  // reported as a hard failure and retried by nobody — which is most of the
-  // repeated `rev-parse` noise in the log. The reason field carries the same
-  // distinction structurally; `detail` is prose and must not be matched on.
+  // Status and detection paths fail with `GitCommandError`, not the VCS-tagged errors, so match its
+  // `reason` too or a `rev-parse` timeout is never retried. `detail` is prose: never match on it.
   return (
     error._tag === "GitCommandError" && (error.reason === "timeout" || error.reason === "spawn")
   );
 };
 
 /**
- * Bounded, jittered exponential backoff for retrying transient VCS failures.
- * `attempts` is the total number of tries (initial + retries); `attempts <= 1`
- * disables retry (`times: 0`).
- *
- * The recurrence bound lives in `Effect.retry`'s `times` option rather than in the
- * schedule: effect 4.0.0-beta.102 dropped `Schedule.both` (the AND-combinator this
- * previously used to intersect the always-recurring backoff with `recurs`), and it
- * has no replacement count-bounding combinator — only `upTo`, which bounds by total
- * elapsed duration, not by attempts.
+ * Bounded, jittered exponential backoff; `attempts` counts all tries, `<= 1` disables retry.
+ * The bound lives in `Effect.retry`'s `times` because effect 4 beta dropped `Schedule.both` and
+ * `upTo` bounds elapsed time, not attempts.
  */
 export const makeTransientGitRetryPolicy = (attempts: number) =>
   ({

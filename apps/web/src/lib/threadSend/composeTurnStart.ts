@@ -150,9 +150,8 @@ export function composeTurnStart(input: ComposeTurnStartInput): ComposedTurnStar
     input.isFirstMessage && input.sendEnvMode === "worktree" && !input.thread.worktreePath;
   const baseBranchForWorktree = shouldCreateWorktree ? input.branch : null;
 
-  // Contexts no longer ride in the prompt text: upstream #11265 carries them as
-  // structured context records on the message, and each caller builds those. They
-  // still seed the title below.
+  // Contexts no longer ride in the prompt text: they are structured context records on the
+  // message, and each caller builds those. They still seed the title below.
   const messageTextForSend = input.prompt;
   const outgoingMessageText = formatOutgoingPrompt({
     provider: input.provider,

@@ -83,14 +83,9 @@ function cliLabel(cliName: string): string {
 }
 
 /**
- * Detail line for a provider CLI that exited non-zero, preferring whatever the
- * CLI said for itself.
- *
- * The silent case is called out on purpose. A CLI that writes to neither stream
- * usually died before it ran its task — its own runtime rejected the process,
- * for instance over an inherited flag it does not implement — rather than
- * failing at the work. A bare exit code leaves whoever reads the log nothing to
- * search for, which is what made that failure mode expensive to diagnose.
+ * Prefers what the CLI said for itself, and calls out the silent case: a CLI writing to neither
+ * stream usually died before running (e.g. rejecting an inherited flag), and a bare exit code
+ * leaves nothing to search the logs for.
  */
 export function cliFailureDetail(
   cliDisplayName: string,

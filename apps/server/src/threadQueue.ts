@@ -1,13 +1,7 @@
 /**
- * ThreadQueue - the sidebar Queue document, held for every client of this server.
- *
- * A versioned document store. Clients run the queue's rules and write whole
- * states by compare-and-set on (`bootId`, `revision`). The server owns what
- * clients cannot be trusted with: ordering (the revision) and claim times
- * (`claimedAt`, `sendingAt`, `sentAt` come from this server's clock, so every
- * device ages a claim the same way). Every message is the whole document.
- *
- * @module ThreadQueue
+ * The sidebar Queue document, a versioned store: clients run the rules and write whole states by
+ * compare-and-set on (`bootId`, `revision`). The server owns ordering and claim times
+ * (`claimedAt`, `sendingAt`, `sentAt` use its clock, so every device ages a claim the same way).
  */
 import {
   NonNegativeInt,

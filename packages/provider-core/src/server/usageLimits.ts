@@ -64,9 +64,7 @@ export function applyUsageLimitsUpdate(input: {
     return previous;
   }
   const merged = new Map(previous?.windows.map((window) => [window.id, window] as const));
-  // Codex sends this notification beside every token-usage tick, almost
-  // always with unchanged numbers. Decide "nothing changed" per window on
-  // the way through so the no-op case never allocates a new snapshot.
+  // Codex repeats unchanged limits on token ticks; avoid allocating snapshots for no-ops.
   let changed = false;
   for (const window of update.windows) {
     const existing = merged.get(window.id);
@@ -89,11 +87,9 @@ export function applyUsageLimitsUpdate(input: {
     if (previous.unavailable !== undefined) {
       return previous;
     }
-    // The provider just confirmed these numbers, so the reading is current. Re-stamp it,
-    // but only when the update names every window (Claude reports one window per event, and
-    // a 5-hour confirmation says nothing about the weekly), and at most every
-    // RESTAMP_INTERVAL_MS: Codex repeats this on every token tick, and each new snapshot
-    // is published to every client.
+    // Re-stamp a confirmed reading only when the update names every window (Claude reports one per
+    // event) and at most every RESTAMP_INTERVAL_MS: Codex repeats this on every token tick, and each
+    // snapshot is published to every client.
     const coversEveryWindow = previous.windows.every((window) =>
       update.windows.some((candidate) => candidate.id === window.id),
     );
@@ -124,12 +120,9 @@ function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageW
 }
 
 /**
- * A probe can serve a cached read (Claude caches its capabilities
- * probe for minutes), so a successful probe whose windows were read BEFORE
- * the published ones keeps the published windows rather than reverting a
- * newer runtime update to older numbers. Everything else comes from the
- * probe: reset credits are re-read on every check, and spend is never older
- * than the probe that last published it.
+ * A probe can serve a cached read (Claude caches for minutes), so windows read BEFORE the published
+ * ones are kept rather than reverting newer numbers. Everything else comes from the probe: reset
+ * credits are re-read every check, and spend is never older than its last publisher.
  */
 export function resolveUsageLimitsAfterProbe(input: {
   readonly published: ServerProviderUsageLimits | undefined;

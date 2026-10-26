@@ -269,8 +269,7 @@ export type ProjectSearchEntriesResult = typeof ProjectSearchEntriesResult.Type;
 
 export const ProjectSearchContentsInput = Schema.Struct({
   cwd: FilePathString,
-  // Whitespace is significant in content queries (" foo", regex trailing
-  // spaces), so the query is deliberately not trimmed on the wire.
+  // Preserve whitespace because it is significant in content queries.
   query: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_CONTENTS_MAX_LIMIT)),
   caseSensitive: Schema.Boolean,
@@ -442,10 +441,8 @@ export class ProjectListEntriesError extends Schema.TaggedError<ProjectListEntri
 
 export const ProjectReadFileInput = Schema.Struct({
   cwd: FilePathString,
-  // Workspace-relative, or an absolute host path for a file outside the
-  // workspace. Only workspace-relative paths can be written back.
-  // FORK: FilePathString, not upstream's TrimmedNonEmptyString -- that one
-  // transforms, so a read of `notes ` silently becomes a read of `notes`.
+  // Workspace-relative or absolute host path; only workspace-relative paths are writable.
+  // FORK: FilePathString, not TrimmedNonEmptyString, which would turn `notes ` into `notes`.
   relativePath: FilePathString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
   // Optional files can be absent without failing the read.
   allowMissing: Schema.optional(Schema.Boolean),

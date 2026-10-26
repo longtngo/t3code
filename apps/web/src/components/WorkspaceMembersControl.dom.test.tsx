@@ -10,12 +10,9 @@ function member(id: string, title: string): WorkspaceMember {
 }
 
 /**
- * Holds each write open so the next interaction lands before the server echoes.
- *
- * That window is not hypothetical: the dispatch RPC acks straight from
- * `dispatchNormalizedCommand`, while the `members` prop is only refreshed by the
- * shell stream, which the server coalesces on a 50ms window. Every real write has
- * a gap where the ack has returned and the prop is still the pre-write list.
+ * Holds each write open so the next interaction lands before the server echoes. The dispatch
+ * RPC acks at once while the `members` prop waits on the shell stream's 50ms coalesce window,
+ * so every real write has a gap where the prop is still the pre-write list.
  */
 function harness() {
   const writes: Array<ReadonlyArray<WorkspaceMember>> = [];

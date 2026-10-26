@@ -1,9 +1,6 @@
-// FORK-ONLY. Fork web files the React Compiler does not accept yet.
-// Upstream requires every apps/web/src file to compile (lint errors plus
-// src/reactCompilerCoverage.test.ts). These are fork-original files that predate the rule;
-// they ship unmemoized by the compiler and keep their manual memoization. Both lists only
-// shrink: fix a file, then delete its entry. The coverage test fails when a listed bailout
-// starts compiling, so a fixed file cannot stay listed.
+// FORK-ONLY. Fork web files the React Compiler does not accept yet; they predate upstream's
+// every-file-compiles rule (lint plus src/reactCompilerCoverage.test.ts) and keep manual memo.
+// Both lists only shrink: the coverage test fails when a listed bailout starts compiling.
 
 /** Files the compiler skips today (checked by reactCompilerCoverage.test.ts). */
 export const FORK_REACT_COMPILER_BAILOUTS: ReadonlyArray<string> = [

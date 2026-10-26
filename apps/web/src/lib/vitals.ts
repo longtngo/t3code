@@ -95,13 +95,9 @@ export interface LabeledUsageWindowView extends UsageWindowView {
 }
 
 /**
- * A spend row rendered as a paced window rather than a bare balance.
- *
- * The reset instant is DERIVED (see {@link billingMonthWindow}), not sent by the
- * provider, which is why this is a distinct shape from
- * {@link LabeledUsageWindowView}: `detail` carries the money figure that a
- * percentage-only window row would drop, and `segmentCount` the days in the
- * month.
+ * A spend row as a paced window. Distinct from {@link LabeledUsageWindowView} because the reset is
+ * DERIVED (see {@link billingMonthWindow}), `detail` carries the money figure a percentage-only row
+ * would drop, and `segmentCount` is the days in the month.
  */
 export interface SpendWindowView extends UsageWindowView {
   readonly label: string;
@@ -127,13 +123,9 @@ export interface AccountUsageView {
 }
 
 /**
- * The gauge's view of one provider instance's usage limits: the same
- * `ServerProvider.usageLimits` snapshot the Limits tab reads, so the two
- * surfaces cannot disagree. Claude's `five_hour` / `seven_day` windows feed
- * the ring; everything else becomes a popover row.
- *
- * Null when there is nothing to draw: no snapshot, an account that can never
- * report windows, or a probe that has not produced any yet.
+ * Reads the same `ServerProvider.usageLimits` snapshot as the Limits tab, so the two cannot
+ * disagree. Claude's `five_hour` / `seven_day` feed the ring; the rest become popover rows. Null
+ * with no snapshot, an account that can never report windows, or a probe with no result yet.
  */
 export function accountUsageFromLimits(
   limits: ServerProviderUsageLimits | null | undefined,
@@ -190,13 +182,9 @@ function formatSpend(used: number, limit: number | null, currency: string): stri
 }
 
 /**
- * Extra usage as a paced billing-month row. Null until spending has started,
- * as on the fork (an enabled cap with nothing spent is not worth a row), and
- * when the provider gave no percentage to pace (a spend with no cap). The
- * reset instant is derived, not reported. See {@link billingMonthWindow}.
- *
- * Overspend: the bar is capped at 100% by the server's `usedPercent`, while
- * `detail` shows the real amount, which can exceed the limit.
+ * Null until spending starts (an enabled cap with nothing spent is not worth a row) and when there
+ * is no percentage to pace (spend with no cap). The reset is derived: see {@link billingMonthWindow}.
+ * Overspend: the bar caps at the server's 100% `usedPercent`; `detail` shows the real amount.
  */
 export function extraUsageWindow(
   spend: ServerProviderUsageSpend | null,
@@ -232,13 +220,9 @@ export interface WindowPace {
 }
 
 /**
- * Projection = the share of the window's clock that has already elapsed
- * (`1 − timeUntilReset / windowMs`), which is where usage *would* sit if spent
- * evenly. The signed `diff` against actual usage is the row's headline figure.
- *
- * This once replaced the reset time outright; the row now shows both, since pace
- * ("am I burning this too fast?") and {@link formatWindowReset} ("when do I get
- * it back?") answer different questions.
+ * Projection = the elapsed share of the window (`1 - timeUntilReset / windowMs`), where usage would
+ * sit if spent evenly; the signed `diff` is the headline. Shown alongside {@link formatWindowReset},
+ * since pace and reset time answer different questions.
  */
 export function computeWindowPace(
   window: UsageWindowView,
@@ -269,18 +253,9 @@ const resetDateFormatter = new Intl.DateTimeFormat(undefined, {
 });
 
 /**
- * When a window resets: `14:20` inside 24 hours, `8/21 14:20` beyond, and `now`
- * once the instant has passed — providers refresh lazily, so an elapsed reset
- * timestamp lingers briefly and would otherwise render as a time in the past.
- * Null when there is no reset clock to show, in which case the row omits it.
- *
- * Pace answers "am I burning this too fast?"; this answers "when do I get it
- * back?". The gauge showed only the former (see `computeWindowPace`), so both
- * are rendered now rather than one replacing the other.
- *
- * The time half delegates to `formatShortTimestamp` so the user's 12/24-hour
- * preference is honoured. The predecessor helper this revives hardcoded
- * `hourCycle: "h23"`, which is the bug class upstream fixed in #4438.
+ * `14:20` inside 24 hours, `8/21 14:20` beyond, and `now` once passed: providers refresh lazily, so
+ * an elapsed reset lingers and would render as a past time. Null means no reset clock to show.
+ * Delegates to `formatShortTimestamp` so the 12/24-hour preference is honoured (no hardcoded h23).
  */
 export function formatWindowReset(
   resetsAt: string | null,
@@ -299,18 +274,9 @@ export function formatWindowReset(
 }
 
 /**
- * Where a bar's unit boundaries fall, as a CSS `background-image`.
- *
- * Built stop-by-stop rather than with `repeating-linear-gradient` because the
- * repeating form also emits a boundary at 100%, which lands inside the track's
- * rounded cap and renders as a sliver darkening the right-hand end at every
- * segment count. This draws `segments - 1` interior boundaries and nothing else.
- *
- * The caller must paint this ABOVE the fill, not on the track. A background on
- * the track is painted before its positioned children, so separators drawn
- * there are hidden under the fill — invisible in exactly the case the segments
- * exist to explain. Measured at the real popover width: at 31 segments and 97%
- * used, zero of them were visible.
+ * Built stop-by-stop: `repeating-linear-gradient` also emits a boundary at 100%, a sliver in the
+ * track's rounded cap. Paint this ABOVE the fill, not on the track: a track background is painted
+ * under positioned children, and at 31 segments and 97% used zero separators were visible.
  */
 export function segmentBoundariesBackground(segments: number): string | undefined {
   if (!Number.isFinite(segments) || segments < 2) return undefined;
@@ -335,20 +301,10 @@ export function daysInUtcMonth(nowMs: number): number {
 }
 
 /**
- * The billing month as a pace-able window: when it resets, and how long it is.
- *
- * The provider sends neither. `GET /api/oauth/usage` returns `extra_usage`
- * with `is_enabled`, `monthly_limit`, `used_credits`, `utilization` and
- * `currency` and no reset instant at all, so this is DERIVED from the
- * maintainer's statement that the anchor is the 1st — it is not provider data,
- * and if the account's billing anchor is not the 1st the pace is wrong.
- *
- * Derived in UTC, deliberately. Anchoring on the local month makes the boundary
- * cross at a different real instant for every user: at UTC+14 the local month
- * turns over 14 hours before the provider's counter resets, so a normal account
- * reads "+98% over pace" in the most severe colour for those 14 hours, every
- * month. `windowMs` is the distance between the two boundaries rather than
- * `days * 86_400_000`, so the length always matches the month it describes.
+ * The provider sends no reset instant for `extra_usage`, so this is DERIVED from the maintainer's
+ * statement that the anchor is the 1st; another anchor makes the pace wrong. UTC deliberately: a
+ * local month at UTC+14 turns over 14 hours early and reads "+98% over pace" every month.
+ * `windowMs` spans the two boundaries so its length always matches the month.
  */
 export function billingMonthWindow(nowMs: number): { resetsAt: string; windowMs: number } {
   const now = new Date(nowMs);
@@ -358,12 +314,8 @@ export function billingMonthWindow(nowMs: number): { resetsAt: string; windowMs:
 }
 
 /**
- * How old a polled snapshot is, for the refresh control's label.
- *
- * Floored at "just now" rather than allowed to go negative: the instant is
- * stamped by the server and `nowMs` is the client's clock, so on a remote or
- * relayed connection a phone a few minutes ahead would otherwise render
- * "-4m ago".
+ * Floored at "just now": the instant is server-stamped and `nowMs` is the client's clock, so a
+ * remote phone a few minutes ahead would otherwise render "-4m ago".
  */
 export function formatSnapshotAge(fetchedAt: string | null, nowMs: number): string | null {
   if (fetchedAt === null) return null;
@@ -377,14 +329,9 @@ export function formatSnapshotAge(fetchedAt: string | null, nowMs: number): stri
 }
 
 /**
- * One gauge arc: how far it sweeps, and what colour it is.
- *
- * The two are NOT the same question, and conflating them is what made the icon
- * disagree with the detail panel: a usage window sweeps by fullness but is
- * coloured by *pace*, so a window at 74% that is comfortably under pace reads
- * green in the panel while colouring it by fullness alone would paint it
- * yellow. Carrying the severity on the arc — rather than re-deriving it from
- * the percentage at draw time — is what keeps the two surfaces from drifting.
+ * Sweep and colour are different questions: a usage window sweeps by fullness but is coloured by
+ * pace (74% under pace is green, not yellow). Carrying severity on the arc, not re-deriving it from
+ * the percentage at draw time, keeps the icon and the detail panel from disagreeing.
  */
 export interface VitalsGaugeArc {
   /** Sweep, 0–100, or null when there is no reading yet. */
@@ -394,13 +341,8 @@ export interface VitalsGaugeArc {
 }
 
 /**
- * The single percentage a surface both DISPLAYS and colours by.
- *
- * Every reading is shown rounded, so the severity has to be bucketed from the
- * rounded value too — otherwise a reading of 50.4 renders as "50%" (which
- * `vitalsLevel` calls green) while colouring itself from 50.4 (which it calls
- * yellow), and the number disagrees with its own colour. Round once, here, and
- * derive both from the result.
+ * The percentage a surface both displays and colours by. Readings show rounded, so severity must
+ * bucket the rounded value too, or 50.4 shows "50%" (green) while colouring as yellow.
  */
 export function readingPct(pct: number): number {
   return Math.round(clampPct(pct));
