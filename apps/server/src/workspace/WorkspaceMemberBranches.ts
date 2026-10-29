@@ -226,10 +226,18 @@ export const make = Effect.gen(function* () {
     // The base is known exactly here — this branch was just cut from the
     // integration branch — so writing it now is a record, not a guess.
     yield* git
-      .writeConfigValue(target.cwd, memberPrBaseConfigKey(branch), target.integrationBranch)
+      .writeConfigValue({
+        cwd: target.cwd,
+        key: memberPrBaseConfigKey(branch),
+        value: target.integrationBranch,
+      })
       .pipe(Effect.ignore);
     yield* git
-      .writeConfigValue(target.cwd, memberOwnerConfigKey(branch), target.threadId)
+      .writeConfigValue({
+        cwd: target.cwd,
+        key: memberOwnerConfigKey(branch),
+        value: target.threadId,
+      })
       .pipe(Effect.ignore);
 
     return { state: "owned-by-self", branch, ownerThreadId: target.threadId };
@@ -313,10 +321,16 @@ export const make = Effect.gen(function* () {
     });
 
   const writePrBase: WorkspaceMemberBranches["Service"]["writePrBase"] = (input) =>
-    git.writeConfigValue(input.cwd, memberPrBaseConfigKey(input.branch), input.base).pipe(
-      Effect.as(true),
-      Effect.orElseSucceed(() => false),
-    );
+    git
+      .writeConfigValue({
+        cwd: input.cwd,
+        key: memberPrBaseConfigKey(input.branch),
+        value: input.base,
+      })
+      .pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
 
   return WorkspaceMemberBranches.of({
     inspect,

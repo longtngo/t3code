@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Redacted from "effect/Redacted";
+import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -141,6 +142,7 @@ function harness(
     Effect.map(Effect.service(SourceControlHost.SourceControlHost), (host) => ({
       ...host,
       settings: {
+        ...host.settings,
         get: Effect.sync(() => settingsReads.count++).pipe(Effect.andThen(host.settings.get)),
       },
     })),
@@ -156,6 +158,12 @@ function harness(
       }),
     ),
     Layer.provide(NodeCrypto.layer),
+    Layer.provide(
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => Effect.die(`Unexpected request to ${request.url}`)),
+      ),
+    ),
   );
   return { layer, calls, gitCalls, ghCalls, settingsReads };
 }
@@ -468,13 +476,6 @@ describe("GitHubCredentials", () => {
         spawns: 1,
         outcome: "invalid",
       },
-      {
-        name: "a host with a newline",
-        host: "git\nhub.com",
-        fill: alice,
-        spawns: 0,
-        outcome: "invalid",
-      },
     ])("uses the active login after $name, and remembers it", ({ host, fill, spawns, outcome }) => {
       const { layer, gitCalls } = harness({}, [], {}, { "/x": fill });
       return Effect.gen(function* () {
@@ -484,6 +485,17 @@ describe("GitHubCredentials", () => {
         expect(credential.folder).toBe(outcome);
         yield* credentials.get(host, "/x");
         expect(gitCalls).toHaveLength(spawns);
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("refuses a host with a newline before asking git or gh", () => {
+      const { layer, calls, gitCalls } = harness({}, [], {}, { "/x": alice });
+      return Effect.gen(function* () {
+        const credentials = yield* GitHubCredentials.GitHubCredentials;
+        const failure = yield* Effect.flip(credentials.get("git\nhub.com", "/x"));
+        expect(failure._tag).toBe("GitHubNotSignedInError");
+        expect(gitCalls).toEqual([]);
+        expect(calls).toEqual([]);
       }).pipe(Effect.provide(layer));
     });
 
@@ -578,6 +590,21 @@ describe("GitHubCredentials", () => {
         expect(calls).toEqual([userCall("alice"), userCall("bob"), userCall("alice")]);
       }).pipe(Effect.provide(layer));
     });
+  });
+
+  it.effect("never hands a token to a host that is not a plain hostname", () => {
+    vi.stubEnv("GH_TOKEN", "env-token");
+    const { layer, calls } = harness();
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      for (const host of ["evil.com#.ghe.com", "evil.com/.ghe.com", "user@x.ghe.com"]) {
+        expect(GitHubCredentials.environmentToken(host, { GH_TOKEN: "env-token" })).toBeNull();
+        expect((yield* Effect.flip(credentials.get(host, null)))._tag).toBe(
+          "GitHubNotSignedInError",
+        );
+      }
+      expect(calls).toEqual([]);
+    }).pipe(Effect.provide(layer));
   });
 });
 

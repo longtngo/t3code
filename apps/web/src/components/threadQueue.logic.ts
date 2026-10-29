@@ -17,12 +17,7 @@ import {
   type ThreadQueuePrior,
 } from "../threadQueueRules";
 import { useThreadQueueStore } from "../threadQueueStore";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  isProviderInstancePickerVisible,
-  sortProviderInstanceEntries,
-} from "../providerInstances";
+import { isProviderInstancePickerVisible, providerInstanceEntriesFor } from "../providerInstances";
 import { formatProviderDriverKindLabel } from "../providerModels";
 import { resolveSidebarThreadStatus } from "./Sidebar.logic";
 
@@ -336,13 +331,11 @@ export function listQueueSlotInstances(
 ): ReadonlyArray<QueueSlotInstance> {
   const slots = new Map<string, QueueSlotInstance>();
   for (const { providers, settings } of sources) {
-    const entries = sortProviderInstanceEntries(
+    const entries = providerInstanceEntriesFor(
+      providers,
       // Queue slots are machine-wide, so no project override applies.
-      applyProviderInstanceSettings(
-        deriveProviderInstanceEntries(providers),
-        { providerInstances: settings.providerInstances, projectSettingsOverrides: {} },
-        null,
-      ),
+      { providerInstances: settings.providerInstances, projectSettingsOverrides: {} },
+      null,
     ).filter(isProviderInstancePickerVisible);
     for (const entry of entries) {
       if (slots.has(entry.instanceId)) continue;

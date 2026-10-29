@@ -7,7 +7,7 @@ import {
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { splitFilePathPosition } from "@t3tools/shared/fileLinks";
 import { ChevronDownIcon } from "lucide-react";
-import { memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, type MouseEvent as ReactMouseEvent } from "react";
 
 import { isAbsoluteFilePath } from "../../chatFilePathLinks";
 import { basenamePathSegment } from "../../filePathDisplay";
@@ -19,7 +19,7 @@ import {
   type MarkdownFileLinkMeta,
 } from "../../markdown-links";
 import type { markdownFileCopyPaths } from "../../markdownFileHostPath";
-import { documentIconColorForFileName } from "../../pierre-icons";
+import { documentChipKindForFileName } from "../../pierre-icons";
 import { ContextChip } from "../ContextChip";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -379,8 +379,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
     canOpenInBrowser,
     canOpenInPanel: canOpenInWorkspacePanel,
   });
-  const accent = documentIconColorForFileName(iconPath);
-  const chipStyle = accent ? ({ "--context-chip-accent": accent } as CSSProperties) : undefined;
+  const chipKind = documentChipKindForFileName(iconPath) ?? "mention";
 
   return (
     <span className="inline-flex max-w-full items-center align-middle">
@@ -389,11 +388,10 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
           render={
             hasPrimaryAction ? (
               <ContextChip
-                kind="mention"
+                kind={chipKind}
                 dir="ltr"
                 render={<a href={href} />}
                 className={MARKDOWN_FILE_LINK_CLASS_NAME}
-                style={chipStyle}
                 data-markdown-copy={copyMarkdown}
                 onClick={(event) => {
                   event.preventDefault();
@@ -419,13 +417,12 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
               </ContextChip>
             ) : (
               <ContextChip
-                kind="mention"
+                kind={chipKind}
                 dir="ltr"
                 render={<button type="button" />}
                 aria-label={`File options for ${label}`}
                 aria-haspopup="menu"
                 className={cn(MARKDOWN_FILE_LINK_CLASS_NAME, "select-text")}
-                style={chipStyle}
                 data-markdown-copy={copyMarkdown}
                 onClick={handleContextMenu}
                 onContextMenu={handleContextMenu}

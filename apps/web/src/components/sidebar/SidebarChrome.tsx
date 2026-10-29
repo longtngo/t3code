@@ -44,7 +44,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const backdropVariant = resolveSidebarStageBackdropVariant(
     stageLabel,
-    environmentIdentificationMode === "artwork",
+    environmentIdentificationMode,
   );
   const pillLabel =
     environmentIdentificationMode === "pill"
@@ -206,6 +206,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   // Escape and outside-click dismissal for whichever panel is open. It lives here because the
   // footer owns which one is open and both draw into the same row wrapper, so one listener covers
   // both and no panel can ship as an overlay with no way out.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- dismisses the open footer panel on an outside mousedown or Escape
   useEffect(() => {
     if (openFooterPanel === null) return;
     const dismiss = () => setOpenFooterPanel(null);
@@ -274,6 +275,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             isOpen={openFooterPanel === "queue"}
             onOpenChange={(open) => setFooterPanelOpen("queue", open)}
           />
+          <SidebarThreadUndoNotice />
           <SidebarUpdatePill />
         </SidebarMenu>
       </div>
@@ -281,14 +283,9 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   );
 });
 
-export const SidebarChromeFooter = memo(function SidebarChromeFooter({
-  showUndoNotice = false,
-}: {
-  showUndoNotice?: boolean;
-}) {
+export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
     <SidebarFooter>
-      {showUndoNotice ? <SidebarThreadUndoNotice /> : null}
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />

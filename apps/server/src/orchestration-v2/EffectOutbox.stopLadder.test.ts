@@ -131,7 +131,7 @@ it.effect("a hard press supersedes only cooperative interrupts", () =>
       interrupt("effect:earlier-hard", threadId, false),
       interrupt("effect:other-thread-cooperative", other, true),
     ]);
-    const running = yield* outbox.claimNext({ workerId: "w", leaseDurationMs: 30_000 });
+    const running = yield* outbox.claimNext({ workerId: "w" });
     assert.equal(Option.getOrUndefined(running)?.id, "effect:earlier-hard");
     const cancelled = yield* commitHardPress(outbox, "effect:next-hard", threadId);
     assert.deepEqual(cancelled, []);

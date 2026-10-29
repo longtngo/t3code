@@ -20,7 +20,6 @@ const KNOWN_BAILOUTS: Record<string, string> = {
   "src/features/threads/ThreadArrangementSheet.tsx": "ref read during render",
   // FORK: the Stop ladder's self-rescheduling timer (a named function expression).
   "src/features/threads/ThreadRouteScreen.tsx": "unsupported declaration type for hoisting",
-  "src/features/voice-input/VoiceInputProvider.tsx": "ref read during render",
   "src/features/voice-input/useVoiceInputController.ts": "ref read during render",
   "src/native/T3ComposerEditor.ios.tsx": "ref read during render",
   "src/native/T3ComposerEditor.native.tsx": "ref read during render",
@@ -182,6 +181,16 @@ describe("React Compiler coverage", () => {
   it("caches the thread feed derivation", () => {
     expect(
       compilerCachedCalls("src/features/threads/ThreadFeed.tsx", "deriveThreadFeedPresentation"),
+    ).toEqual([true]);
+  });
+
+  // An uncached registration would re-register the workspace inspector on every render.
+  it("registers the workspace inspector only when its renderer changes", () => {
+    expect(
+      compilerCachedCalls(
+        "src/features/layout/AdaptiveWorkspaceLayout.tsx",
+        "registerWorkspaceInspector",
+      ),
     ).toEqual([true]);
   });
 

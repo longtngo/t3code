@@ -128,8 +128,9 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
       {...sortable?.listeners}
     >
       <div
-        role="button"
-        tabIndex={0}
+        role="treeitem"
+        tabIndex={-1}
+        data-sidebar-row={`draft:${draftId}`}
         aria-label={accessibility.label}
         aria-current={accessibility.current}
         data-testid="sidebar-draft-row"

@@ -34,12 +34,12 @@ const FilePreviewPanel = lazy(() => import("../files/FilePreviewPanel"));
 // FORK: read-only view of a host path outside the workspace (registry invariant 11).
 const TrustedFileView = lazy(() => import("../files/TrustedFileView"));
 
-export type RightPanelTerminalProps = Omit<
+type RightPanelTerminalProps = Omit<
   PersistentThreadTerminalPanelProps,
   "visible" | "threadRef" | "surface"
 >;
 
-export interface RightPanelPullRequestProps {
+interface RightPanelPullRequestProps {
   readonly capabilityKnown: boolean;
   readonly supported: boolean;
   readonly projectId: ProjectId | null;
@@ -49,7 +49,7 @@ export interface RightPanelPullRequestProps {
   readonly onBack: (() => void) | undefined;
 }
 
-export interface RightPanelFileProps {
+interface RightPanelFileProps {
   readonly projectName: string | null;
   readonly workspaceRoot: string | undefined;
   readonly availableEditors: ReadonlyArray<EditorId>;

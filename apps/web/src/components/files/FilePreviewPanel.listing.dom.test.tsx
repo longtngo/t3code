@@ -11,37 +11,43 @@ const host = vi.hoisted(() => ({
   listings: [] as string[],
 }));
 
-vi.mock("./projectFilesQueryState", () => ({
-  getOptimisticProjectFileQueryData: () => null,
-  getProjectFileContents: () => null,
-  setProjectFileQueryData: () => undefined,
-  // The read of a folder fails; that failure is what sends the panel to the listing.
-  useProjectFileQuery: () => ({
-    data: null,
-    error: "Failed to read workspace file.",
-    isPending: false,
-    readError: null,
-    isNotFile: false,
-    refresh: () => undefined,
-  }),
-  useDirectoryListingQuery: (environmentId: unknown, directoryPath: string | null) => {
-    if (environmentId !== null && directoryPath !== null) host.listings.push(directoryPath);
-    const found = environmentId !== null && directoryPath === host.folder;
-    const data: FilesystemBrowseResult | null = found
-      ? {
-          parentPath: host.folder,
-          listedFiles: true,
-          entries: [{ name: "summary.md", fullPath: `${host.folder}/summary.md`, kind: "file" }],
-        }
-      : null;
-    return {
-      data,
-      error: found || directoryPath === null ? null : "No such folder.",
+vi.mock("./projectFilesQueryState", async () => {
+  const { Atom } = await import("effect/reactivity");
+  const inert = Atom.make(null);
+  return {
+    // The panel mounts this to refetch after workspace mutations; an inert atom is enough here.
+    getProjectFileQueryAtom: () => inert,
+    getOptimisticProjectFileQueryData: () => null,
+    getProjectFileContents: () => null,
+    setProjectFileQueryData: () => undefined,
+    // The read of a folder fails; that failure is what sends the panel to the listing.
+    useProjectFileQuery: () => ({
+      data: null,
+      error: "Failed to read workspace file.",
       isPending: false,
+      readError: null,
+      isNotFile: false,
       refresh: () => undefined,
-    };
-  },
-}));
+    }),
+    useDirectoryListingQuery: (environmentId: unknown, directoryPath: string | null) => {
+      if (environmentId !== null && directoryPath !== null) host.listings.push(directoryPath);
+      const found = environmentId !== null && directoryPath === host.folder;
+      const data: FilesystemBrowseResult | null = found
+        ? {
+            parentPath: host.folder,
+            listedFiles: true,
+            entries: [{ name: "summary.md", fullPath: `${host.folder}/summary.md`, kind: "file" }],
+          }
+        : null;
+      return {
+        data,
+        error: found || directoryPath === null ? null : "No such folder.",
+        isPending: false,
+        refresh: () => undefined,
+      };
+    },
+  };
+});
 vi.mock("~/state/filesystem", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/filesystem")>()),
   useFilesystemReadAccess: () => ({ canReadFiles: true, isPending: false, error: null }),

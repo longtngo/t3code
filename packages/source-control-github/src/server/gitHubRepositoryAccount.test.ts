@@ -109,6 +109,7 @@ function harness() {
         });
       }),
     withDirectory: () => () => Effect.die("unused"),
+    appCredential: () => Effect.succeedNone,
     account: (host, login) =>
       state.signedOut.has(login)
         ? Effect.fail(new GitHubCredentials.GitHubNotSignedInError({ host, account: login }))

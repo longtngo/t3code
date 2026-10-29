@@ -44,7 +44,6 @@ describe("ComposerContextStripToggle", () => {
     const view = await render({ collapsed: true, worktreeActive: false });
 
     expect(view.find("[data-composer-control-icon]")).not.toBeNull();
-    expect(view.find("[data-composer-control-chevron]")).not.toBeNull();
   });
 
   // With no label of its own, the glyph is the only workspace signal left while

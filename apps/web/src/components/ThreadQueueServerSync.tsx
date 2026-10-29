@@ -29,12 +29,14 @@ export function ThreadQueueServerSync() {
   const noPrimary = queueHasNoPrimary();
   const localEntriesLeftBehind = useThreadQueueStore((state) => state.localEntriesLeftBehind);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes the primary's connection and write capability into the queue store
   useEffect(() => {
     useThreadQueueStore
       .getState()
       .setConnection({ primaryId, noPrimary, configSource, capability, connected, canWrite });
   }, [canWrite, capability, configSource, connected, noPrimary, primaryId]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- shows an imperative toast for local entries left behind, then clears the counter
   useEffect(() => {
     if (localEntriesLeftBehind === 0) return;
     const title =
@@ -62,6 +64,7 @@ function ThreadQueueSubscription(props: { environmentId: EnvironmentId; serverLa
   const snapshot = Option.getOrNull(
     AsyncResult.value(useAtomValue(serverEnvironment.threadQueue({ environmentId, input: {} }))),
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- feeds each server queue subscription document into the queue store
   useEffect(() => {
     // Each message is a new object, so a value kept across a reconnect is not delivered twice.
     if (snapshot !== null) {
@@ -74,9 +77,11 @@ function ThreadQueueSubscription(props: { environmentId: EnvironmentId; serverLa
   });
   // Read at failure time: a rename must not retire the writes in flight.
   const serverLabelRef = useRef(serverLabel);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the label that in-flight queue writes read when they fail
   useEffect(() => {
     serverLabelRef.current = serverLabel;
   }, [serverLabel]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- installs this server's write-through writer on the queue store until unmount
   useEffect(() => {
     // A socket loss fails the request on its own. Leaving this server (a primary change) does
     // not, so it rejects here: the queue must never adopt the old server's reply.

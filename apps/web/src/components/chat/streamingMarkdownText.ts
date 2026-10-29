@@ -74,6 +74,7 @@ export function useStreamingMarkdownText(incoming: string, isStreaming: boolean)
   // Recorded after the render commits, not during it, and only when the text
   // actually moved -- restamping a held-back render would push the deadline
   // forward on every delta and the message would never catch up.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- stamps when text actually committed, so a discarded render cannot move the deadline
   useEffect(() => {
     if (decision.text === committedRef.current.text) return;
     committedRef.current = { text: decision.text, at: Date.now() };
@@ -82,6 +83,7 @@ export function useStreamingMarkdownText(incoming: string, isStreaming: boolean)
   // `commitInMs` counts down toward one fixed deadline, so re-arming it on each
   // delta keeps the same target rather than moving it.
   const { commitInMs } = decision;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- timer that commits held-back streaming text at its fixed deadline
   useEffect(() => {
     if (commitInMs === null) return;
     const timer = setTimeout(commitNow, commitInMs);

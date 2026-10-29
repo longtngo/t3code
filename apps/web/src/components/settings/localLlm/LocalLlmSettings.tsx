@@ -47,6 +47,7 @@ function GroupedArgsInput(props: {
 }) {
   const joined = props.value.join("\n");
   const [draft, setDraft] = useState(joined);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- re-seeds the textarea draft when the saved list changes
   useEffect(() => setDraft(joined), [joined]);
   const commit = () => {
     const next = draft
@@ -214,6 +215,7 @@ function ModelConfigCard(props: {
   // not one per drag tick. Reset the draft if the model/provider changes mid-drag so a
   // stale value can't be committed to the wrong model.
   const [ctxDraft, setCtxDraft] = useState<number | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drops the context draft when the model or provider changes
   useEffect(() => setCtxDraft(null), [config.modelId, config.providerId]);
   const model = getModel(config.modelId);
   const provider = getProvider(config.providerId);

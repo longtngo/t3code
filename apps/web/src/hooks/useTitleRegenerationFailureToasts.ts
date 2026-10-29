@@ -17,6 +17,7 @@ export function useTitleRegenerationFailureToasts(): void {
   const seenFailedAt = useRef(new Map<string, string | null>());
   const threads = useThreadShells();
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- shows an imperative toast when a thread's title-regeneration failure stamp changes
   useEffect(() => {
     for (const thread of threads) {
       const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));

@@ -69,6 +69,7 @@ function SlotField(props: {
   const lastReply = useRef<QueueSlotSettings | null>(null);
   const latestValue = useRef(props.value);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors the server value into the slider draft unless a commit is in flight
   useEffect(() => {
     latestValue.current = props.value;
     if (!sending.current) setDraft(props.value);

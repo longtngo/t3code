@@ -69,6 +69,7 @@ export function useThreadCompletionNotifications(): void {
   const activeThreadRefBox = useRef<ScopedThreadRef | null>(activeThreadRef);
   activeThreadRefBox.current = activeThreadRef;
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers this router as the notification host until unmount
   useEffect(() => {
     return registerThreadNotificationHost({
       navigateToThread: (ref) => {
@@ -81,6 +82,7 @@ export function useThreadCompletionNotifications(): void {
   // Desktop: native notifications are presented by the Electron main process,
   // which pushes the clicked thread ref back over this bridge listener. Route
   // to that thread (web notifications route in-process via dispatchNotification).
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- desktop bridge listener that routes to a clicked native notification's thread
   useEffect(() => {
     const onNotificationActivated =
       typeof window === "undefined" ? undefined : window.desktopBridge?.onNotificationActivated;
@@ -111,6 +113,7 @@ export function useThreadCompletionNotifications(): void {
   // running -> terminal edge across renders without any server/RPC changes.
   const previousStatesRef = useRef<Map<string, string | null>>(new Map());
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fires OS notifications on a thread's running-to-terminal edge
   useEffect(() => {
     const previous = previousStatesRef.current;
     const seen = new Set<string>();

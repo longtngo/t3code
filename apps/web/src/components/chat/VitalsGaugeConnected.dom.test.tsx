@@ -7,7 +7,13 @@ import { act, renderDom } from "../../testing/renderDom";
 const refreshProviders = vi.fn(async () => undefined);
 
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => refreshProviders }));
-vi.mock("~/state/server", () => ({ serverEnvironment: { refreshProviders: null } }));
+vi.mock("~/state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    serverEnvironment: { refreshProviders: null },
+    primaryServerEnvironmentThemesAtom: Atom.make([]),
+  };
+});
 vi.mock("~/state/environments", () => ({ useEnvironment: () => null }));
 vi.mock("~/hooks/useHostMetrics", () => ({
   useHostMetricsEnabled: () => [false, () => {}] as const,

@@ -18,6 +18,7 @@ export function useTitleRegenerationFailureAlerts(): void {
   const seenFailedAt = useRef(new Map<string, string | null>());
   const threads = useThreadShells();
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- shows a native Alert when a thread's title-regeneration failure stamp changes
   useEffect(() => {
     for (const thread of threads) {
       const key = scopedThreadKey(thread.environmentId, thread.id);

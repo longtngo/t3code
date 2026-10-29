@@ -150,18 +150,21 @@ export function useSubagentBackend(
   const lastPanelState = useRef<SubagentBackendState | null>(null);
 
   // Before the get effects, so an environment's cached answer applies again after a switch back.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- resets the backend reducer and seen answers when the environment changes
   useEffect(() => {
     lastBaseState.current = null;
     lastPanelState.current = null;
     dispatch({ type: "reset" });
   }, [environmentId]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- feeds each new base query answer into the generation-tracking reducer
   useEffect(() => {
     if (baseState == null || baseState === lastBaseState.current) return;
     lastBaseState.current = baseState;
     dispatch({ type: "get", issuedGeneration: baseIssuedGeneration, value: baseState });
   }, [baseState, baseIssuedGeneration]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- feeds each new panel query answer into the generation-tracking reducer
   useEffect(() => {
     if (panelState == null || panelState === lastPanelState.current) return;
     lastPanelState.current = panelState;
@@ -173,6 +176,7 @@ export function useSubagentBackend(
   // bump the generation and drop the new environment's cached answer), and not during render,
   // where a discarded render could name an environment that never reached the screen.
   const renderedEnvironmentRef = useRef(environmentId);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- records the committed environment so stale set answers are dropped
   useLayoutEffect(() => {
     renderedEnvironmentRef.current = environmentId;
   }, [environmentId]);

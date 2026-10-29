@@ -72,6 +72,7 @@ const THREAD_MODE_LABELS: Record<SubagentBackendThreadMode, string> = {
  */
 function usePanelNow(intervalMs: number | null): number {
   const [now, setNow] = useState(() => Date.now());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- interval clock that re-renders panel durations while enabled
   useEffect(() => {
     if (intervalMs === null) return;
     setNow(Date.now());

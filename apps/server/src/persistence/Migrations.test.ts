@@ -1,7 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
@@ -124,3 +127,21 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });
+
+// Fork: file numbers are not applied ids (fork registry invariant 1), so match by name.
+it.effect("registers every migration file", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dir = path.join(import.meta.dirname, "Migrations");
+    const files = (yield* fs.readDirectory(dir)).flatMap((name) => {
+      const match = /^(\d+)_(\w+)\.ts$/.exec(name);
+      return match ? [match[2]] : [];
+    });
+    // Id 34 re-registers PushSubscriptions on purpose, so compare distinct names.
+    assert.deepStrictEqual(
+      files.toSorted(),
+      [...new Set(migrationManifest.map(([, name]) => name))].toSorted(),
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

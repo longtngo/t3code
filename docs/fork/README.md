@@ -150,22 +150,26 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 78 entries, ids 1-78, unique and monotonic. Upstream's v2 schema
+Current: 81 entries, ids 1-81, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
 `061_PullRequestReviewGuides` is **70**, `062_ThreadFailureLookupIndex` is **71**,
 `063_DropUnusedV1Projections` is **72**, `064_CanonicalizeThreadPullRequestLinks` is **73**,
 `065_CodexUsageNativeTurnIndex` is **74**, `066_RepairClientSettlementTimestamps` is **75** and
-`067_WebhookDedupe` is **76**, `068_ShellStopRequestIndex` is **77** and
-`069_ThreadMessageSearch` is **78**.
+`067_WebhookDedupe` is **76**, `068_ShellStopRequestIndex` is **77**,
+`069_ThreadMessageSearch` is **78**, `070_PeerLinks` is **79**, `071_PeerLinkFence` is **80** and
+`072_WaitingLinkRequestIndex` is **81**.
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
 upstream's `reconcileV2PreviewMigration` stays out.
 Filename numbers double up on `033`, `037`, `038`, `039`, `041` and `042`. Id `34` is
 `PushSubscriptions`, the fork's first Web Push migration: real databases record it, so the manifest
 registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
-report the database's history as divergent.
+report the database's history as divergent. Upstream's "registers every migration file" test
+(`Migrations.test.ts`) therefore compares distinct names here, not entries.
+Upstream's `scripts/build-npm-launcher.ts` reads the head migration from file names (72, not 81);
+the fork does not publish the npm launcher, so it is left alone.
 
 The manifest is a list of **positional tuples** (`[1, "OrchestrationEvents", Migration0001]`), not
 object literals. A probe grepping for `id:` matches only the doc comment and reports nothing.
@@ -177,7 +181,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `78 78 ok` and `1`.
+Expect `81 81 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -223,19 +227,10 @@ The effect `socket.on("error")` patch this entry used to describe was retired at
 reconcile. Its guard is `pnpm run check:deps` (`scripts/check-dependency-invariants.ts`). It is not
 part of `pnpm verify`, so run it by hand on any effect bump.
 
-### 3. Sidebar: which file is the default flipped
+### 3. RETIRED: the sidebar default flip
 
-Upstream renamed the old `Sidebar.tsx` to `LegacySidebar.tsx` and promoted the v2 content into
-`Sidebar.tsx`, **swapping which one is the default**. Today `Sidebar.tsx` renders by default and
-`LegacySidebar.tsx` is opt-in behind the `legacySidebarEnabled` client setting
-(`useSettings.ts`, `legacySidebarEnabled`). Before that merge it was the other way round.
-
-Git is rename-blind during a merge, so fork edits to both files were presented **inverted** —
-v1 edits pointed at v2 content, v2 edits stranded in a deleted file. Resolving the conflicts as
-presented compiles, passes the full suite, and hides fork features in a sidebar nobody renders.
-
-**When a reconcile touches either sidebar, confirm which file each fork edit belongs in by
-reading the content, not by trusting the conflict markers.**
+Upstream deleted `LegacySidebar.tsx`. `Sidebar.tsx` is the only sidebar file, and a stored
+`legacySidebarEnabled` now lands on upstream's boring sidebar (`useSettings.ts`).
 
 ### 4. Deliberate deletions
 
@@ -402,12 +397,10 @@ and the old "does not resurrect an abandoned edit when the checkout is switched 
 with the switching, replaced by one asserting a single open editor.
 
 Scope of the row: `members` is a field on the **physical project**, so each row writes to its own
-checkout and must never go through `updateAllMembers`. `LegacySidebar.tsx` keeps its own
-plainly-labelled "Workspace repositories" dialog; that surface is opt-in and unchanged.
+checkout and must never go through `updateAllMembers`.
 
 Per-member project **renaming** ended with the dialog on the default sidebar — upstream's Name is
-group-level by design, and the per-member inputs were upstream's own deleted code. It still exists
-in the legacy sidebar's context menu.
+group-level by design, and the per-member inputs were upstream's own deleted code.
 
 ### 7. Stop is two rungs: `run.interrupt` `mode: "cooperative"`, then `"hard"`
 
@@ -473,10 +466,9 @@ copy gives 0).
 
 Same prefix, second victim: Antigravity's client-file resolution realpathed the session roots but
 fell back to the **unresolved** parent when a write targeted a directory that did not exist yet, so
-under `/var/folders` every new nested file read as outside the workspace. The fork's
-`realPathNearestAncestor` (`provider/acp/AntigravityClientFiles.ts`) realpaths the nearest existing
-ancestor and re-joins the missing tail. Not test-only: a symlinked project root hits the same
-branch in production.
+under `/var/folders` every new nested file read as outside the workspace. Upstream's
+`resolveClientFilePath` (`provider/acp/AntigravityClientFiles.ts`) now walks up to the nearest
+existing ancestor itself, so the fork's `realPathNearestAncestor` is gone.
 
 **Recurred at the 47th reconcile** in upstream's `storageCleanup.test.ts`: the sweep refuses a
 root whose realpath differs, so on macOS it removed nothing. Upstream's own fixture realpaths the
@@ -489,6 +481,10 @@ base dir since the 52nd reconcile, so that line is upstream's again.
 file then hangs to its 120 s timeout waiting on a scan that never matches, which reads like a
 second, unrelated defect. Upstream's CI is Linux, so this lands green there and red here. Fix it at
 the source: `NodeFSP.realpath(await NodeFSP.mkdtemp(...))`.
+
+**Recurred at the 54th reconcile** in upstream's new `packages/provider-fx` `skills.test.ts`: its
+three tests make `home` with `makeTempDirectoryScoped` while discovery returns real paths. The
+fork wraps each in `fileSystem.realPath`. Probe: `grep -c 'fileSystem.realPath(' packages/provider-fx/src/server/skills.test.ts` is `3`.
 
 ### 10. `ContextWindowMeter.logic.ts` outlives its component, on purpose
 
@@ -564,14 +560,11 @@ no minimum version, and an older one would never compact. Upstream's
 
 Fork commit `8fe3190f5` fixed a silent data loss in `ProviderInstanceCard` ("applying a
 local-LLM preset appeared to do nothing, then undid itself") with a render-phase `seededRef` +
-`environmentKey` value comparison. Upstream #8472 later fixed the same class with a `useEffect`,
-`previousEnvironmentRef` and `lastPublishedEnvironmentRef` + `providerEnvironmentsEqual`.
+`environmentKey` value comparison. Upstream fixed the same class too, now as `reconcileRowsDraft`,
+which keeps the draft's `lastPublished` value so the card's own round-trip cannot re-seed it.
 
-Upstream's is the superset — it remembers what this card last published, so its own round-trip
-cannot re-seed the draft, and it runs in an effect rather than during render. The 23rd reconcile
-merged **both** mechanisms into the file before this was noticed; they are collapsed to
-upstream's. Only the fork's half-typed-row guard survives, as `if (published === null) return;`
-on the publish path. `environmentKey` was deleted with the code it served.
+Upstream's is the superset, so the file uses only upstream's. The fork's half-typed-row guard
+survives as `if (published === null) return;` on the publish path.
 
 **Restoring the fork's `seededRef` block is re-adding a second re-seed, not restoring a fix.**
 
@@ -803,7 +796,8 @@ slow because it fans out or shells out joins `longRunningRpcAckMethods` (120s), 
 `untrackedRpcAckMethods`. "Slow by design" and "unobservable" are different claims, and the
 untracked set hides a call that has genuinely wedged. Upstream #9358 put `serverGetUsageSummary`
 in the untracked set; here it sits on the long leash and its test asserts the 120s edge. Expect
-upstream to keep adding to the untracked set; move each addition down.
+upstream to keep adding to the untracked set; move each addition down. Upstream's
+`sourceControlSignInWait` stays untracked: it waits on a human signing in, not on the server.
 
 **One exception, added 2026-09-04.** `isTrackedRpcAck` drops every method whose name contains
 "subscribe" before the leash is consulted, because a subscription is a long-lived stream rather
@@ -812,20 +806,12 @@ so upstream #9496's new `pullRequests.subscribeRefreshes` broke them with nothin
 enumeration now excludes subscribe-shaped methods. A new non-subscribe method in the namespace
 should still be picked up automatically.
 
-### 24. The resting composer and the strip toggle are orthogonal, and meet in `ChatView`
+### 24. The strip toggle unmounts the strip; its wrapper stays
 
-Upstream #7855 auto-collapses the whole composer when an existing desktop thread's composer is
-unfocused, and relocates the model/mode controls into the thread-context strip. The fork's
-`ed3b7263e` is an explicit, persisted footer toggle that hides that strip. Both are kept. They
-meet at one point: upstream needs the strip **mounted** while invisible so the resting composer can
-measure it, and the fork needs the `aria-controls` target to exist. `ChatView.tsx` therefore
-mounts the strip on upstream's `mountComposerContextStrip` and passes
-`contextStripVisible={renderComposerContextStrip}` — the fork's collapse suppresses the strip's
-chrome, not its mount. With the strip collapsed a resting composer's relocated controls are hidden
-too; upstream's own doc accepts that case (the controls return on focus).
-
-The `ContextWindowMeter` upstream renders behind `showSecondaryStatus` is still rejected (§4, §10);
-the fork's Vitals gauge sits behind the same flag so a resting composer stays one line high.
+Upstream removed the resting composer and its scroll-collapse (#25869). The fork's `ed3b7263e`, an
+explicit, persisted footer toggle that hides the thread-context strip, remains. Collapsing it
+unmounts the strip (`renderComposerContextStrip` in `ChatView.tsx`), but the wrapper carrying
+`COMPOSER_CONTEXT_STRIP_ID` always renders so the toggle's `aria-controls` resolves.
 
 ### 25. ACP cancel keeps the fork's generation guard over upstream's dispatch semaphore
 
@@ -1153,13 +1139,14 @@ change that rebuilds projects from events would silently drop every project's me
 ### 43. The fork's revert prompt-restore is RETIRED; upstream's rewind owns it
 
 Upstream's rewind restores the message (text and attachments) to the composer, so the fork's own
-restore machinery is gone. Two fork pieces sit on top of it in `ChatView.tsx`:
+restore machinery is gone. Two fork pieces sit on top of it:
 
 - the confirm dialog states how many messages the rewind discards,
   `countRevertDiscardedMessages` (every message of a run with an ordinal above the target turn
   count that is not already `rolled_back`);
-- both rewind entry points (`onRevertToTurnCount`, `onRollbackCheckpoint`) claim the thread's
-  slot with `claimThreadRewind`, which reads the live store. Upstream's guard reads the render's
+- the rewind entry point (`onRevertToTurnCount` in `useTimelineRewind`; upstream deleted the
+  rollback-checkpoint one) claims the thread's slot with `claimThreadRewind`, which reads the live
+  store. Upstream's guard reads the render's
   `isRevertingCheckpoint`, so a second click that lands before the re-render (a double click, or
   one queued behind the confirm await) would dispatch a second rewind and restore the prompt twice.
 
@@ -1416,9 +1403,9 @@ looks the handler up by tag. A new fork RPC goes in both the fork group and the 
 `git worktree prune` is repo-global: it drops every registration whose directory is absent right
 now (an unmounted volume, a worktree mid-move), and `repair` cannot restore them. The fork
 recreates a deleted thread worktree with `createWorktree({ ..., reuseRegisteredPath: true })`,
-which takes over that one stale entry. Two sites: `ProviderTurnStartService.ts` and
-`CheckpointRollbackService.ts`. Upstream's #15208 (49th reconcile) added the rollback site with a
-prune in front, which merged without a conflict. Probe, expect `0` and `2`:
+which takes over that one stale entry. Three calls: two in `ProviderTurnStartService.ts` and one
+in `CheckpointRollbackService.ts`. Upstream's #15208 (49th reconcile) added the rollback site with a
+prune in front, which merged without a conflict. Probe, expect `0` and `3`:
 
 ```sh
 git grep -n 'pruneWorktrees' -- apps/server/src/orchestration-v2 | grep -v -e '\.test\.' -e testkit | wc -l
@@ -1473,7 +1460,7 @@ Each competes with a fork feature that already covers it, and each lands mostly 
 markers, so a later merge can bring it back with nothing failing.
 
 - Draft model reconciliation (#20886, `subscribeComposerDraftModelReconciliation`, mounted in web
-  `AppRoot.tsx` and mobile `App.tsx`, helper `draftModelPickMatchesThread`). It clears a draft pick
+  `appInit.tsx` and mobile `App.tsx`, helper `draftModelPickMatchesThread`). It clears a draft pick
   once the thread matches it; the fork's `adoptThreadModelSelection` overwrites the pick instead,
   because a cleared pick falls back to the session's previous instance for the whole switch.
   Probe: `grep -rc subscribeComposerDraftModelReconciliation apps/web/src apps/mobile/src | grep -v ':0'`
@@ -1502,15 +1489,11 @@ deleted its own list. Four fork test files poll (`ClaudeAdapterV2.test.ts` Stop-
 waiting on a real git's `index.lock`). They are in a separate FORK block beside upstream's list in
 the root `vite.config.ts`. Convert a file, then delete its entry; never add one.
 
-### 73. Fork files with React effects sit in upstream's effect ledger
+### 73. RETIRED: the React effect ledger
 
-Upstream's `t3code/react-effect-budget` reads `scripts/effect-budget.json`: each web/mobile file may
-hold that many `useEffect`/`useLayoutEffect` calls, and a file with no entry gets 0. Upstream bumps
-the ledger itself when its own effects land. The 53rd reconcile added the fork's files (queue,
-outbox, notifications, Vitals, subagent backend, resource queue, ...) at their counts and raised
-`ChatView.tsx` (23 -> 26) and mobile `ThreadRouteScreen.tsx` (3 -> 5) by the fork's effects. The JSON
-cannot carry comments, so this entry is the record. Lower a count when a fork effect goes; a
-reconcile that takes upstream's ledger whole turns every fork entry into a lint error.
+Upstream deleted `scripts/effect-budget.json` for the lint rule `t3code/no-unreasoned-state-sync`:
+every effect carries `// oxlint-disable-next-line t3code/no-unreasoned-state-sync -- <why>`, and
+fork effects do too.
 
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 
@@ -1551,7 +1534,7 @@ reader that stopped taking, so each reader needs its own bound.
   A new worker with a slow inline handler pins every event from its position on.
 - **`groupedWithin` is banned in new code** (`no-unsafe-stream-aggregate`). On the leaking
   effect build its idle schedule loop pins continuation frames until the next element arrives
-  (beta.102: +3.5 MB in 4 s at 1,000 idle ticks/s; ~79 MB/h per idle 50 ms subscription). Three
+  (beta.102: +3.5 MB in 4 s at 1,000 idle ticks/s; ~79 MB/h per idle 50 ms subscription). Two
   upstream sites in `ws.ts` keep a suppression: measured flat on the pinned 4.0.0-rc.115
   (+0.03 MB idle probe; a 50 ms window plateaus). Re-measure with `scripts/idle-aggregate-probe.ts`
   on any effect bump. Use the idle probe: a bursty source hides the leak, because each element

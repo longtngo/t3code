@@ -28,6 +28,12 @@ vi.mock("./ThreadAutomationsPanel", () => ({
 vi.mock("./ThreadRelationshipsControl", () => ({
   ThreadRelationshipsPanel: () => null,
 }));
+vi.mock("./ThreadServersPanel", () => ({
+  ThreadServersPanel: () => null,
+}));
+vi.mock("./ThreadDetailsUsage", () => ({
+  ThreadDetailsUsage: () => null,
+}));
 vi.mock("./ThreadDetailsCard", () => ({
   ThreadDetailsCard: ({
     children,
@@ -43,7 +49,6 @@ function panelProps(overrides: Partial<ThreadDetailsPanelProps> = {}): ThreadDet
   return {
     anchor: { current: null },
     handle: PopoverCreateHandle(),
-    onPresentationChange: vi.fn(),
     openInShortcutEnabled: false,
     environmentId: "environment:thread-details" as EnvironmentId,
     threadId: "thread:thread-details" as ThreadId,
@@ -73,6 +78,7 @@ function panelProps(overrides: Partial<ThreadDetailsPanelProps> = {}): ThreadDet
     taskListView: { primary: null, primaryKind: null, history: [] },
     taskListActive: false,
     backgroundTasks: [],
+    usage: { providerInstanceId: null, providers: [], sources: [], contextWindow: null },
     ...overrides,
   };
 }

@@ -65,6 +65,7 @@ export function ChatTerminalDrawers(props: ChatTerminalDrawersProps) {
   // is gone, and pruning against it would delete live state.
   const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const threadShells = useThreadShells();
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- prunes persisted terminal UI state for threads gone from the loaded shell list
   useEffect(() => {
     if (!shellsBootstrapped) return;
     useTerminalUiStateStore.getState().removeOrphanedTerminalUiStates(

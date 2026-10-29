@@ -30,6 +30,14 @@
     "./server/GitHubQuota": {
       "types": "./src/server/GitHubQuota.ts",
       "import": "./src/server/GitHubQuota.ts"
+    },
+    "./server/GitHubAppAccess": {
+      "types": "./src/server/GitHubAppAccess.ts",
+      "import": "./src/server/GitHubAppAccess.ts"
+    },
+    "./server/GitHubAppSignIn": {
+      "types": "./src/server/GitHubAppSignIn.ts",
+      "import": "./src/server/GitHubAppSignIn.ts"
     }
   },
   "scripts": {

@@ -26,6 +26,7 @@ function AddressBar({ value, onSubmit }: { value: string; onSubmit: (path: strin
   // (not state) because it must be read synchronously inside the blur handler.
   const revertOnBlurRef = useRef(false);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors the route path into the address bar draft while it is not being edited
   useEffect(() => {
     if (!editing) setDraft(value);
   }, [value, editing]);

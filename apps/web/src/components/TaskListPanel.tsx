@@ -11,7 +11,6 @@ import { memo } from "react";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { cn } from "~/lib/utils";
 import { useNowMinute } from "../hooks/useNowMinute";
-import type { ActivePlanState } from "../session-logic";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { ComposerBanner } from "./chat/ComposerBanner";
 import { TaskSegments, TaskStepList } from "./chat/TaskStepList";
@@ -19,6 +18,7 @@ import { ThreadDetailsRowGroup } from "./chat/ThreadDetailsRowGroup";
 import { ThreadDetailsSection } from "./chat/ThreadDetailsSection";
 import {
   taskListHeaderState,
+  type ActivePlanState,
   type TaskListEntry,
   type TaskListHeaderChip,
   type TaskListView,

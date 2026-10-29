@@ -168,12 +168,14 @@ export function ThreadQueueCoordinator() {
   );
   const [tick, setTick] = useState(0);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to storage events so other tabs' queue changes reach this tab
   useEffect(() => subscribeToCrossTabThreadQueueUpdates(), []);
 
   // An archived or deleted thread leaves the queue. Only once every environment's
   // shells have loaded: a thread missing from a half-loaded list is not gone.
   const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const draftSessions = useComposerDraftStore((state) => state.draftThreadsByThreadKey);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- prunes archived or deleted threads from the shared queue store once shells load
   useEffect(() => {
     if (!active || !shellsBootstrapped || entries.length === 0) return;
     useThreadQueueStore
@@ -182,6 +184,7 @@ export function ThreadQueueCoordinator() {
   }, [active, draftSessions, entries, ownerId, shellsBootstrapped, threads]);
 
   const hasWork = entries.length > 0 || inFlight !== null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- interval tick that re-evaluates claim and landing ages while the queue has work
   useEffect(() => {
     if (!hasWork) return;
     const id = window.setInterval(() => setTick((value) => value + 1), QUEUE_TICK_MS);
@@ -299,6 +302,7 @@ export function ThreadQueueCoordinator() {
     ],
   );
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drives the queue: claims and sends the next entry to the server as state ticks
   useEffect(() => {
     void tick;
     if (!active) return;

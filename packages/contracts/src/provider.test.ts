@@ -2,69 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { ThreadId } from "./baseSchemas.ts";
-import {
-  ProviderSendTurnInput,
-  ProviderSession,
-  ProviderSessionStartInput,
-  ProviderUploadFeedbackError,
-} from "./provider.ts";
+import { ProviderSendTurnInput, ProviderUploadFeedbackError } from "./provider.ts";
 
-const decodeProviderSessionStartInput = Schema.decodeUnknownSync(ProviderSessionStartInput);
 const decodeProviderSendTurnInput = Schema.decodeUnknownSync(ProviderSendTurnInput);
-const decodeProviderSession = Schema.decodeUnknownSync(ProviderSession);
-
-describe("ProviderSessionStartInput", () => {
-  it("carries workspace member paths on session start", () => {
-    const parsed = decodeProviderSessionStartInput({
-      threadId: "thread-1",
-      runtimeMode: "full-access",
-      cwd: "/tmp/workspace",
-      workspaceMemberPaths: ["/tmp/prm_portal_api", "/tmp/warehouse"],
-    });
-    expect(parsed.workspaceMemberPaths).toEqual(["/tmp/prm_portal_api", "/tmp/warehouse"]);
-  });
-
-  it("omits workspace member paths for older clients", () => {
-    const parsed = decodeProviderSessionStartInput({
-      threadId: "thread-1",
-      runtimeMode: "full-access",
-      cwd: "/tmp/workspace",
-    });
-    expect(parsed.workspaceMemberPaths).toBeUndefined();
-  });
-});
-
-// FORK: workspace member paths granted to a provider session.
-describe("ProviderSession workspace members", () => {
-  it("carries the granted workspace member paths on ProviderSession", () => {
-    const session = decodeProviderSession({
-      provider: "claudeAgent",
-      providerInstanceId: "claude_work",
-      status: "ready",
-      runtimeMode: "full-access",
-      cwd: "/tmp/workspace",
-      workspaceMemberPaths: ["/tmp/prm_portal_api", "/tmp/warehouse"],
-      threadId: "thread-1",
-      createdAt: "2024-01-01T00:00:00Z",
-      updatedAt: "2024-01-01T00:00:00Z",
-    });
-    expect(session.workspaceMemberPaths).toEqual(["/tmp/prm_portal_api", "/tmp/warehouse"]);
-  });
-
-  it("omits workspace member paths on a ProviderSession from an older server", () => {
-    const session = decodeProviderSession({
-      provider: "claudeAgent",
-      providerInstanceId: "claude_work",
-      status: "ready",
-      runtimeMode: "full-access",
-      cwd: "/tmp/workspace",
-      threadId: "thread-1",
-      createdAt: "2024-01-01T00:00:00Z",
-      updatedAt: "2024-01-01T00:00:00Z",
-    });
-    expect(session.workspaceMemberPaths).toBeUndefined();
-  });
-});
 
 describe("ProviderSendTurnInput", () => {
   it.each(["image", "file"])(

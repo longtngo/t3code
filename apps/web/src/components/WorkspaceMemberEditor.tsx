@@ -150,6 +150,7 @@ export default function WorkspaceMemberEditor({
   );
 
   // Picking a repository fills in the branch it currently has checked out.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- autofills the branch field when the git status query reports the checked-out branch
   useEffect(() => {
     if (branchCwd === null || currentBranch === null || autofilledForCwd === branchCwd) return;
     setAutofilledForCwd(branchCwd);

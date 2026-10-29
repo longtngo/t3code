@@ -30,6 +30,13 @@ import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
 import { parseGitHubAuthStatus } from "./gitHubAuthStatus.ts";
 import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
+
+const appSignedOut = Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({
+  enabled: false,
+  token: () => Effect.succeedNone,
+  invalidate: () => Effect.void,
+});
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -190,6 +197,8 @@ function harness(input: {
       }),
     fetchRemoteTrackingBranch: (args) => record("fetchRemoteTrackingBranch", undefined)(args),
     setBranchUpstream: (args) => record("setBranchUpstream", undefined)(args),
+    createBranch: (args) => record("createBranch", undefined)(args),
+    writeConfigValue: (args) => record("writeConfigValue", undefined)(args),
     switchRef: (args) => record("switchRef", { refName: args.refName })(args) as never,
     listLocalBranchNames: () =>
       input.gitFailure === undefined
@@ -228,15 +237,19 @@ function harness(input: {
               })),
           account: () => Effect.die("unused"),
           others: () => Effect.succeed([]),
+          saved: () => Effect.succeedNone,
+          fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
           invalidate: () => Effect.void,
         }),
         GitHubQuota.layer,
         SourceControlRateLimit.layer,
+        appSignedOut,
       ),
     ),
   );
   const layer = Layer.mergeAll(
     host,
+    appSignedOut,
     Layer.mock(GitHubRest.GitHubRest)({ withDirectory: () => (effect) => effect, ...input.api }),
     policy,
     Layer.succeed(HttpClient.HttpClient, graphQlHttp(graphql, graphqlCalls)),
@@ -604,6 +617,19 @@ describe("GitHubSourceControlProvider.checkoutChangeRequest", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("records the branch base for gh through the host's config write", () => {
+    const { layer, git } = harness({
+      remotes: remotesOutput(["origin", "git@github.com:acme/web.git"]),
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      yield* gh.recordBranchBase!({ cwd: "/repo", branch: "feature", baseBranch: "main" });
+      assert.deepStrictEqual(git, [
+        ["writeConfigValue", { cwd: "/repo", key: "branch.feature.gh-merge-base", value: "main" }],
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
   it("names the local branch the way gh pr checkout does", () => {
     const name = (headRefName: string, isCrossRepository: boolean) =>
       GitHubSourceControlProvider.pullRequestCheckoutBranchName({
@@ -894,6 +920,7 @@ it("reports every gh login and leads with the account Settings pin", () => {
   const auth = GitHubSourceControlProvider.parseGitHubAuth(multiAccountStatus(), {
     hosts: { "github.com": { account: "work", enabled: true } },
     tokens: {},
+    signIns: {},
   });
   assert.deepStrictEqual(auth.account, Option.some("work"));
   assert.deepStrictEqual(auth.accounts, [
@@ -907,6 +934,7 @@ it("reports unauthenticated when Settings turn off every signed-in host", () => 
   const auth = GitHubSourceControlProvider.parseGitHubAuth(multiAccountStatus(), {
     hosts: { "github.com": { enabled: false } },
     tokens: {},
+    signIns: {},
   });
   assert.strictEqual(auth.status, "unauthenticated");
   assert.deepStrictEqual(
@@ -926,7 +954,7 @@ it("names the environment token that overrides the Settings choice", () => {
         tokenSource: "GH_TOKEN",
       },
     ]),
-    { hosts: { "github.com": { account: "work", enabled: true } }, tokens: {} },
+    { hosts: { "github.com": { account: "work", enabled: true } }, tokens: {}, signIns: {} },
     { GH_TOKEN: "env-token" },
   );
   assert.deepStrictEqual(auth.account, Option.some("bot"));
@@ -964,7 +992,7 @@ it("names an enterprise token only for the host GH_HOST names", () => {
       },
     }),
   );
-  const settings = { hosts: {}, tokens: {} };
+  const settings = { hosts: {}, tokens: {}, signIns: {} };
   const unset = GitHubSourceControlProvider.parseGitHubAuth(status, settings, {
     GH_ENTERPRISE_TOKEN: "enterprise-token",
   });
@@ -999,7 +1027,7 @@ it("says how to use an enterprise token when it is the host's only login", () =>
   );
   const auth = GitHubSourceControlProvider.parseGitHubAuth(
     status,
-    { hosts: {}, tokens: {} },
+    { hosts: {}, tokens: {}, signIns: {} },
     { GH_ENTERPRISE_TOKEN: "x" },
   );
   assert.strictEqual(auth.status, "unauthenticated");
@@ -1100,6 +1128,11 @@ it.live.each([
         ["github.com", "repos/team/explicit"],
       ],
     );
+    assert.deepStrictEqual(git.find(([name]) => name === "createBranch")?.[1], {
+      cwd: "/repo",
+      branch: "feature",
+      startPoint: "refs/remotes/enterprise/feature",
+    });
     assert.deepStrictEqual(git.find(([name]) => name === "fetchRemoteTrackingBranch")?.[1], {
       cwd: "/repo",
       remoteName: "enterprise",

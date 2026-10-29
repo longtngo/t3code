@@ -121,7 +121,7 @@ export function readPreparedConnection(environmentId: EnvironmentId) {
 export function useEnvironmentSessionState(environmentId: EnvironmentId) {
   const result = useAtomValue(environmentSession.sessionStateAtom(environmentId));
   return {
-    data: Option.getOrNull(AsyncResult.value(result)),
+    data: AsyncResult.getOrElse(result, () => null),
     hasError: result._tag === "Failure",
     isPending: result.waiting,
   };

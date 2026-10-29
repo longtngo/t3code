@@ -266,11 +266,13 @@ export function SidebarResourceQueue({
 
   // Un-pin whenever the panel closes, including when the footer closed it because the sibling
   // opened. Left latched, the next hover-leave would refuse to close a panel nobody pinned.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- un-pins the panel whenever it closes, including when a sibling closed it
   useEffect(() => {
     if (!open) setPinned(false);
   }, [open]);
 
   // Drop any in-flight close timer on unmount so it cannot fire against a dead component.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the pending hover-close timer on unmount
   useEffect(
     () => () => {
       if (closeTimer.current) clearTimeout(closeTimer.current);
@@ -279,6 +281,7 @@ export function SidebarResourceQueue({
   );
 
   // Re-render every second while open so the "elapsed" durations tick live between polls.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- interval that re-renders elapsed durations while the panel is open
   useEffect(() => {
     if (!open) return;
     const id = setInterval(tick, 1000);

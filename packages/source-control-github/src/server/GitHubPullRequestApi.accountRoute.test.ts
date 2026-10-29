@@ -12,6 +12,8 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
+import * as GitHubAppAccess from "./GitHubAppAccess.ts";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
@@ -47,6 +49,7 @@ const coreNode = (number: number) => ({
   url: `https://github.com/uni/delivery-api/pull/${number}`,
   body: "",
   isDraft: false,
+  maintainerCanModify: false,
   mergeable: "MERGEABLE",
   mergeStateStatus: "BLOCKED",
   reviewDecision: null,
@@ -107,6 +110,8 @@ function harness(options: { readonly missingPullRequests?: boolean } = {}) {
     GitHubCredentials.GitHubCredentials,
     GitHubCredentials.GitHubCredentials.of({
       get: (host) => Effect.succeed(credentialOf(host, "A")),
+      saved: () => Effect.succeedNone,
+      fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
       account: (host, login) => Effect.succeed(credentialOf(host, login)),
       others: (host) => Effect.succeed([credentialOf(host, "B")]),
       invalidate: () => Effect.void,
@@ -179,9 +184,12 @@ function harness(options: { readonly missingPullRequests?: boolean } = {}) {
     }),
   );
   const layer = GitHubPullRequestApi.layer.pipe(
+    Layer.provideMerge(GitHubAppAccess.layer),
     Layer.provideMerge(
       GitHubRest.layer.pipe(
         Layer.provide(credentials),
+        // Signed out: no client id in the environment below.
+        Layer.provideMerge(GitHubAppSignIn.layer),
         Layer.provideMerge(GitHubQuota.layer),
         Layer.provideMerge(SourceControlRateLimit.layer),
         Layer.provideMerge(http),

@@ -47,6 +47,7 @@ function ShortcutManagerDialog({
   const [draft, setDraft] = useState<ComposerShortcut[]>([]);
 
   // Re-seed the draft from the saved list each time the dialog opens.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- re-seeds the dialog's draft from the saved shortcuts each time it opens
   useEffect(() => {
     if (open) setDraft(shortcuts.map((s) => ({ ...s })));
   }, [open, shortcuts]);

@@ -761,6 +761,7 @@ export function VitalsGauge(props: {
  */
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- interval clock that re-renders countdowns while mounted
   useEffect(() => {
     setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), intervalMs);

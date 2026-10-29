@@ -22,7 +22,6 @@ const shellPresent = vi.hoisted(() => ({ value: true }));
 const archivedShells = vi.hoisted(() => ({
   atom: null as unknown as Atom.Writable<{ readonly keys: ReadonlySet<string> }>,
 }));
-const supportsSnooze = vi.hoisted(() => ({ value: true }));
 const commands = vi.hoisted(() => ({
   pin: vi.fn(),
   unpin: vi.fn(),
@@ -101,10 +100,7 @@ vi.mock("../state/entities", async (original) => {
           }),
         timeoutMs,
       }),
-    readEnvironmentSupportsPinning: () => true,
-    readEnvironmentSupportsPinReorder: () => true,
-    readEnvironmentSupportsSettlement: () => true,
-    readEnvironmentSupportsSnooze: () => supportsSnooze.value,
+    readEnvironmentServerConfigLoaded: () => true,
     readEnvironmentSupportsSidebarSections: () => true,
     readThreadShell: () => (shellPresent.value ? threadShell : null),
   };
@@ -157,7 +153,6 @@ beforeEach(() => {
   threadShell.snoozedUntil = null;
   threadShell.sidebarSectionId = null;
   shellPresent.value = true;
-  supportsSnooze.value = true;
 });
 /** Lets an un-awaited follow-up (the wake after a settle) finish. */
 async function flushMicrotasks() {
@@ -355,16 +350,6 @@ describe("settle and snooze Undo", () => {
     expect(winner).toBe("settled");
     expect(commands.unsnooze).toHaveBeenCalledOnce();
     finishWake(AsyncResult.success(undefined));
-  });
-
-  it("wakes through unsnoozeThread's checks: a server without snooze gets no wake", async () => {
-    threadShell.snoozedUntil = "2999-01-01T00:00:00.000Z";
-    supportsSnooze.value = false;
-    vi.spyOn(toastManager, "add").mockReturnValue("toast");
-    await useThreadActions().settleThread(target);
-    await flushMicrotasks();
-    expect(commands.settle).toHaveBeenCalledOnce();
-    expect(commands.unsnooze).not.toHaveBeenCalled();
   });
 
   it("stops settle restoration if restoring the pin fails", async () => {

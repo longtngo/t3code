@@ -1,4 +1,4 @@
-import type { StartThreadTurnInput } from "@t3tools/client-runtime/state/threads";
+import type { StartThreadTurnInput } from "@t3tools/client-runtime/operations";
 import type { CommandId, EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { type StateStorage, createJSONStorage, persist } from "zustand/middleware";

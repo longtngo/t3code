@@ -36,6 +36,8 @@ import * as SourceControlRateLimit from "@t3tools/source-control-core/server/Sou
 import { fakePullRequestProvider } from "@t3tools/source-control-testing/fakeSourceControlDriver";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 import * as GitHubRest from "@t3tools/source-control-github/server/GitHubRest";
+import * as GitHubAppAccess from "@t3tools/source-control-github/server/GitHubAppAccess";
+import * as GitHubAppSignIn from "@t3tools/source-control-github/server/GitHubAppSignIn";
 import * as GitHubCredentials from "@t3tools/source-control-github/server/GitHubCredentials";
 import * as GitHubPullRequestApi from "@t3tools/source-control-github/server/GitHubPullRequestApi";
 import * as GitHubPullRequestProvider from "@t3tools/source-control-github/server/GitHubPullRequestProvider";
@@ -127,6 +129,65 @@ function hostedChangeRequest(body: string, additions = 1) {
     },
   };
 }
+
+it.effect("reads maintainer edits and changes them through the update command", () =>
+  Effect.gen(function* () {
+    let enabled = true;
+    const provider = fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+      getChangeRequest: () =>
+        Effect.succeed({ ...hostedChangeRequest("Body"), maintainerCanModify: enabled }),
+      updateChangeRequest: (input) =>
+        Effect.sync(() => {
+          assert.strictEqual(input.title, undefined);
+          assert.strictEqual(input.body, undefined);
+          enabled = input.maintainerCanModify!;
+        }),
+    });
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/w", repository: "acme/web" })],
+      providers: [
+        {
+          ...provider,
+          capabilities: {
+            ...provider.capabilities,
+            edit: { changeRequest: true, comment: true, maintainerEdits: true },
+          },
+        },
+      ],
+    });
+    const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    assert.strictEqual((yield* service.detail(ref)).maintainerCanModify, true);
+    yield* service.update({ ...ref, maintainerCanModify: false });
+    assert.strictEqual((yield* service.detail(ref)).maintainerCanModify, false);
+  }),
+);
+
+it.effect("refuses maintainer edits on a host without the capability", () =>
+  Effect.gen(function* () {
+    let writes = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/w", repository: "acme/web" })],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          updateChangeRequest: () =>
+            Effect.sync(() => {
+              writes += 1;
+            }),
+        }),
+      ],
+    });
+    const result = yield* service
+      .update({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        maintainerCanModify: false,
+      })
+      .pipe(Effect.flip);
+    assert.strictEqual(result._tag, "PullRequestOperationError");
+    assert.strictEqual(writes, 0);
+  }),
+);
 
 it.effect("does not wait for an in-flight detail read to display a preview", () =>
   Effect.gen(function* () {
@@ -4811,6 +4872,11 @@ describe("each project's own account as the viewer", () => {
   const realGitHubProvider = (tokenOf: Record<string, string>) =>
     Effect.gen(function* () {
       const userRequests: Array<string> = [];
+      const appSignedOut = Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({
+        enabled: false,
+        token: () => Effect.succeedNone,
+        invalidate: () => Effect.void,
+      });
       const credentials = Layer.succeed(
         GitHubCredentials.GitHubCredentials,
         GitHubCredentials.GitHubCredentials.of({
@@ -4823,6 +4889,8 @@ describe("each project's own account as the viewer", () => {
               fingerprint: `${host}:${token}`,
             });
           },
+          saved: () => Effect.succeedNone,
+          fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
           account: () => Effect.die("unused"),
           others: () => Effect.succeed([]),
           invalidate: () => Effect.void,
@@ -4859,9 +4927,10 @@ describe("each project's own account as the viewer", () => {
       const provider = yield* GitHubPullRequestProvider.make.pipe(
         Effect.provide(
           GitHubPullRequestApi.layer.pipe(
-            Layer.provide(
+            Layer.provide(GitHubAppAccess.layer),
+            Layer.provideMerge(
               GitHubRest.layer.pipe(
-                Layer.provideMerge(Layer.mergeAll(credentials, http)),
+                Layer.provideMerge(Layer.mergeAll(credentials, http, appSignedOut)),
                 Layer.provideMerge(GitHubQuota.layer),
                 Layer.provideMerge(SourceControlRateLimit.layer),
               ),

@@ -120,6 +120,7 @@ export function useImportLocalQueueSlots(): void {
   const writable = usePrimaryCanWriteSettings();
   const state = useRef<"idle" | "sending" | "done">("idle");
   const attempts = useRef(0);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- one-time server settings write that imports this browser's local queue slots
   useEffect(() => {
     if (!writable) return;
     if (primaryId === null || config === null || config.settings.queueSlots !== undefined) return;

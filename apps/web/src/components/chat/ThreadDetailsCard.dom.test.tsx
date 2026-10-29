@@ -6,6 +6,7 @@ import { useRightPanelStore } from "../../rightPanelStore";
 import { PopoverCreateHandle } from "../ui/popover";
 import { ChatCanvasContext } from "./ChatCanvasContext";
 import { resolveChatCanvasLayout } from "./chatCanvasLayout";
+import { resolveThreadDetailsCardLayout } from "./threadDetailsCardLayout";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 
 const threadRef = {
@@ -15,16 +16,18 @@ const threadRef = {
 // 424 tall leaves the inline card 400 px (12 px gap above and below).
 const container = { width: 1400, height: 424 };
 const SECTION = 2000;
+const lane = { padding: 0, minChatWidth: 0 };
+const placement = resolveThreadDetailsCardLayout({ container, lane, frame: null });
 const canvas = {
   container,
-  lane: { padding: 0, minChatWidth: 0 },
+  lane,
   layout: resolveChatCanvasLayout({ container, preview: null }),
   previewKey: null,
-  reportPreview: () => {},
-  clearPreview: () => {},
   registerTimeline: () => {},
-  reportDetailsCard: () => {},
+  measureDetailsCard: () => {},
   detailsCardTopInset: 0,
+  preferredDetailsCard: placement,
+  detailsCardPlacement: placement,
 };
 
 // happy-dom has no layout, so every height is 0. Give each activity section a tall height and
@@ -62,7 +65,7 @@ async function renderCard(workspaceHeight: number) {
         threadRef={threadRef}
         anchor={createRef<Element>()}
         handle={PopoverCreateHandle()}
-        onPresentationChange={() => {}}
+        contentKey="density"
       >
         {(density) => (
           <div data-testid="density">

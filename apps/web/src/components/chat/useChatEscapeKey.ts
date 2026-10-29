@@ -26,6 +26,7 @@ export function useChatEscapeKey(
 ): void {
   const { onInterrupt, queuedMessageCount, onRecallQueuedMessage } = composerProps;
   const { composerFormRef, canInterrupt, hasPendingQuestion } = input;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window keydown listener that handles Escape for stop and queued-message recall
   useEffect(() => {
     const onKeyDown = createChatEscapeHandler({
       isChatSurfaceActive: () =>

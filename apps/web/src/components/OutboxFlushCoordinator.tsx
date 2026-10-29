@@ -13,7 +13,7 @@ import {
   subscribeToCrossTabOutboxUpdates,
   useCommandOutbox,
 } from "~/rpc/commandOutbox";
-import type { StartThreadTurnInput } from "@t3tools/client-runtime/state/threads";
+import type { StartThreadTurnInput } from "@t3tools/client-runtime/operations";
 import { readThreadShell } from "~/state/entities";
 import { useEnvironments } from "~/state/environments";
 import { threadEnvironment } from "~/state/threads";
@@ -59,12 +59,15 @@ export function OutboxFlushCoordinator() {
     }
   }, []);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- evicts aged-out turns from the persisted outbox and toasts what was dropped
   useEffect(() => retireExpiredTurns(), [queue, retireExpiredTurns]);
 
   // Another tab may have flushed a turn; without this we keep a stale copy,
   // show its bubble forever, and write it back to storage on our next update.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to storage events so another tab's outbox flush reaches this tab
   useEffect(() => subscribeToCrossTabOutboxUpdates(), []);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- sends queued outbox turns over the connection once their environment connects
   useEffect(() => {
     if (queue.length === 0 || flushingRef.current) return;
     // Also check here, not just on the queue-keyed effect above: a reconnect

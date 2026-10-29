@@ -173,6 +173,12 @@ import Migration0077 from "./Migrations/068_ShellStopRequestIndex.ts";
 // Upstream's 069 (thread message search) arrives after the fork already deployed ids
 // 33-77, so it takes the next free id (78) rather than its filename number (registry section 1).
 import Migration0078 from "./Migrations/069_ThreadMessageSearch.ts";
+// Upstream's 070-072 (environment links, link fence, waiting link request index) arrive after
+// the fork already deployed ids 33-78, so they take the next free ids (79, 80, 81) rather than
+// their filename numbers (registry section 1).
+import Migration0079 from "./Migrations/070_PeerLinks.ts";
+import Migration0080 from "./Migrations/071_PeerLinkFence.ts";
+import Migration0081 from "./Migrations/072_WaitingLinkRequestIndex.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -256,6 +262,9 @@ export const migrationEntries = [
   [76, "WebhookDedupe", Migration0076],
   [77, "ShellStopRequestIndex", Migration0077],
   [78, "ThreadMessageSearch", Migration0078],
+  [79, "PeerLinks", Migration0079],
+  [80, "PeerLinkFence", Migration0080],
+  [81, "WaitingLinkRequestIndex", Migration0081],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

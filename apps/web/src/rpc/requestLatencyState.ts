@@ -1,4 +1,3 @@
-import { useAtomValue } from "@effect/atom-react";
 import { WS_METHODS } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 
@@ -27,7 +26,8 @@ interface PendingRpcAckRequest {
 }
 
 const pendingRpcAckRequests = new Map<string, PendingRpcAckRequest>();
-const untrackedRpcAckMethods = new Set<string>();
+// A sign-in wait lasts as long as the user takes on the forge, so no leash fits it.
+const untrackedRpcAckMethods = new Set<string>([WS_METHODS.sourceControlSignInWait]);
 // Usage summary shells out to every provider CLI, and the client-activity heartbeat is the
 // first thing a busy host delays, so both join the long leash (fork precedent: pull requests)
 // rather than the untracked set upstream chose: a call wedged for 120s is still worth reporting.
@@ -159,6 +159,8 @@ export function resetRequestLatencyStateForTests(): void {
   setSlowRpcAckRequests([]);
 }
 
-export function useSlowRpcAckRequests(): ReadonlyArray<SlowRpcAckRequest> {
-  return useAtomValue(slowRpcAckRequestsAtom);
+export function subscribeSlowRpcAckRequests(
+  listener: (requests: ReadonlyArray<SlowRpcAckRequest>) => void,
+): () => void {
+  return appAtomRegistry.subscribe(slowRpcAckRequestsAtom, listener);
 }

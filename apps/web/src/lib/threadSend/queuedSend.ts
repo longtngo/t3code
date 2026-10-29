@@ -45,12 +45,7 @@ import {
   type DraftSessionState,
   type DraftId,
 } from "../../composerDraftStore";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  NO_PROVIDER_MODEL_SELECTION,
-  sortProviderInstanceEntries,
-} from "../../providerInstances";
+import { NO_PROVIDER_MODEL_SELECTION, providerInstanceEntriesFor } from "../../providerInstances";
 import { isLatestRunSettled } from "../../session-logic";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
 import { buildMessageContext, terminalContextReference } from "../composerContextRecords";
@@ -213,9 +208,7 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
 
   // Mirrors ChatView + ChatComposer's provider and model resolution.
   const providers = snapshot.providers;
-  const entries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, project.id),
-  );
+  const entries = providerInstanceEntriesFor(providers, settings, project.id);
   const selectedProviderByThread = draft?.activeProvider ?? null;
   const lockedProvider = deriveLockedProviderForThread({
     started: !isLocalDraftThread,

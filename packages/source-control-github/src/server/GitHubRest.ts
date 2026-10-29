@@ -1,3 +1,4 @@
+import { normalizeHost } from "@t3tools/source-control-core/server/pullRequestUtils";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -7,13 +8,14 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
 
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-const { gitHubApiUrls, normalizeHost } = GitHubRequestPolicy;
+const { gitHubApiUrls } = GitHubRequestPolicy;
 type GitHubApiError = GitHubRequestPolicy.GitHubApiError;
 
 export interface GitHubRestResponse {
@@ -53,6 +55,7 @@ export class GitHubRest extends Context.Service<
     readonly withDirectory: GitHubRequestPolicy.GitHubRequestPolicy["Service"]["withDirectory"];
     readonly account: GitHubRequestPolicy.GitHubRequestPolicy["Service"]["account"];
     readonly others: GitHubRequestPolicy.GitHubRequestPolicy["Service"]["others"];
+    readonly appCredential: GitHubRequestPolicy.GitHubRequestPolicy["Service"]["appCredential"];
   }
 >()("@t3tools/source-control-github/server/GitHubRest") {}
 
@@ -219,6 +222,7 @@ export const make = Effect.gen(function* () {
     withDirectory: policy.withDirectory,
     account: policy.account,
     others: policy.others,
+    appCredential: policy.appCredential,
   });
 });
 
@@ -233,5 +237,6 @@ export const layer = Layer.effect(GitHubRest, make).pipe(
  */
 export const layerWithDependencies = layer.pipe(
   Layer.provideMerge(GitHubCredentials.layer),
+  Layer.provideMerge(GitHubAppSignIn.layer),
   Layer.provideMerge(GitHubQuota.layer),
 );

@@ -37,9 +37,11 @@ export function useResourceQueue(
   // The query atom keeps its previous value while revalidating and drops it only on a hard
   // failure; latch the last non-null snapshot so a transient error never blanks the UI.
   const [snapshot, setSnapshot] = useState<ResourceQueueSnapshot | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- latches the last non-null query snapshot so a transient error never blanks it
   useEffect(() => {
     if (data != null) setSnapshot(data);
   }, [data]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the latched snapshot when no environment is selected
   useEffect(() => {
     if (environmentId == null) setSnapshot(null);
   }, [environmentId]);
@@ -48,6 +50,7 @@ export function useResourceQueue(
   // immediate revalidation (e.g. when the popover opens and `fast` flips true).
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- polling interval that refreshes the resource queue atom while active
   useEffect(() => {
     if (!active) return;
     refreshRef.current();

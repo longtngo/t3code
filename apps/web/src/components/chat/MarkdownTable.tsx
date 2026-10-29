@@ -14,8 +14,7 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { reportMarkdownActionFailure } from "./markdownActionFailure";
 
-// FORK: cells wrap to fit the lane, and the footer button opens the whole table in a
-// full-width dialog instead of upstream's per-cell expand/collapse toggle.
+// FORK: the footer button opens the whole table in a full-width dialog.
 export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [expandedOpen, setExpandedOpen] = useState(false);

@@ -13,10 +13,10 @@ import {
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { ActivePlanState } from "../session-logic";
 import { makeThreadProjectionFixture } from "../test-fixtures";
 import {
   deriveTaskListView,
+  type ActivePlanState,
   taskListHeaderState,
   taskListToggleSummary,
   type TaskListView,

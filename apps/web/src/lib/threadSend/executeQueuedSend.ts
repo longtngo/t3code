@@ -5,7 +5,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type { StartThreadTurnInput } from "@t3tools/client-runtime/state/threads";
+import type { StartThreadTurnInput } from "@t3tools/client-runtime/operations";
 import type { MessageId, ThreadId } from "@t3tools/contracts";
 
 import { markPromotedDraftThreadByRef, useComposerDraftStore } from "../../composerDraftStore";

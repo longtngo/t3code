@@ -24,6 +24,14 @@ import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSour
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import * as GitHubPullRequestProvider from "./GitHubPullRequestProvider.ts";
 import { KnownWorkflowRuns } from "./gitHubConditionalChecks.ts";
+import * as GitHubAppAccess from "./GitHubAppAccess.ts";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
+
+const appSignedOut = Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({
+  enabled: false,
+  token: () => Effect.succeedNone,
+  invalidate: () => Effect.void,
+});
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -63,6 +71,7 @@ const coreResponse = (pullRequest: Readonly<Record<string, unknown>> = {}) => ({
         mergedAt: null,
         closedAt: null,
         isCrossRepository: false,
+        maintainerCanModify: true,
         headRepositoryOwner: null,
         headRepository: null,
         headRef: null,
@@ -123,6 +132,7 @@ const mockApi = Layer.succeed(
     account: () => Effect.die("unused"),
     others: () => Effect.succeed([]),
     withDirectory: () => (effect) => effect,
+    appCredential: () => Effect.succeedNone,
   }),
 );
 
@@ -178,8 +188,10 @@ const mockHttp = Layer.succeed(
 
 const layer = it.layer(
   GitHubPullRequestApi.layer.pipe(
+    Layer.provideMerge(GitHubAppAccess.layer),
     Layer.provideMerge(mockApi),
     Layer.provideMerge(GitHubRequestPolicy.layer),
+    Layer.provideMerge(appSignedOut),
     Layer.provideMerge(GitHubQuota.layer),
     Layer.provideMerge(SourceControlRateLimit.layer),
     Layer.provideMerge(mockHttp),
@@ -191,6 +203,8 @@ const layer = it.layer(
             host,
             source: "gh" as const,
           })),
+        saved: () => Effect.succeedNone,
+        fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
         account: () => Effect.die("unused"),
         others: () => Effect.succeed([]),
         invalidate: () => Effect.void,
@@ -658,6 +672,8 @@ it.effect(
             })),
           account: () => Effect.die("unused"),
           others: () => Effect.succeed([]),
+          saved: () => Effect.succeedNone,
+          fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
           invalidate: () => Effect.void,
         }),
       );
@@ -683,8 +699,9 @@ it.effect(
       );
       const cli = yield* GitHubPullRequestApi.make.pipe(
         Effect.provide(
-          GitHubRest.layer.pipe(
-            Layer.provideMerge(Layer.mergeAll(credentials, http)),
+          GitHubAppAccess.layer.pipe(
+            Layer.provideMerge(GitHubRest.layer),
+            Layer.provideMerge(Layer.mergeAll(credentials, http, appSignedOut)),
             Layer.provideMerge(GitHubQuota.layer),
             Layer.provideMerge(SourceControlRateLimit.layer),
             Layer.merge(TestSourceControlHost.layer()),
@@ -729,6 +746,25 @@ it.effect(
 );
 
 layer("GitHubPullRequestApi.layer", (it) => {
+  it.effect("turns maintainer edits off without rewriting the pull request's text", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((call) =>
+        Effect.succeed(
+          output(
+            encodeJson(
+              call.kind === "graphql" && matches(call, NODE_ID_QUERY) ? nodeIdAnswer("PR_7") : {},
+            ),
+          ),
+        ),
+      );
+      const api = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      yield* api.updatePullRequest({ ...pullRequestInput, maintainerCanModify: false });
+      expect(variablesOf("mutation UpdatePullRequest")).toEqual([
+        { pullRequestId: "PR_7", maintainerCanModify: false },
+      ]);
+    }),
+  );
+
   it.effect.each(["mixed", "merges", "unavailable"] as const)(
     "reads stats only for displayed non-merge commits (%s)",
     (kind) =>
@@ -4108,11 +4144,13 @@ describe("per-folder account", () => {
           )
         : GitHubRest.layer.pipe(
             Layer.provide(credentials),
+            Layer.provideMerge(appSignedOut),
             Layer.provideMerge(GitHubQuota.layer),
             Layer.provideMerge(SourceControlRateLimit.layer),
             Layer.provideMerge(http),
           );
     const layer = GitHubPullRequestApi.layer.pipe(
+      Layer.provideMerge(GitHubAppAccess.layer),
       Layer.provideMerge(transport),
       Layer.provide(TestSourceControlHost.layer({ process: { run } })),
       Layer.provide(Layer.succeed(HostProcess.Environment, {})),
@@ -4182,6 +4220,8 @@ describe("per-folder account", () => {
                 fingerprint: `${host}:${token}`,
               });
         },
+        saved: () => Effect.succeedNone,
+        fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
         account: () => Effect.die("unused"),
         others: () => Effect.succeed([]),
         invalidate: () => Effect.void,

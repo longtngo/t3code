@@ -2,13 +2,24 @@ import type { OrchestrationV2ThreadProjection, PlanId, RunId } from "@t3tools/co
 import type { ThreadStructure } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
 
-import type { ActivePlanState } from "../session-logic";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 
 type TodoPlan = Extract<
   OrchestrationV2ThreadProjection["plans"][number],
   { readonly kind: "todo_list" }
 >;
+
+/** One run's task list: the shape the Tasks panel renders. */
+export interface ActivePlanState {
+  readonly createdAt: string;
+  readonly runId: RunId | null;
+  readonly explanation?: string | null;
+  readonly steps: Array<{
+    readonly step: string;
+    readonly status: "pending" | "inProgress" | "completed";
+    readonly durationMs?: number;
+  }>;
+}
 
 /** A run's list, keyed by its run (or its plan id when runless) so updates keep one identity. */
 export type TaskListEntry = ActivePlanState & { readonly groupKey: string };

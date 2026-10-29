@@ -32,7 +32,6 @@ const state = vi.hoisted(() => ({
   snoozedUntil: null as string | null,
   completed: deferred<void>(),
   toasts: [] as string[],
-  legacySidebar: false,
   queue: {
     entries: [] as Array<{ environmentId: string; threadId: string }>,
     inFlight: null as unknown,
@@ -64,12 +63,9 @@ vi.mock("../state/session", () => ({
     scope === AuthOrchestrationOperateScope && state.granted.has(environmentId),
 }));
 vi.mock("../state/entities", () => ({
+  readEnvironmentServerConfigLoaded: () => true,
   readEnvironmentSupportsAutoSettleOptOut: () => true,
-  readEnvironmentSupportsPinning: () => true,
-  readEnvironmentSupportsSettlement: () => true,
   readEnvironmentSupportsSidebarSections: () => state.sections !== null,
-  readEnvironmentSupportsSnooze: () => true,
-  readEnvironmentSupportsTitleRegeneration: () => true,
   readThreadShell: () => ({
     id: "thread",
     environmentId: "secondary",
@@ -104,7 +100,7 @@ vi.mock("../localApi", () => ({
     },
   }),
 }));
-vi.mock("../logicalProject", () => ({
+vi.mock("@t3tools/client-runtime/state/project-grouping", () => ({
   deriveLogicalProjectKeyFromSettings: () => "project",
   derivePhysicalProjectKey: () => "project",
   selectProjectGroupingSettings: () => ({}),
@@ -158,9 +154,9 @@ vi.mock("./useSettings", () => ({
       confirmThreadArchive: true,
       timestampFormat: "12-hour",
     }),
-  useLegacySidebarEnabled: () => state.legacySidebar,
 }));
 vi.mock("./useThreadActions", () => ({
+  canTurnThreadIntoProject: () => false,
   useThreadActions: () =>
     Object.fromEntries(
       [
@@ -207,7 +203,6 @@ beforeEach(() => {
   state.snoozedUntil = null;
   state.completed = deferred<void>();
   state.toasts = [];
-  state.legacySidebar = false;
   state.queue = { entries: [], inFlight: null, readOnly: false };
   state.show.mockReset().mockResolvedValue(null);
 });
@@ -319,23 +314,6 @@ describe("thread menu queue", () => {
     state.archivedAt = "2026-10-08T00:00:00.000Z";
     createMenu().openMenu(position);
     expect(item("queue")?.disabled).toBe(true);
-  });
-
-  it("hides the queue item while the legacy sidebar, which has no queue, is on", () => {
-    state.granted.add("secondary");
-    state.legacySidebar = true;
-    createMenu().openMenu(position);
-    expect(item("queue")).toBeUndefined();
-    expect(item("unqueue")).toBeUndefined();
-    expect(item("rename")).toBeDefined();
-  });
-
-  it("keeps Remove from queue on the legacy sidebar, so a queued thread can still leave", async () => {
-    state.legacySidebar = true;
-    state.queue.entries = [queued];
-    await choose("unqueue");
-    expect(item("unqueue")?.label).toBe("Remove from queue");
-    expect(state.effects).toEqual(["remove secondary:thread"]);
   });
 
   it("disables the queue item while the queue is read-only", () => {

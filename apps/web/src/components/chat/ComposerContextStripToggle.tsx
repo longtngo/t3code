@@ -1,7 +1,7 @@
 import { memo } from "react";
-import { FolderGitIcon, FolderIcon } from "lucide-react";
+import { ChevronDownIcon, FolderGitIcon, FolderIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
-import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
+import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export const COMPOSER_CONTEXT_STRIP_ID = "composer-context-strip";
@@ -40,8 +40,13 @@ export const ComposerContextStripToggle = memo(function ComposerContextStripTogg
         }
       >
         <ComposerControlIcon icon={WorkspaceIcon} />
-        <ComposerControlChevron
-          className={cn("transition-transform duration-150", !collapsed && "rotate-180")}
+        <ChevronDownIcon
+          aria-hidden="true"
+          strokeWidth={2.25}
+          className={cn(
+            "size-3.5 shrink-0 text-icon-muted transition-transform duration-150",
+            !collapsed && "rotate-180",
+          )}
         />
       </TooltipTrigger>
       <TooltipPopup side="top">{label}</TooltipPopup>

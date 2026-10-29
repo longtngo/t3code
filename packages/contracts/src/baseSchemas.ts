@@ -315,14 +315,11 @@ export const ProviderThreadId = makeEntityId("ProviderThreadId");
 export type ProviderThreadId = typeof ProviderThreadId.Type;
 export const ProviderTurnId = makeEntityId("ProviderTurnId");
 export type ProviderTurnId = typeof ProviderTurnId.Type;
-export const RuntimeSessionId = makeEntityId("RuntimeSessionId");
-export type RuntimeSessionId = typeof RuntimeSessionId.Type;
-export const RuntimeItemId = makeEntityId("RuntimeItemId");
-export type RuntimeItemId = typeof RuntimeItemId.Type;
 export const TurnItemId = makeEntityId("TurnItemId");
 export type TurnItemId = typeof TurnItemId.Type;
 export const RuntimeRequestId = makeEntityId("RuntimeRequestId");
 export type RuntimeRequestId = typeof RuntimeRequestId.Type;
+// FORK: upstream deleted this with V1 runtime events; the pending background task store keys on it.
 export const RuntimeTaskId = makeEntityId("RuntimeTaskId");
 export type RuntimeTaskId = typeof RuntimeTaskId.Type;
 export const ScheduledTaskId = makeEntityId("ScheduledTaskId");

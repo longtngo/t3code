@@ -14,6 +14,7 @@ export function useWsReconnectTimelineLog(): void {
   const { presentationById } = useEnvironments();
   const previousPhaseRef = useRef<Map<EnvironmentId, EnvironmentConnectionPhase>>(new Map());
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- logs each environment's connection phase change to the reconnect timeline
   useEffect(() => {
     const previous = previousPhaseRef.current;
     const seen = new Set<EnvironmentId>();

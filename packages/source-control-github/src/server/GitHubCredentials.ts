@@ -1,3 +1,4 @@
+import { normalizeHost } from "@t3tools/source-control-core/server/pullRequestUtils";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -28,7 +29,7 @@ export const GH_PROCESS_CONCURRENCY = { key: "gh", limit: 4 } as const;
 const TOKEN_TTL = Duration.minutes(5);
 const MISSING_TTL = Duration.seconds(10);
 
-export const GitHubCredentialSource = Schema.Literals(["settings", "env", "gh", "folder"]);
+export const GitHubCredentialSource = Schema.Literals(["settings", "app", "env", "gh", "folder"]);
 export type GitHubCredentialSource = typeof GitHubCredentialSource.Type;
 
 /** What git answered when asked which login a folder uses; never anything it printed. */
@@ -103,6 +104,14 @@ export class GitHubCredentials extends Context.Service<
       host: string,
       cwd: string | null,
     ) => Effect.Effect<GitHubCredential, GitHubCredentialUnavailableError>;
+    /** The token saved in Settings for `host`, which outranks every other source. */
+    readonly saved: (
+      host: string,
+    ) => Effect.Effect<
+      Option.Option<GitHubCredential>,
+      GitHubHostDisabledError | GitHubNotSignedInError
+    >;
+    readonly fingerprint: (host: string, token: string) => Effect.Effect<string>;
     /** Drops every held token for the host after GitHub refused one, so the next read asks again. */
     readonly invalidate: (host: string) => Effect.Effect<void>;
     /** The named login's own token on `host`; fails when gh holds no such login, never falls back. */
@@ -121,8 +130,12 @@ export class GitHubCredentials extends Context.Service<
   }
 >()("@t3tools/source-control-github/server/GitHubCredentials") {}
 
-function normalizeHost(host: string): string {
-  return host.trim().toLowerCase();
+const HOSTNAME =
+  /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d{1,5})?$/;
+
+/** API URLs are built from the host text, so anything but a bare hostname could redirect a token. */
+export function isGitHubHost(host: string): boolean {
+  return HOSTNAME.test(host);
 }
 
 function isGitHubDotCom(host: string): boolean {
@@ -134,6 +147,7 @@ export function environmentToken(
   host: string,
   env: Readonly<Record<string, string | undefined>>,
 ): string | null {
+  if (!isGitHubHost(host)) return null;
   const names = isGitHubDotCom(host)
     ? ["GH_TOKEN", "GITHUB_TOKEN"]
     : env.GH_HOST?.trim().toLowerCase() === host
@@ -380,24 +394,39 @@ export const make = Effect.gen(function* () {
     timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.seconds(60) : Duration.zero),
   });
 
+  // A token saved in Settings is the most deliberate choice, so it comes before the app, the
+  // environment and gh. It is read from the secret store each time, so it needs no cache.
+  const fromSettings = Effect.fnUntraced(function* (rawHost: string) {
+    const host = normalizeHost(rawHost);
+    if (!isGitHubHost(host)) return yield* new GitHubNotSignedInError({ host });
+    const settings = yield* hostSettings(host);
+    if (settings.choice?.enabled === false) {
+      return yield* new GitHubHostDisabledError({ host });
+    }
+    const credential =
+      settings.saved === null
+        ? Option.none<GitHubCredential>()
+        : Option.some<GitHubCredential>({
+            host,
+            token: Redacted.make(settings.saved),
+            source: "settings",
+            explicit: true,
+            fingerprint: yield* fingerprintOf(host, settings.saved),
+          });
+    return { host, choice: settings.choice, credential };
+  });
+
+  const saved: GitHubCredentials["Service"]["saved"] = Effect.fn("GitHubCredentials.saved")(
+    function* (rawHost) {
+      return (yield* fromSettings(rawHost)).credential;
+    },
+  );
+
   const get: GitHubCredentials["Service"]["get"] = Effect.fn("GitHubCredentials.get")(
     function* (rawHost, cwd) {
-      const host = normalizeHost(rawHost);
-      const { choice, saved } = yield* hostSettings(host);
-      if (choice?.enabled === false) {
-        return yield* new GitHubHostDisabledError({ host });
-      }
-      // A token saved in Settings is the most deliberate choice, so it comes before the
-      // environment and gh. It is read from the secret store each time, so it needs no cache.
-      if (saved !== null) {
-        return {
-          host,
-          token: Redacted.make(saved),
-          source: "settings",
-          explicit: true,
-          fingerprint: yield* fingerprintOf(host, saved),
-        } satisfies GitHubCredential;
-      }
+      // One settings read serves the saved token and the account choice.
+      const { host, choice, credential: saved } = yield* fromSettings(rawHost);
+      if (Option.isSome(saved)) return saved.value;
       // An environment token wins over any account, exactly as it does in gh.
       const fromEnv = environmentToken(host, environment);
       if (fromEnv !== null) {
@@ -450,6 +479,8 @@ export const make = Effect.gen(function* () {
       }
       return found;
     }),
+    saved,
+    fingerprint: fingerprintOf,
     invalidate: Effect.fn("GitHubCredentials.invalidate")(function (rawHost) {
       const host = normalizeHost(rawHost);
       return Cache.keys(tokenCache).pipe(

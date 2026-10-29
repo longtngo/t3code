@@ -648,12 +648,7 @@ describe("settings schema / patch parity", () => {
   });
 
   it("mirrors every ClientSettings field in ClientSettingsPatch", () => {
-    const deliberatelyUnpatchable = [
-      // No writer anywhere in the client (grepped web/desktop/contracts): not
-      // yet wired to any dismiss action, so there is nothing for a patch
-      // mirror to carry today.
-      "dismissedProviderUpdateNotificationKeys",
-    ];
+    const deliberatelyUnpatchable: string[] = [];
 
     expect(
       [

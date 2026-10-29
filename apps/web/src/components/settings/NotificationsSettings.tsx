@@ -47,6 +47,7 @@ export function NotificationsSettingsPanel() {
 
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the browser push manager's subscription to seed the push toggle
   useEffect(() => {
     if (!pushAvailable || !vapidPublicKey) {
       return;

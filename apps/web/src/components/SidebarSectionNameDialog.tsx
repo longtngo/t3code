@@ -38,6 +38,7 @@ function finish(name: string | null) {
 
 export function SidebarSectionNameDialogHost() {
   const request = useRequest((state) => state.request);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- resolves the module-level name request with null when the host unmounts
   useEffect(() => () => finish(null), []);
   return request ? <SidebarSectionNameDialog request={request} /> : null;
 }

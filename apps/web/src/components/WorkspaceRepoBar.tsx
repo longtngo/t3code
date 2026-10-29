@@ -115,6 +115,7 @@ function WorkspaceRepoTab({
   // post-turn reactors all run against the thread's own working directory, and
   // the server's status cache has no expiry. Without this the first reading a
   // member ever produced would be the only one.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the server to refresh this member's git status, whose cache never expires
   useEffect(() => {
     if (!supportsLocalOnlyStatus) return;
     void refreshLocalStatus({ environmentId, input: { cwd: repo.cwd } });
