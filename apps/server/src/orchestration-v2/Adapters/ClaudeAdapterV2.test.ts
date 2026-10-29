@@ -3473,7 +3473,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         });
         const now = yield* DateTime.now;
         let ordinal = 0;
-        const start = (cwd: string, runtimeMode: "full-access" | "auto" = "full-access") =>
+        const start = (
+          cwd: string,
+          runtimeMode: "full-access" | "auto" | "approval-required" = "full-access",
+        ) =>
           harness.runtime.startTurn(
             makeClaudeTestTurnInput({
               threadId: harness.threadId,
@@ -3502,8 +3505,56 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               event.type === "turn_item.updated" && event.turnItem.type === "system_notice",
           );
 
+        const forwardBash = (toolUseID: string, label?: "provider_check") =>
+          Effect.gen(function* () {
+            const pending = yield* Effect.promise(() =>
+              harness.getOpenedOptions()!.canUseTool!(
+                "Bash",
+                { command: "git status" },
+                {
+                  signal: new AbortController().signal,
+                  toolUseID,
+                  requestId: `request-${toolUseID}`,
+                },
+              ),
+            ).pipe(Effect.forkScoped);
+            const first = yield* Effect.raceFirst(
+              Queue.take(harness.runtimeRequestReceipts).pipe(
+                Effect.map((event) => ({ type: "request", event }) as const),
+              ),
+              Fiber.join(pending).pipe(
+                Effect.map((result) => ({ type: "decision", result }) as const),
+              ),
+            );
+            if (first.type === "decision") return first.result?.behavior;
+            assert.equal(first.event.runtimeRequest.kind, "command");
+            yield* harness.runtime.respondToRuntimeRequest({
+              requestId: first.event.runtimeRequest.id,
+              decision: "decline",
+            });
+            assert.equal((yield* Fiber.join(pending))?.behavior, "deny");
+            const approval = harness.events.findLast(
+              (event) =>
+                event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+            );
+            assert.strictEqual(
+              approval?.type === "turn_item.updated" &&
+                approval.turnItem.type === "approval_request"
+                ? approval.turnItem.fullAccessOverride
+                : "no approval turn item",
+              label,
+              "The approval label follows the mode the CLI reported, not the requested bypass",
+            );
+            return "asked" as const;
+          });
+
         yield* start("/restricted-worktree", "auto");
         assert.equal(harness.getOpenedOptions()?.permissionMode, "auto");
+        assert.equal(
+          yield* forwardBash("auto-forwarded"),
+          "asked",
+          "Auto must surface what Claude's auto mode escalates",
+        );
         yield* finish;
         assert.equal(notices().length, 0);
         assert.equal(resolveSettings.mock.calls.length, 0);
@@ -3571,64 +3622,38 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* start("/unrestricted");
         assert.equal(harness.getOpenedOptions()?.permissionMode, "bypassPermissions");
         assert.equal(harness.getOpenedOptions()?.allowDangerouslySkipPermissions, true);
-        // Forwarded asks (including ask rules and settings fallback) still need a decision
-        // before queued init/status frames arrive.
-        for (const { phase, frame } of [
-          {
-            phase: "init",
-            frame: claudeSdkFrame({
-              type: "system",
-              subtype: "init",
-              permissionMode: "bypassPermissions",
-              uuid: "policy-cli-init",
-              session_id: WAKE_NATIVE_SESSION,
-            }),
-          },
-          {
-            phase: "status",
-            frame: claudeSdkFrame({
-              type: "system",
-              subtype: "status",
-              status: null,
-              permissionMode: "default",
-              uuid: "policy-cli-downgrade",
-              session_id: WAKE_NATIVE_SESSION,
-            }),
-          },
-        ]) {
-          const forwardedDecision = yield* Effect.promise(() =>
-            harness.getOpenedOptions()!.canUseTool!(
-              "Bash",
-              { command: "git status" },
-              {
-                signal: new AbortController().signal,
-                toolUseID: `forwarded-before-${phase}`,
-                requestId: `request-forwarded-before-${phase}`,
-              },
-            ),
-          ).pipe(Effect.forkScoped);
-          const forwardedFirst = yield* Effect.raceFirst(
-            Queue.take(harness.runtimeRequestReceipts).pipe(
-              Effect.map((event) => ({ type: "request", event }) as const),
-            ),
-            Fiber.join(forwardedDecision).pipe(
-              Effect.map((result) => ({ type: "decision", result }) as const),
-            ),
-          );
-          assert.equal(
-            forwardedFirst.type,
-            "request",
-            `CLI-forwarded Bash must ask before the queued ${phase} frame reaches the adapter`,
-          );
-          if (forwardedFirst.type !== "request") return;
-          assert.equal(forwardedFirst.event.runtimeRequest.kind, "command");
-          yield* harness.runtime.respondToRuntimeRequest({
-            requestId: forwardedFirst.event.runtimeRequest.id,
-            decision: "decline",
-          });
-          assert.equal((yield* Fiber.join(forwardedDecision))?.behavior, "deny");
-          yield* harness.offerAndWait(frame);
-        }
+        // Full access asks until the CLI's init is processed, grants while its last reported
+        // mode is bypass, and asks again once a processed status leaves bypass.
+        assert.equal(yield* forwardBash("forwarded-before-init"), "asked");
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "init",
+            permissionMode: "bypassPermissions",
+            uuid: "policy-cli-init",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        const requestsBeforeGrant = harness.events.filter(
+          (event) => event.type === "runtime_request.updated",
+        ).length;
+        assert.equal(yield* forwardBash("forwarded-before-status"), "allow");
+        assert.equal(
+          harness.events.filter((event) => event.type === "runtime_request.updated").length,
+          requestsBeforeGrant,
+          "A Full access grant must not emit a runtime request",
+        );
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "status",
+            status: null,
+            permissionMode: "default",
+            uuid: "policy-cli-downgrade",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        assert.equal(yield* forwardBash("forwarded-after-status"), "asked");
         yield* finish;
         const unrestrictedOptions = harness.getOpenedOptions();
         yield* start("/unrestricted");
@@ -3661,37 +3686,28 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.strictEqual(harness.getOpenedOptions(), unrestrictedOptions);
           assert.deepEqual(harness.permissionModeChanges, ["auto", "bypassPermissions", "default"]);
           assert.equal(harness.offeredMessages.length, ordinal);
-          const restoredDecision = yield* Effect.promise(() =>
-            harness.getOpenedOptions()!.canUseTool!(
-              "Bash",
-              { command: "git status" },
-              {
-                signal: new AbortController().signal,
-                toolUseID: `forwarded-after-plan-${phase}`,
-                requestId: `request-after-plan-${phase}`,
-              },
-            ),
-          ).pipe(Effect.forkScoped);
-          const restoredFirst = yield* Effect.raceFirst(
-            Queue.take(harness.runtimeRequestReceipts).pipe(
-              Effect.map((event) => ({ type: "request", event }) as const),
-            ),
-            Fiber.join(restoredDecision).pipe(
-              Effect.map((result) => ({ type: "decision", result }) as const),
-            ),
-          );
-          assert.equal(restoredFirst.type, "request");
-          if (restoredFirst.type !== "request") return;
-          assert.equal(restoredFirst.event.runtimeRequest.kind, "command");
-          yield* harness.runtime.respondToRuntimeRequest({
-            requestId: restoredFirst.event.runtimeRequest.id,
-            decision: "decline",
-          });
-          assert.equal((yield* Fiber.join(restoredDecision))?.behavior, "deny");
+          assert.equal(yield* forwardBash(`forwarded-after-plan-${phase}`), "asked");
           yield* finish;
           assert.equal(harness.terminalEvents().at(-1)?.status, "completed");
         }
         assert.equal(notices().length, 1);
+
+        // Constructed: the CLI reports bypass while asks need approval; pins the label wiring.
+        yield* start("/unrestricted", "approval-required");
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "init",
+            permissionMode: "bypassPermissions",
+            uuid: "policy-supervised-reported-bypass",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        assert.equal(
+          yield* forwardBash("forwarded-under-reported-bypass", "provider_check"),
+          "asked",
+        );
+        yield* finish;
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
