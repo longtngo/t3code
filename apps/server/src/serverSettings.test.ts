@@ -293,6 +293,29 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  // FORK: the Cursor subagent backend was removed; settings files written before that still
+  // carry its two keys. They must not fail the load (which would reset every other setting).
+  it.effect("loads and saves a settings file that still carries the removed subagent keys", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fs.writeFileString(
+        config.settingsPath,
+        `{ "subagentBackendEnabled": false, "subagentBackendThreadModes": { "t1": "on" }, "enableProviderUpdateChecks": false }`,
+      );
+
+      const loaded = yield* service.getSettings;
+      assert.strictEqual(loaded.enableProviderUpdateChecks, false);
+      assert.isFalse(Object.hasOwn(loaded, "subagentBackendEnabled"));
+
+      yield* service.updateSettings({ defaultAutoPull: true });
+      const persisted = JSON.parse(yield* fs.readFileString(config.settingsPath));
+      assert.strictEqual(persisted.enableProviderUpdateChecks, false);
+      assert.strictEqual(persisted.defaultAutoPull, true);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   // FORK: the retired "Offer to compact threads" switch (fork registry invariant 71).
   it.effect(
     "turns idle compaction off for a saved offerThreadCompaction false and drops the key",

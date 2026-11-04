@@ -1373,7 +1373,7 @@ export type NotificationCategorySettings = typeof NotificationCategorySettings.T
 
 /**
  * A finish is interim when any background work was live; shared by the web notifier and push relay
- * so they agree. `"monitoring"` counts: offloaded subagents run as background shells, and only 8 of
+ * so they agree. `"monitoring"` counts: background shells read as monitoring, and only 8 of
  * 9,557 such shells never woke the agent. Absent liveness (older server, restart) reads as idle.
  */
 export function isInterimBackgroundLiveness(
@@ -1388,26 +1388,6 @@ export const _categoryParity: ExactlySameKeys<
   NotificationCategoryKey,
   keyof NotificationCategorySettings
 > = true;
-
-export const SubagentBackendThreadMode = Schema.Literals(["inherit", "on", "off"]);
-export type SubagentBackendThreadMode = typeof SubagentBackendThreadMode.Type;
-
-/** `"inherit"` is the wire value to revert a thread but is never stored: `applyServerSettingsPatch`
- * strips it after the merge (`deepMerge` cannot delete keys), so Revert is a delete. Absent and
- * `"inherit"` both resolve to the machine-wide choice. */
-export const SubagentBackendThreadModes = Schema.Record(ThreadId, SubagentBackendThreadMode);
-
-/**
- * Absent reads as Inherit. `Object.hasOwn`, not `?? "inherit"`: thread ids are client-generated, so
- * `__proto__` or `constructor` would read a prototype member and fall through a server-side
- * `mode !== "inherit"` check into the enabling branch.
- */
-export function subagentBackendThreadMode(
-  modes: typeof SubagentBackendThreadModes.Type,
-  threadId: ThreadId,
-): SubagentBackendThreadMode {
-  return Object.hasOwn(modes, threadId) ? (modes[threadId] ?? "inherit") : "inherit";
-}
 
 export const ResponseStreamingMode = Schema.Literals(["turn", "paragraph"]);
 export type ResponseStreamingMode = typeof ResponseStreamingMode.Type;
@@ -1800,29 +1780,12 @@ export const ServerSettings = Schema.Struct({
   // disabled, not just the pairing UI. Overridable per launch via T3CODE_DISABLE_AUTH or
   // --disable-auth; read once at startup.
   disableAuthentication: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  // Master switch for subagent offload. Off writes every thread's flag file as
-  // `default`; `subagentBackend.set` then refuses a Cursor selection but still admits
-  // `default`, so the machine-wide file never strands on a Cursor target with no way to
-  // clear it; and the controls stay visible, saying why they cannot be used.
-  subagentBackendEnabled: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(true)),
-    // Same containment as `autoCompactWindow`/`outputStyle` above. An undecodable value
-    // reads as `true`, the default.
-    Schema.catchDecoding(() => Effect.succeedSome(true)),
-  ),
-  subagentBackendThreadModes: SubagentBackendThreadModes.pipe(
-    Schema.withDecodingDefault(Effect.succeed({})),
-    // Same containment as `autoCompactWindow`/`outputStyle` above. Degrading the whole map
-    // to `{}` means every thread inherits — the conservative direction, since only an
-    // explicit `"on"` enables offload.
-    Schema.catchDecoding(() => Effect.succeedSome({})),
-  ),
   // When false, a provider instance whose published usage windows report 100% is blocked:
   // running turns on it are interrupted and new ones are refused. Default true, so an
   // environment that never touches this setting behaves exactly as before.
   allowSpendingCredits: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
-    // Same containment as `subagentBackendEnabled` above. An undecodable value reads as
+    // Same containment as `autoCompactWindow`/`outputStyle` above. An undecodable value reads as
     // `true`, the default — the direction that keeps working rather than the one that
     // silently stops every provider.
     Schema.catchDecoding(() => Effect.succeedSome(true)),
@@ -2221,10 +2184,6 @@ export const ServerSettingsPatch = Schema.Struct({
   localModels: Schema.optionalKey(LocalModelsSettings),
   // Whole-object replacement, same rationale: removing a provider override must persist.
   localLlm: Schema.optionalKey(LocalLlmSettings),
-  subagentBackendEnabled: Schema.optionalKey(Schema.Boolean),
-  // A partial record: one thread's entry merges over the map (`deepMerge`), so a
-  // client patches `{ [threadId]: mode }` without resending every other thread.
-  subagentBackendThreadModes: Schema.optionalKey(SubagentBackendThreadModes),
   allowSpendingCredits: Schema.optionalKey(Schema.Boolean),
   // `disableAuthentication` is deliberately NOT patchable: it is a startup-only switch that boot
   // falls back to when persisted, so a settings-write client could turn auth off for the next

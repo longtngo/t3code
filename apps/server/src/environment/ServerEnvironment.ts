@@ -263,9 +263,6 @@ export const make = Effect.gen(function* () {
       pullRequestStackActions: true,
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
-      // FORK: the subagent dispatch toggle and per-thread offload (Claude processes).
-      subagentBackend: true,
-      subagentBackendThreadModes: true,
       jiraTicketLinks: true,
       // FORK: the sidebar Queue lives on the primary's server (ThreadQueueService).
       threadQueue: true,

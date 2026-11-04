@@ -63,7 +63,6 @@ import {
   issueHeadlessServeAccessInfo,
   resolveHeadlessConnectionInfo,
 } from "./startupAccess.ts";
-import { subagentBackendReconciler } from "./subagentBackend/SubagentBackend.ts";
 
 export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeStartupError>()(
   "ServerRuntimeStartupError",
@@ -752,11 +751,6 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
         ),
       );
     }
-
-    // Keeps the subagent-dispatch flag files in sync with ServerSettings for the
-    // process lifetime (see SubagentBackend.ts's module doc). A settings-change
-    // subscriber, not an event-hub consumer.
-    yield* Effect.forkScoped(subagentBackendReconciler);
 
     yield* Effect.logInfo(
       `watch rescan backstop started (${Duration.toSeconds(WATCH_RESCAN_INTERVAL)}s)`,

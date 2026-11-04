@@ -217,11 +217,7 @@ import {
   claudeResultProse,
   claudeResultTerminalStatus,
   claudeUserFacingResultErrors,
-  subagentDispatchAppend,
-  withSubagentBackendState,
 } from "./ClaudeAdapterV2Fork.ts";
-import { prepareActiveSubagentThreadBackend } from "../../subagentBackend/SubagentLiveThreads.ts";
-import type { PreparedThreadBackend } from "../../subagentBackend/SubagentBackend.ts";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriverCreateInput,
@@ -1581,12 +1577,6 @@ export function makeClaudeQueryOptions(input: {
   readonly onElicitation?: ClaudeQueryOptions["onElicitation"];
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
-  /**
-   * FORK: this thread's subagent offload, prepared just before the process spawns. Points
-   * `SUBAGENT_BACKEND_STATE` at the thread's flag file and, for `cursor`, appends the
-   * dispatch instruction. Absent leaves the environment and prompt untouched.
-   */
-  readonly subagentBackend?: PreparedThreadBackend;
   readonly appendSystemPromptFileText?: string;
   // Flag settings, because a user's settings.json env beats the process env in Claude Code.
   readonly toolSearchOverride?: "true";
@@ -1655,7 +1645,6 @@ export function makeClaudeQueryOptions(input: {
           ...compactQuerySettings,
           env: { ...compactQuerySettings?.env, ENABLE_TOOL_SEARCH: input.toolSearchOverride },
         } as ClaudeSdkSettings);
-  const environment = withSubagentBackendState(input.environment, input.subagentBackend?.statePath);
   const deviceInstructions = input.mcpServers !== undefined && input.deviceToolsAvailable === true;
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
@@ -1703,7 +1692,7 @@ export function makeClaudeQueryOptions(input: {
     ...(input.settings?.binaryPath
       ? { pathToClaudeCodeExecutable: input.settings.binaryPath }
       : {}),
-    ...(environment === undefined ? {} : { env: environment }),
+    ...(input.environment === undefined ? {} : { env: input.environment }),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     systemPrompt: {
       type: "preset" as const,
@@ -1716,8 +1705,7 @@ export function makeClaudeQueryOptions(input: {
               CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS +
               (deviceInstructions
                 ? `\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH}\n`
-                : "")) +
-          subagentDispatchAppend(input.subagentBackend?.backend),
+                : "")),
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
     },
@@ -4706,14 +4694,6 @@ export interface ClaudeAdapterV2Options {
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
-  /**
-   * FORK: prepares a thread's subagent offload before its process spawns. Defaults to the
-   * server's live preparer (`prepareActiveSubagentThreadBackend`), which is `undefined` —
-   * no offload — when the subagent backend layer is not running.
-   */
-  readonly prepareSubagentBackend?: (
-    threadId: ThreadId,
-  ) => Effect.Effect<PreparedThreadBackend | undefined>;
   readonly continuationRequests?: {
     readonly offer: (
       request: ProviderContinuationRequests.ProviderContinuationRequest,
@@ -10609,13 +10589,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const queryPolicyKey = claudeLiveQueryKey(queryPolicy, mcpOverrides, memberDirectories);
           const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
-          // FORK: run every turn so the flag file the dispatch wrapper reads follows the Subagents
-          // toggle. The dispatch INSTRUCTION cannot: it is in the system prompt, which `--resume`
-          // replays from conversation creation (measured 2026-10-03). A mid-conversation flip
-          // reaches only the wrapper, which refuses when the thread is off.
-          const subagentBackend = yield* (
-            adapterOptions.prepareSubagentBackend ?? prepareActiveSubagentThreadBackend
-          )(turnInput.threadId);
           const existing = yield* Ref.get(queryContext);
           // Continuations drain existing output without prompting; retain the live process regardless of selection.
           if (
@@ -10765,7 +10738,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             onUserDialog,
             onElicitation,
             supportedDialogKinds: ["resume_return"],
-            ...(subagentBackend === undefined ? {} : { subagentBackend }),
             ...(appendSystemPromptFileText === undefined ? {} : { appendSystemPromptFileText }),
             ...(toolSearchOverride === undefined ? {} : { toolSearchOverride }),
           });

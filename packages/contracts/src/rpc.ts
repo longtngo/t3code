@@ -363,11 +363,6 @@ import {
 } from "./providerUsageLimits.ts";
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import {
-  CursorUsageSnapshot,
-  SubagentBackendSetInput,
-  SubagentBackendState,
-} from "./subagentBackend.ts";
-import {
   ThreadQueueSetInput,
   ThreadQueueSetResult,
   ThreadQueueSnapshot,
@@ -584,11 +579,6 @@ export const WS_METHODS = {
 
   // Resource broker (resctl) — one-shot queue status read
   getResourceQueue: "resourceQueue.get",
-
-  // Subagent dispatch toggle — machine-level Cursor-vs-default switch read by ~/bin/subagent-dispatch
-  subagentBackendGet: "subagentBackend.get",
-  subagentBackendSet: "subagentBackend.set",
-  subagentBackendUsage: "subagentBackend.usage",
 
   // Web Push — register this device's push subscription for background notifications
   pushSubscriptionsRegister: "pushSubscriptions.register",
@@ -1061,32 +1051,6 @@ const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
 export const WsGetResourceQueueRpc = Rpc.make(WS_METHODS.getResourceQueue, {
   payload: Schema.Struct({}),
   success: ResourceQueueSnapshot,
-  error: EnvironmentAuthorizationError,
-});
-
-export const WsSubagentBackendGetRpc = Rpc.make(WS_METHODS.subagentBackendGet, {
-  payload: Schema.Struct({
-    /**
-     * Defaults to false. `get` runs on every client mount and must stay cheap, so
-     * by default it reports whatever Cursor CLI model list is already cached
-     * (possibly empty) without spawning a probe. The panel opts into a fresh probe
-     * by sending true when it actually opens.
-     */
-    refreshModels: Schema.optional(Schema.Boolean),
-  }),
-  success: SubagentBackendState,
-  error: EnvironmentAuthorizationError,
-});
-
-export const WsSubagentBackendSetRpc = Rpc.make(WS_METHODS.subagentBackendSet, {
-  payload: SubagentBackendSetInput,
-  success: SubagentBackendState,
-  error: EnvironmentAuthorizationError,
-});
-
-export const WsSubagentBackendUsageRpc = Rpc.make(WS_METHODS.subagentBackendUsage, {
-  payload: Schema.Struct({}),
-  success: Schema.NullOr(CursorUsageSnapshot),
   error: EnvironmentAuthorizationError,
 });
 
@@ -2384,9 +2348,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
   WsGetResourceQueueRpc,
-  WsSubagentBackendGetRpc,
-  WsSubagentBackendSetRpc,
-  WsSubagentBackendUsageRpc,
   WsLlmServeLoadRpc,
   WsLlmServeUnloadRpc,
   WsSubscribeLlmModelsRpc,

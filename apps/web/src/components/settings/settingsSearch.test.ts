@@ -126,7 +126,6 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
-      hasSubagentBackendThreadModes: false,
       hasAllowSpendingCredits: false,
       hasJiraTicketLinks: false,
     });
@@ -154,7 +153,7 @@ describe("searchSettings", () => {
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
   });
 
-  it("hides the subagent offload switch on servers without the capability", () => {
+  it("hides the allow-spending-credits switch on servers without the capability", () => {
     const without = filterAvailableSettingsSearchItems({
       hasCloudPublicConfig: false,
       hasEnvironment: true,
@@ -163,7 +162,6 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
-      hasSubagentBackendThreadModes: false,
       hasAllowSpendingCredits: false,
       hasJiraTicketLinks: false,
     });
@@ -175,13 +173,10 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
-      hasSubagentBackendThreadModes: true,
       hasAllowSpendingCredits: true,
       hasJiraTicketLinks: false,
     });
-    expect(without.some((item) => item.id === "subagent-offload")).toBe(false);
-    expect(with_.some((item) => item.id === "subagent-offload")).toBe(true);
-    // The same silent-snap-back gate: an older server strips the unknown
+    // The silent-snap-back gate: an older server strips the unknown
     // `allowSpendingCredits` key from the patch, so an ungated row would accept the flip
     // and revert with no error — and here the direction it reverts to is "keep spending".
     expect(without.some((item) => item.id === "allow-spending-credits")).toBe(false);
@@ -197,7 +192,6 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
-      hasSubagentBackendThreadModes: false,
       hasAllowSpendingCredits: false,
     };
     expect(
@@ -222,7 +216,6 @@ describe("searchSettings", () => {
       localEnvironmentDisabled: true,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
-      hasSubagentBackendThreadModes: false,
       hasAllowSpendingCredits: false,
       hasJiraTicketLinks: false,
     };
@@ -342,7 +335,6 @@ describe("auto-settlement search availability", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: availability.eligibleEnvironmentIds.length > 0,
-      hasSubagentBackendThreadModes: false,
       hasAllowSpendingCredits: false,
       hasJiraTicketLinks: false,
     });

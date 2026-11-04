@@ -36,8 +36,6 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { EnvironmentThemeService } from "./environmentTheme.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
-import { ProviderRegistry } from "./provider/ProviderRegistry.ts";
-import { SubagentLiveThreads } from "./subagentBackend/SubagentLiveThreads.ts";
 
 it.effect("parks automatic pull until activation without delaying command readiness", () =>
   Effect.scoped(
@@ -128,9 +126,6 @@ it.effect("parks automatic pull until activation without delaying command readin
         // FORK: startup services the fork adds; auto-pull never reaches them.
         Layer.mock(WebPushRelay.WebPushRelay)({ vapidPublicKey: "", stop: Effect.void }),
         Layer.mock(EnvironmentThemeService)({ current: Effect.succeed([]) }),
-        Layer.mock(SubagentLiveThreads)({}),
-        Layer.mock(ProviderRegistry)({}),
-        FileSystem.layerNoop({}),
         Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({ runOnce: Effect.never }),
         Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
           publish: (event) => Effect.succeed({ ...event, sequence: 1 }),

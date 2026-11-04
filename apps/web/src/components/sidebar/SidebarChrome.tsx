@@ -39,7 +39,6 @@ import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarResourceQueue } from "./SidebarResourceQueue";
-import { SidebarSubagentBackend } from "./SidebarSubagentBackend";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
@@ -326,9 +325,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           )}
           {/* Fork-only, OUTSIDE the branch above on purpose: "Back" replaces navigation, but
             these are live status readouts. Local models and Resource Queue share open state
-            here because both anchor to the wrapper above with identical insets; Subagents'
-            panel is in-flow and keeps its own. */}
-          <SidebarSubagentBackend />
+            here because both anchor to the wrapper above with identical insets. */}
           <SidebarLocalModels
             isOpen={openFooterPanel === "models"}
             onOpenChange={(open) => setFooterPanelOpen("models", open)}

@@ -75,7 +75,6 @@ export interface SettingsSearchItem {
   readonly peerLinksOnly?: boolean;
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
-  readonly requiresSubagentBackendThreadModes?: boolean;
   readonly requiresAllowSpendingCredits?: boolean;
   readonly requiresJiraTicketLinks?: boolean;
 }
@@ -89,7 +88,6 @@ export interface SettingsSearchAvailability {
   readonly canManageLocalBackend: boolean;
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
-  readonly hasSubagentBackendThreadModes: boolean;
   readonly hasAllowSpendingCredits: boolean;
   readonly hasJiraTicketLinks: boolean;
   readonly managedTunnelActive?: boolean;
@@ -642,13 +640,6 @@ export const SETTINGS_SEARCH_ITEMS = [
       "installed cli versions newer available codex claude cursor grok fx kiro opencode",
     ],
     scope: "environment-defaults",
-  },
-  {
-    id: "subagent-offload",
-    title: "Subagent offload",
-    to: "/settings/threads",
-    searchTerms: ["cursor subagents offload dispatch master switch thread"],
-    requiresSubagentBackendThreadModes: true,
   },
   {
     id: "allow-spending-credits",
@@ -1449,7 +1440,6 @@ export function filterAvailableSettingsSearchItems(
       (!item.localEnvironmentOnly || !availability.localEnvironmentDisabled) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
-      (!item.requiresSubagentBackendThreadModes || availability.hasSubagentBackendThreadModes) &&
       (!item.requiresAllowSpendingCredits || availability.hasAllowSpendingCredits) &&
       (!item.requiresJiraTicketLinks || availability.hasJiraTicketLinks) &&
       (!item.managedTunnelOnly || availability.managedTunnelActive === true) &&

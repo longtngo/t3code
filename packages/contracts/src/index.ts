@@ -66,7 +66,6 @@ export * from "./previewAutomation.ts";
 export * from "./previewCapture.ts";
 export * from "./hostMetrics.ts";
 export * from "./usage.ts";
-export * from "./subagentBackend.ts";
 export * from "./threadQueue.ts";
 export * from "./scheduledTask.ts";
 export * from "./worktreeMcp.ts";

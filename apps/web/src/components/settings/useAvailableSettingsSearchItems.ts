@@ -41,11 +41,6 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
     ) === true;
   const hasThreadAutoSettlement =
     getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length > 0;
-  const hasSubagentBackendThreadModes =
-    environments.some(
-      (environment) =>
-        environment.serverConfig?.environment.capabilities.subagentBackendThreadModes === true,
-    ) === true;
   const hasAllowSpendingCredits =
     environments.some(
       (environment) =>
@@ -81,7 +76,6 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
     canManageLocalBackend,
     isWslSettingsRowVisible: wslSettingsRowVisible,
     hasThreadAutoSettlement,
-    hasSubagentBackendThreadModes,
     hasAllowSpendingCredits,
     hasJiraTicketLinks,
     managedTunnelActive,

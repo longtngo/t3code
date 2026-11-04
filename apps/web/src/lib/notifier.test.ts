@@ -315,8 +315,8 @@ describe("notifyThreadCompletions", () => {
   });
 
   it("treats a finish with only background shells live as interim", () => {
-    // Subagents offloaded to another CLI run as background shells, which read as
-    // `monitoring`. Their settles are interim, or the toggle silences nothing.
+    // Background shells read as `monitoring`. Their settles are interim, or the
+    // toggle silences nothing.
     notifyThreadCompletions({
       environmentId: ENV,
       completions: [

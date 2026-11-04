@@ -47,8 +47,6 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import { EnvironmentThemeService } from "./environmentTheme.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
-import { ProviderRegistry } from "./provider/ProviderRegistry.ts";
-import { SubagentLiveThreads } from "./subagentBackend/SubagentLiveThreads.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 
@@ -221,13 +219,10 @@ it.effect.each([
         Layer.mock(HttpServer.HttpServer)({
           address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 3773),
         }),
-        // FORK: startup also wires the web push relay (stopped by the finalizer), the
-        // watch re-scan backstop and the subagent offload's reconciler. None is under test.
+        // FORK: startup also wires the web push relay (stopped by the finalizer) and the
+        // watch re-scan backstop. Neither is under test.
         Layer.mock(WebPushRelay.WebPushRelay)({ vapidPublicKey: "", stop: Effect.void }),
         Layer.mock(EnvironmentThemeService)({}),
-        Layer.mock(SubagentLiveThreads)({}),
-        Layer.mock(ProviderRegistry)({}),
-        FileSystem.layerNoop({}),
       );
       yield* Effect.gen(function* () {
         const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;

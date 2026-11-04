@@ -261,30 +261,6 @@ rules to connected environments that support shared settings. Offline environmen
 and older servers keep their previous values. Changing a rule does not reopen
 already settled threads.
 
-## Subagent offload
-
-The Subagents row at the bottom of the sidebar decides where agents send their
-subagents. The top segment is the machine-wide default: Default keeps subagents on
-the same provider and model as the thread, Cursor sends them to the Cursor instance
-you pick.
-
-With a thread open, a second segment appears for that thread alone. Inherit follows
-the machine-wide choice, Cursor offloads this thread even when the default is off,
-and Default keeps this thread's subagents local even when the default is on.
-
-With the machine-wide choice on Default, the Subagents row marks when threads on this
-machine (the primary environment) are set to Cursor, and its panel picks the model those
-threads use.
-
-Settings → General has a Subagent offload switch. Turn it off to stop every T3 Code
-thread from offloading. The per-thread segment then disappears, Cursor is greyed out
-in the machine-wide segment while Default stays available, and it all comes back when
-you turn the switch on. Per-thread control reaches Claude Code threads today, and
-needs a Cursor instance in Settings before its Cursor choice does anything. Turning
-offload on applies to new threads; an existing thread, or a fork of one, may keep
-working as it began. Turning it off stops offloading at once, in every thread. The
-machine-wide choice applies to anything on this machine that reads it.
-
 ## Link a pull request
 
 The server finds the PR for each unsettled thread's saved branch, even when your

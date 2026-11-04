@@ -46,13 +46,11 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 
 ## Fork additions
 
-Concepts this fork adds on top of upstream. Sources: [SubagentBackend.ts](../../apps/server/src/subagentBackend/SubagentBackend.ts),
-[ThreadBackendPath.ts](../../apps/server/src/subagentBackend/ThreadBackendPath.ts).
+Concepts this fork adds on top of upstream. Source: [environmentTheme.ts](../../apps/server/src/environmentTheme.ts).
 
-| Term              | Meaning                                                                                                                                                                                     |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Subagent offload  | Where a coding agent dispatches its subagents, chosen per machine and per thread. Resolution order: master switch, then thread mode (`inherit`/`on`/`off`), then the machine-global record. |
-| Environment theme | A per-environment colour applied across clients so multiple connected environments stay visually distinct.                                                                                  |
+| Term              | Meaning                                                                                                    |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| Environment theme | A per-environment colour applied across clients so multiple connected environments stay visually distinct. |
 
 ## Pull requests
 

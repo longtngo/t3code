@@ -144,13 +144,6 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       flag and poll every attached repo on a timer, so clients treat missing as unsupported and do
       not subscribe status for attached repositories at all. */
   vcsLocalOnlyStatus: Schema.optionalKey(Schema.Boolean),
-  /** Server exposes the subagent dispatch toggle (subagentBackend.get/set/usage). Absent on
-      servers from before it shipped, so clients must hide the control rather than probe. */
-  subagentBackend: Schema.optionalKey(Schema.Boolean),
-  /** Server writes per-thread offload flag files and honours `subagentBackendEnabled` /
-      `subagentBackendThreadModes`. Absent on servers from before it shipped, so clients hide
-      the per-thread control and the master switch rather than write settings nothing reads. */
-  subagentBackendThreadModes: Schema.optionalKey(Schema.Boolean),
   /** Server honours `allowSpendingCredits` and refuses turns on a provider at 100%. Absent on
       servers from before it shipped, so clients hide the master switch rather than write a
       setting nothing reads — an ungated row accepts the flip, has the unknown key stripped

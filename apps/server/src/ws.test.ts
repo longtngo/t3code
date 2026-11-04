@@ -144,7 +144,6 @@ import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts"
 import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
 import { CreditSpendGuard } from "./provider/Services/CreditSpendGuard.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
-import { SubagentLiveThreads } from "./subagentBackend/SubagentLiveThreads.ts";
 import * as ThreadQueue from "./threadQueue.ts";
 import { MarkdownHtmlRenderer } from "./workspace/markdownHtmlRenderer.ts";
 import * as WorkspaceMemberBranches from "./workspace/WorkspaceMemberBranches.ts";
@@ -793,7 +792,6 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(MarkdownHtmlRenderer)({}),
   Layer.mock(PushSubscriptionRepository)({}),
   Layer.mock(ResourceQueue.ResourceQueue)({}),
-  Layer.mock(SubagentLiveThreads)({}),
   Layer.mock(ThreadQueue.ThreadQueueService)({}),
   Layer.mock(WebPushRelay.WebPushRelay)({ vapidPublicKey: "" }),
   Layer.mock(WorkspaceMemberBranches.WorkspaceMemberBranches)({}),

@@ -1,6 +1,5 @@
 import { FolderIcon, ListPlusIcon, ListXIcon } from "lucide-react";
 import { QUEUED_ON_ANOTHER_DEVICE_SHORT } from "../SidebarQueueBlock";
-import { SidebarThreadSubagentIndicator } from "./SidebarThreadSubagentIndicator";
 import { ThreadProviderChip, ThreadProviderRail } from "../ThreadProviderRail";
 import { isSidebarThreadWoke } from "../Sidebar.logic";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
@@ -1116,9 +1115,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       onThreadActivate={onThreadActivate}
     />
   );
-  const subagentIndicator = (
-    <SidebarThreadSubagentIndicator environmentId={thread.environmentId} threadId={thread.id} />
-  );
   const draftIndicator = hasUnsentDraft ? (
     <Tooltip>
       <TooltipTrigger
@@ -1222,7 +1218,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
           <TooltipPopup side="top">{props.queueNote}</TooltipPopup>
         </Tooltip>
       ) : null}
-      {subagentIndicator}
       {terminalStatusIcon}
       {prBadge}
       {diff ? (
@@ -1317,7 +1312,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               <ThreadProviderChip thread={thread} />
               {multiline ? titleLineIcons : null}
               {pinIndicator}
-              {multiline ? null : subagentIndicator}
               {multiline ? null : terminalStatusIcon}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">

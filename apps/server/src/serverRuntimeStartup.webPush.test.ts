@@ -46,8 +46,6 @@ import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeReco
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
-import { ProviderRegistry } from "./provider/ProviderRegistry.ts";
-import { SubagentLiveThreads } from "./subagentBackend/SubagentLiveThreads.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -261,9 +259,6 @@ it.live("the startup finalizer silences web push before shutdown cancels running
       Layer.succeed(ProjectStore.ProjectStoreV2, stub()),
       Layer.succeed(ThreadLaunch.ThreadLaunchService, stub()),
       Layer.succeed(ThreadManagement.ThreadManagementService, stub()),
-      // The subagent offload's reconciler starts at boot; it is not under test here.
-      Layer.succeed(SubagentLiveThreads, stub()),
-      Layer.succeed(ProviderRegistry, stub()),
       Layer.succeed(FileSystem.FileSystem, stub()),
     );
     yield* Layer.buildWithScope(

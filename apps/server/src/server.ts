@@ -77,7 +77,6 @@ import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
 import * as PeerMcpClient from "./peer/PeerMcpClient.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
-import * as SubagentBackend from "./subagentBackend/SubagentBackend.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
@@ -655,9 +654,6 @@ const layerWebPushRelay = Layer.effectDiscard(
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   layerWebPushRelay,
-  // FORK: per-thread subagent offload. Registers the preparer Claude adapters call before
-  // they spawn a process; its reconciler is forked by ServerRuntimeStartup.
-  SubagentBackend.SubagentBackendLive,
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
   layerIdleCompactionWorker,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import { type CommandId, ProjectId, ThreadId } from "./baseSchemas.ts";
+import { type CommandId, ProjectId } from "./baseSchemas.ts";
 import {
   ProviderDriverKind,
   ProviderInstanceEnvironment,
@@ -23,7 +23,6 @@ import {
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
-  subagentBackendThreadMode,
   withIdleCompaction,
 } from "./settings.ts";
 
@@ -798,70 +797,28 @@ describe("settings schema / patch parity", () => {
   });
 });
 
-describe("subagent offload settings", () => {
-  it("defaults master on and thread modes empty", () => {
-    expect(DEFAULT_SERVER_SETTINGS.subagentBackendEnabled).toBe(true);
-    expect(DEFAULT_SERVER_SETTINGS.subagentBackendThreadModes).toEqual({});
-  });
+describe("removed subagent offload settings", () => {
+  // Settings files and old cached web bundles from before the Cursor subagent backend was
+  // removed still carry these keys. They must cost nothing: a failed `ServerSettings` decode
+  // makes `loadSettingsFromDisk` keep DEFAULT_SERVER_SETTINGS and write them back, losing
+  // every unrelated setting.
+  const legacy = {
+    subagentBackendEnabled: false,
+    subagentBackendThreadModes: { t1: "on", t2: "off" },
+  };
 
-  it("decodes a settings file written before the fields existed", () => {
-    const decoded = decodeTypedServerSettings({});
-    expect(decoded.subagentBackendEnabled).toBe(true);
-    expect(decoded.subagentBackendThreadModes).toEqual({});
-  });
-
-  it("degrades an undecodable value to the field default instead of failing the document", () => {
-    // A mode a newer build wrote, or a hand-edited non-boolean master, must cost only its
-    // own field: a failed `ServerSettings` decode makes `loadSettingsFromDisk` keep
-    // DEFAULT_SERVER_SETTINGS and write them back, losing every unrelated setting.
-    const decoded = decodeServerSettings({
-      subagentBackendThreadModes: { t1: "on-with-model" },
-      subagentBackendEnabled: "true",
-      enableProviderUpdateChecks: false,
-    });
-    expect(decoded.subagentBackendThreadModes).toEqual({});
-    expect(decoded.subagentBackendEnabled).toBe(true);
+  it("decodes a settings file that still carries the removed keys", () => {
+    const decoded = decodeServerSettings({ ...legacy, enableProviderUpdateChecks: false });
     expect(decoded.enableProviderUpdateChecks).toBe(false);
+    expect(Object.hasOwn(decoded, "subagentBackendEnabled")).toBe(false);
+    expect(Object.hasOwn(decoded, "subagentBackendThreadModes")).toBe(false);
   });
 
-  it("still rejects an unknown thread mode at the RPC boundary", () => {
-    // Strict validation lives in the patch schema, where a bad value fails only the
-    // update that introduced it and is reported to the user.
-    expect(() =>
-      decodeServerSettingsPatch({
-        subagentBackendThreadModes: { t1: "cursor" },
-      }),
-    ).toThrow();
-    expect(() => decodeServerSettingsPatch({ subagentBackendEnabled: "true" })).toThrow();
-  });
-
-  it("accepts a single-key thread-mode patch", () => {
-    const patch = decodeTypedServerSettingsPatch({
-      subagentBackendThreadModes: { t1: "inherit" },
-    });
-    expect(patch.subagentBackendThreadModes).toEqual({ t1: "inherit" });
-  });
-});
-
-describe("subagentBackendThreadMode", () => {
-  const t1 = ThreadId.make("t1");
-  const t2 = ThreadId.make("t2");
-
-  it("reads an explicit entry", () => {
-    expect(subagentBackendThreadMode({ [t1]: "on" }, t1)).toBe("on");
-    expect(subagentBackendThreadMode({ [t1]: "off" }, t1)).toBe("off");
-  });
-
-  it("treats an absent entry as inherit", () => {
-    expect(subagentBackendThreadMode({ [t2]: "on" }, t1)).toBe("inherit");
-  });
-
-  it("does not read an inherited Object.prototype member as a mode", () => {
-    // Thread ids are client-generated and unconstrained; `{}["constructor"]` is a function,
-    // which would match no toggle value and light nothing — the segment must read Inherit.
-    for (const id of ["constructor", "__proto__", "toString", "valueOf"]) {
-      expect(subagentBackendThreadMode({}, ThreadId.make(id))).toBe("inherit");
-    }
+  it("accepts a patch from an old client that still sends the removed keys", () => {
+    const patch = decodeServerSettingsPatch({ ...legacy, allowSpendingCredits: false });
+    expect(patch.allowSpendingCredits).toBe(false);
+    expect(Object.hasOwn(patch, "subagentBackendEnabled")).toBe(false);
+    expect(Object.hasOwn(patch, "subagentBackendThreadModes")).toBe(false);
   });
 });
 
@@ -919,7 +876,7 @@ describe("allow spending credits setting", () => {
   });
 
   it("degrades an undecodable value to the default instead of failing the document", () => {
-    // Same containment as `subagentBackendEnabled` above: a failed `ServerSettings`
+    // Same containment as `autoCompactWindow`/`outputStyle`: a failed `ServerSettings`
     // decode makes `loadSettingsFromDisk` keep DEFAULT_SERVER_SETTINGS and write them
     // back, losing every unrelated setting.
     const decoded = decodeServerSettings({

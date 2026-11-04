@@ -17,19 +17,14 @@ import {
   NodeId,
   type OrchestrationV2ProviderThread,
   ProjectId,
-  ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   type ProviderTurnId,
-  type ServerProvider,
-  type ServerProviderUsageLimits,
   RunAttemptId,
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
-import * as Clock from "effect/Clock";
-import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -43,10 +38,6 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as ServerConfig from "../../config.ts";
-import { ProviderRegistry } from "../../provider/ProviderRegistry.ts";
-import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
-import { SubagentBackendLive } from "../../subagentBackend/SubagentBackend.ts";
 import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2Event,
@@ -61,7 +52,6 @@ import {
   claudeQueryAutoCompactWindow,
   claudeResultProse,
   claudeResultTerminalStatus,
-  subagentDispatchAppend,
 } from "./ClaudeAdapterV2Fork.ts";
 
 const NATIVE_SESSION = "fork-native-session";
@@ -323,7 +313,6 @@ function makeTurnInput(input: {
 const makeHarness = (options?: {
   readonly getContextUsage?: Effect.Effect<SDKControlGetContextUsageResponse>;
   readonly modelSelection?: ModelSelection;
-  readonly prepareSubagentBackend?: ClaudeAdapterV2.ClaudeAdapterV2Options["prepareSubagentBackend"];
 }) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -347,9 +336,6 @@ const makeHarness = (options?: {
       random: yield* SecureRandom.SecureRandom,
       path: yield* Path.Path,
       idAllocator,
-      ...(options?.prepareSubagentBackend === undefined
-        ? {}
-        : { prepareSubagentBackend: options.prepareSubagentBackend }),
       queryRunner: {
         allocateSessionId: Effect.succeed(NATIVE_SESSION),
         open: (input) =>
@@ -737,240 +723,4 @@ describe("ClaudeAdapterV2 fork deltas", () => {
       }).pipe(provide),
     ),
   );
-});
-
-/** The fields of a thread flag file these tests read. */
-const decodeThreadFlagFile = Schema.decodeSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      backend: Schema.String,
-      binaryPath: Schema.NullOr(Schema.String),
-      degraded: Schema.NullOr(Schema.String),
-    }),
-  ),
-);
-
-describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
-  // The defect this feature shipped with once (2026-09-04): every flag file was right and
-  // no subagent ever went to Cursor, because nothing told the AGENT. So this drives the
-  // real chain — settings -> SubagentBackendLive's preparer -> the adapter's process spawn —
-  // and asserts on the options the Claude SDK is asked to run with.
-  const arm = (input: {
-    readonly enabled: boolean;
-    readonly mode: "on" | "off";
-    readonly allowSpendingCredits?: boolean;
-    /** The Cursor instance's published usage windows; none when omitted. */
-    readonly cursorWindows?: (nowMs: number) => ServerProviderUsageLimits["windows"];
-  }) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        // A real date, so a reader that ignores the clock cannot pass by reading epoch 0.
-        yield* TestClock.setTime(Date.parse("2026-10-03T00:00:00.000Z"));
-        const nowMs = yield* Clock.currentTimeMillis;
-        const cursorProvider = {
-          instanceId: ProviderInstanceId.make("cursor"),
-          driver: ProviderDriverKind.make("cursor"),
-          enabled: true,
-          installed: true,
-          ...(input.cursorWindows === undefined
-            ? {}
-            : {
-                usageLimits: {
-                  checkedAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
-                  windows: input.cursorWindows(nowMs),
-                },
-              }),
-        } as unknown as ServerProvider;
-        // `readBackendFile` reads `$HOME/.local/state/...`; never the real one.
-        const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-sbt-home-" });
-        const previousHome = process.env.HOME;
-        yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            process.env.HOME = home;
-          }),
-          () =>
-            Effect.sync(() => {
-              process.env.HOME = previousHome;
-            }),
-        );
-        const threadId = ThreadId.make("thread-claude-fork");
-        const backendContext = yield* Layer.build(
-          SubagentBackendLive.pipe(
-            Layer.provideMerge(
-              Layer.mergeAll(
-                ServerConfig.layerTest("/tmp", { prefix: "t3-sbt-config-" }),
-                Layer.mock(ProviderRegistry)({
-                  getProviders: Effect.succeed([cursorProvider]),
-                  streamChanges: Stream.empty,
-                }),
-                serverSettingsLayerTest({
-                  allowSpendingCredits: input.allowSpendingCredits ?? true,
-                  subagentBackendEnabled: input.enabled,
-                  subagentBackendThreadModes: { [threadId]: input.mode },
-                  providerInstances: {
-                    [ProviderInstanceId.make("cursor")]: {
-                      driver: ProviderDriverKind.make("cursor"),
-                      enabled: true,
-                      config: { binaryPath: "/bin/echo" },
-                    },
-                  },
-                }),
-              ),
-            ),
-          ),
-        );
-        const { subagentThreadsDir } = Context.get(backendContext, ServerConfig.ServerConfig);
-        const harness = yield* makeHarness();
-        yield* harness.startTurn();
-        const opened = harness.getOpenedOptions();
-        const statePath = opened?.env?.SUBAGENT_BACKEND_STATE;
-        const append = (opened?.systemPrompt as { readonly append?: string } | undefined)?.append;
-        const onDisk =
-          statePath === undefined
-            ? undefined
-            : decodeThreadFlagFile(yield* fileSystem.readFileString(statePath));
-        return { statePath, append: append ?? "", onDisk, subagentThreadsDir };
-      }),
-    ).pipe(provide);
-
-  it.effect("a thread switched on runs with the wrapper's state file and the instruction", () =>
-    Effect.gen(function* () {
-      const on = yield* arm({ enabled: true, mode: "on" });
-      assert.isString(on.statePath);
-      assert.isTrue(on.statePath!.startsWith(`${on.subagentThreadsDir}/`));
-      assert.equal(on.onDisk?.backend, "cursor");
-      assert.equal(on.onDisk?.binaryPath, "/bin/echo");
-      assert.include(on.append, "<subagent_dispatch>");
-      assert.include(on.append, "~/bin/subagent-dispatch");
-    }),
-  );
-
-  it.effect("a thread switched off, or the master switch off, gets no instruction", () =>
-    Effect.gen(function* () {
-      const off = yield* arm({ enabled: true, mode: "off" });
-      assert.equal(off.onDisk?.backend, "default");
-      assert.notInclude(off.append, "subagent_dispatch");
-      const masterOff = yield* arm({ enabled: false, mode: "on" });
-      assert.equal(masterOff.onDisk?.backend, "default");
-      assert.include(masterOff.onDisk?.degraded, "switched off");
-      assert.notInclude(masterOff.append, "subagent_dispatch");
-    }),
-  );
-
-  // "Allow to spend credits" off and Cursor's overall window at 100% withholds offload, read
-  // live from the provider registry by the production preparer.
-  const overall = (usedPercent: number, resetsAt: number) => ({
-    id: "totalPercentUsed",
-    kind: "monthly" as const,
-    label: "Overall",
-    usedPercent,
-    resetsAt: DateTime.formatIso(DateTime.makeUnsafe(resetsAt)),
-  });
-  const HOUR_MS = 60 * 60 * 1000;
-
-  it.effect("Cursor at 100% with spending off withholds offload; spending on allows it", () =>
-    Effect.gen(function* () {
-      const full = (nowMs: number) => [overall(100, nowMs + HOUR_MS)];
-      const blocked = yield* arm({
-        enabled: true,
-        mode: "on",
-        allowSpendingCredits: false,
-        cursorWindows: full,
-      });
-      assert.equal(blocked.onDisk?.backend, "default");
-      assert.include(blocked.onDisk?.degraded, "Cursor has used 100%");
-      assert.notInclude(blocked.append, "subagent_dispatch");
-      const allowed = yield* arm({
-        enabled: true,
-        mode: "on",
-        allowSpendingCredits: true,
-        cursorWindows: full,
-      });
-      assert.equal(allowed.onDisk?.backend, "cursor");
-      assert.include(allowed.append, "<subagent_dispatch>");
-    }),
-  );
-
-  it.effect("a full Cursor window whose reset has passed no longer withholds offload", () =>
-    Effect.gen(function* () {
-      const stale = yield* arm({
-        enabled: true,
-        mode: "on",
-        allowSpendingCredits: false,
-        cursorWindows: (nowMs) => [overall(100, nowMs - HOUR_MS)],
-      });
-      assert.equal(stale.onDisk?.backend, "cursor");
-      assert.include(stale.append, "<subagent_dispatch>");
-    }),
-  );
-
-  it.effect("only the overall window counts: one full pool does not withhold offload", () =>
-    Effect.gen(function* () {
-      const pool = yield* arm({
-        enabled: true,
-        mode: "on",
-        allowSpendingCredits: false,
-        cursorWindows: (nowMs) => [
-          overall(60, nowMs + HOUR_MS),
-          { ...overall(100, nowMs + HOUR_MS), id: "apiPercentUsed", label: "Other Models" },
-        ],
-      });
-      assert.equal(pool.onDisk?.backend, "cursor");
-    }),
-  );
-
-  it.effect("with no subagent backend running, the process env and prompt are untouched", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const harness = yield* makeHarness();
-        yield* harness.startTurn();
-        const opened = harness.getOpenedOptions();
-        assert.isUndefined(opened?.env?.SUBAGENT_BACKEND_STATE);
-        assert.notInclude(
-          (opened?.systemPrompt as { readonly append?: string } | undefined)?.append ?? "",
-          "subagent_dispatch",
-        );
-      }),
-    ).pipe(provide),
-  );
-});
-
-describe("ClaudeAdapterV2 subagent flag file follows the toggle", () => {
-  it.effect("prepares the thread's backend on every turn, not only at spawn", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        // The dispatch wrapper reads the flag file on every call, so a toggle flip reaches
-        // it on the next turn even though the live process (and its prompt) is reused.
-        const prepared: Array<string> = [];
-        const harness = yield* makeHarness({
-          prepareSubagentBackend: (threadId) =>
-            Effect.sync(() => {
-              prepared.push(threadId);
-              return { statePath: "/tmp/t3-sbt-flip/thread.json", backend: "cursor" };
-            }),
-        });
-        for (let turn = 0; turn < 3; turn += 1) {
-          yield* harness.startTurn();
-          yield* harness.offer(result({ result: `turn ${turn}` }));
-          assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
-        }
-        assert.lengthOf(harness.allOpenedOptions, 1);
-        assert.deepStrictEqual(prepared, [
-          "thread-claude-fork",
-          "thread-claude-fork",
-          "thread-claude-fork",
-        ]);
-      }).pipe(provide),
-    ),
-  );
-});
-
-describe("subagentDispatchAppend", () => {
-  it("enables only on an exact `cursor`", () => {
-    assert.match(subagentDispatchAppend("cursor"), /subagent-dispatch/);
-    for (const other of ["default", "", "Cursor", "cursor ", undefined]) {
-      assert.equal(subagentDispatchAppend(other), "");
-    }
-  });
 });

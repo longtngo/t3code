@@ -99,15 +99,11 @@ import {
   ThreadId,
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
-  SUBAGENT_BACKEND_DEFAULT,
   WS_METHODS,
   WsRpcGroup,
   WsServerSetThreadQueueRpc,
   WsGetResourceQueueRpc,
   WsPushSubscriptionsRegisterRpc,
-  WsSubagentBackendGetRpc,
-  WsSubagentBackendSetRpc,
-  WsSubagentBackendUsageRpc,
   WsProjectsRenderTrustedMarkdownRpc,
   WsAttachmentsUploadRpc,
   WsProjectsReadTrustedFileRpc,
@@ -268,8 +264,6 @@ import * as HostMetrics from "./diagnostics/HostMetrics.ts";
 import { llmModelsStream } from "./diagnostics/LlmModels.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
-import { readCursorUsage } from "./subagentBackend/cursorUsageRead.ts";
-import * as SubagentBackend from "./subagentBackend/SubagentBackend.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -696,9 +690,6 @@ const ForkServerWsRpcGroup = RpcGroup.make(
   WsServerSetThreadQueueRpc,
   WsGetResourceQueueRpc,
   WsPushSubscriptionsRegisterRpc,
-  WsSubagentBackendGetRpc,
-  WsSubagentBackendSetRpc,
-  WsSubagentBackendUsageRpc,
   WsProjectsRenderTrustedMarkdownRpc,
   WsAttachmentsUploadRpc,
   WsProjectsReadTrustedFileRpc,
@@ -716,9 +707,6 @@ const UpstreamServerWsRpcGroup = ServerWsRpcGroup.omit(
   WS_METHODS.serverSetThreadQueue,
   WS_METHODS.getResourceQueue,
   WS_METHODS.pushSubscriptionsRegister,
-  WS_METHODS.subagentBackendGet,
-  WS_METHODS.subagentBackendSet,
-  WS_METHODS.subagentBackendUsage,
   WS_METHODS.projectsRenderTrustedMarkdown,
   WS_METHODS.attachmentsUpload,
   WS_METHODS.projectsReadTrustedFile,
@@ -1678,21 +1666,6 @@ export const layerWsRpc = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceQueue = yield* ResourceQueue.ResourceQueue;
       const webPushRelay = yield* WebPushRelay.WebPushRelay;
-      // The toggle fails safe like the rest of this feature (see SubagentBackend.ts's
-      // module doc): an unreadable flag file or settings store degrades to this
-      // rather than surfacing a protocol error the client has nothing to do with -
-      // the RPC's error channel only carries authorization failures.
-      const subagentBackendDegraded = (reason: string) => (cause: unknown) =>
-        Effect.logWarning("subagentBackend RPC failed", { reason, cause }).pipe(
-          Effect.as({
-            backend: SUBAGENT_BACKEND_DEFAULT,
-            instanceId: null,
-            model: null,
-            instances: [],
-            models: [],
-            degraded: reason,
-          }),
-        );
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const hostMetrics = yield* HostMetrics.HostMetrics;
       const llmServeManager = yield* LlmServeManager;
@@ -3597,29 +3570,6 @@ export const layerWsRpc = (
           registerPushSubscription(input.subscription).pipe(
             Effect.map((outcome) => ({ ok: outcome === "registered" })),
           ),
-        [WS_METHODS.subagentBackendGet]: Effect.fn("ws.subagentBackendGet")(
-          function* (input) {
-            const persisted = yield* SubagentBackend.readBackendFile();
-            const settings = yield* serverSettings.getRawSettings;
-            // Never probe under master-off: the panel still renders, but spawning the
-            // Cursor CLI to list models for a backend nothing may dispatch to is work
-            // the user has explicitly switched off.
-            const refresh =
-              (input.refreshModels ?? false) && settings.subagentBackendEnabled !== false;
-            const models = yield* SubagentBackend.modelsForPersistedBackend(persisted, refresh);
-            return SubagentBackend.buildState(persisted, settings, models);
-          },
-          Effect.catch(subagentBackendDegraded("The subagent backend state could not be read.")),
-        ),
-        // The body lives in `SubagentBackend.setBackendState`, which never probes — see
-        // its doc for why that is structural here and not a `false` passed from this file.
-        [WS_METHODS.subagentBackendSet]: (input) =>
-          SubagentBackend.setBackendState(input).pipe(
-            Effect.catch(
-              subagentBackendDegraded("The subagent backend selection could not be saved."),
-            ),
-          ),
-        [WS_METHODS.subagentBackendUsage]: (_input) => readCursorUsage(),
         [WS_METHODS.projectsRenderTrustedMarkdown]: (input) =>
           workspaceFileSystem.readTrustedFile(input).pipe(
             Effect.flatMap((file) => markdownHtmlRenderer.render(file.contents)),

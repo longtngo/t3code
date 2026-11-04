@@ -230,34 +230,3 @@ export function claudeContextUsageSnapshot(
     ...(autoCompactSource === undefined ? {} : { autoCompactSource }),
   };
 }
-
-export const SUBAGENT_DISPATCH_INSTRUCTION =
-  "<subagent_dispatch>Subagent offload is ON for this thread. When you need a subagent, do NOT " +
-  "use the Agent tool: write the subagent prompt to a file and run " +
-  "`~/bin/subagent-dispatch <short-name> <prompt-file>` with the Bash tool. Exit code 3 means " +
-  "offload is unavailable for this thread; only then fall back to the Agent tool. Any other " +
-  "non-zero exit is not a fallback signal: read stderr, then either fix your invocation or treat " +
-  "it as a failed subagent run.</subagent_dispatch>";
-
-/**
- * The instruction for a resolved backend, or an empty string. Only an exact `cursor` enables it,
- * so a malformed, absent, or `default` flag file — all of which read back as `default` — appends
- * nothing and leaves the session prompt byte-identical to before.
- */
-export function subagentDispatchAppend(backend: string | undefined): string {
-  return backend === "cursor" ? SUBAGENT_DISPATCH_INSTRUCTION : "";
-}
-
-/**
- * The process environment with `SUBAGENT_BACKEND_STATE` pointed at this thread's own flag
- * file. A spread, never a mutation: the base environment is shared by every session of the
- * adapter instance, so mutating it would hand one thread's path to all of them.
- */
-export function withSubagentBackendState(
-  environment: NodeJS.ProcessEnv | undefined,
-  statePath: string | undefined,
-): NodeJS.ProcessEnv | undefined {
-  return environment === undefined || statePath === undefined
-    ? environment
-    : { ...environment, SUBAGENT_BACKEND_STATE: statePath };
-}

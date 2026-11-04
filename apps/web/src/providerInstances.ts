@@ -187,8 +187,7 @@ function sortProviderInstanceEntries(
   return sorted;
 }
 
-// Fork: exported for the sidebar subagent-backend picker; upstream un-exports it as unused.
-export function getProviderInstanceEntry(
+function getProviderInstanceEntry(
   providers: ReadonlyArray<ServerProvider>,
   instanceId: ProviderInstanceId,
 ): ProviderInstanceEntry | undefined {

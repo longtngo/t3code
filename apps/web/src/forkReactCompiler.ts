@@ -13,7 +13,6 @@ export const FORK_REACT_COMPILER_BAILOUTS: ReadonlyArray<string> = [
   "apps/web/src/components/settings/NotificationsSettings.tsx",
   "apps/web/src/hooks/useLlmModels.ts",
   "apps/web/src/hooks/useResourceQueue.ts",
-  "apps/web/src/hooks/useSubagentBackend.ts",
   "apps/web/src/hooks/useThreadCompletionNotifications.ts",
 ];
 
@@ -36,11 +35,9 @@ export const FORK_REACT_COMPILER_LINT_EXEMPT: ReadonlyArray<string> = [
   "apps/web/src/components/settings/providers/PresetDialog.tsx",
   "apps/web/src/components/sidebar/SidebarLocalModels.tsx",
   "apps/web/src/components/sidebar/SidebarResourceQueue.tsx",
-  "apps/web/src/components/sidebar/SidebarSubagentBackend.tsx",
   "apps/web/src/hooks/useHostMetrics.ts",
   "apps/web/src/hooks/useLlmModels.ts",
   "apps/web/src/hooks/useResourceQueue.ts",
-  "apps/web/src/hooks/useSubagentBackend.ts",
   "apps/web/src/hooks/useThreadCompletionNotifications.ts",
   "apps/web/src/hooks/useWorkspaceRepos.ts",
   "apps/web/src/queueSlotSettings.ts",

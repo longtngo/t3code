@@ -1667,11 +1667,6 @@ export function ThreadsSettingsPanel() {
     (target) => target.serverConfig?.environment.capabilities.threadAutoSettlementScope === true,
   );
   // FORK: same shape as upstream's capability gates, for the fork-only rows.
-  const supportsSubagentOffload =
-    connectedEnvironments.length > 0 &&
-    connectedEnvironments.every(
-      (target) => target.serverConfig?.environment.capabilities.subagentBackendThreadModes === true,
-    );
   const supportsAllowSpendingCredits =
     connectedEnvironments.length > 0 &&
     connectedEnvironments.every(
@@ -1799,7 +1794,7 @@ export function ThreadsSettingsPanel() {
           <SettingsRow
             serverScoped
             {...searchableSetting("allow-spending-credits")}
-            description="Let providers keep working after a usage window reaches 100%. Off stops running turns on that provider, refuses new ones, and withholds Cursor subagent offload until the window resets. Only affects providers that report usage limits in Usage → Limits."
+            description="Let providers keep working after a usage window reaches 100%. Off stops running turns on that provider, and refuses new ones until the window resets. Only affects providers that report usage limits in Usage → Limits."
             resetAction={
               settings.allowSpendingCredits !== DEFAULT_UNIFIED_SETTINGS.allowSpendingCredits ? (
                 <SettingResetButton
@@ -1824,38 +1819,6 @@ export function ThreadsSettingsPanel() {
           />
         ) : null}
       </SettingsSection>
-
-      {supportsSubagentOffload ? (
-        <SettingsSection id="subagents" title="Subagents">
-          <SettingsRow
-            serverScoped
-            {...searchableSetting("subagent-offload")}
-            description="Let threads send their subagents to Cursor. Off stops T3 Code threads from offloading; the Subagents panel in the sidebar says so, and the machine-wide toggle can still be set to Default. Other tools on this host still read the machine-wide toggle."
-            resetAction={
-              settings.subagentBackendEnabled !==
-              DEFAULT_UNIFIED_SETTINGS.subagentBackendEnabled ? (
-                <SettingResetButton
-                  label="subagent offload"
-                  onClick={() =>
-                    updateSettings({
-                      subagentBackendEnabled: DEFAULT_UNIFIED_SETTINGS.subagentBackendEnabled,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.subagentBackendEnabled}
-                onCheckedChange={(checked) =>
-                  updateSettings({ subagentBackendEnabled: Boolean(checked) })
-                }
-                aria-label="Subagent offload"
-              />
-            }
-          />
-        </SettingsSection>
-      ) : null}
 
       {hasServerTargets ? (
         <SettingsSection id="auto-settle" title="Auto-settle">

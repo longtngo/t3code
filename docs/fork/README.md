@@ -356,10 +356,10 @@ every unset install steer instead. Steer stays one setting away.
 ### 5b. The fork's footer panels live inside upstream's `SidebarUtilityMenu`
 
 Upstream `#7153` extracted the sidebar footer into `SidebarUtilityMenu` and reused it from
-`SettingsSidebarNav`. Three fork panels (`SidebarLocalModels`, `SidebarResourceQueue`,
-`SidebarSubagentBackend`) live **inside that component**, along with the shared
+`SettingsSidebarNav`. Two fork panels (`SidebarLocalModels`, `SidebarResourceQueue`) live
+**inside that component**, along with the shared
 open state and the `relative` row wrapper the status panels anchor to. `SidebarChromeFooter` keeps
-only `SidebarProviderUpdatePill` and `SidebarUpdateArchitectureWarning`. Keeping the three out of
+only `SidebarProviderUpdatePill` and `SidebarUpdateArchitectureWarning`. Keeping the two out of
 the menu would have hidden them on the settings page, which is the one surface upstream added.
 
 Since the 53rd reconcile settings is a modal over the thread (upstream #24847), so the settings nav
@@ -370,8 +370,8 @@ old `items-end` row in `SettingsSidebarNav.tsx` went with it.
 router hook in the utility menu breaks it with "No X export is defined on the mock" rather than
 with anything about panels. Add the export; the test's subject still applies.
 
-Probe: `grep -cE '<Sidebar(SubagentBackend|LocalModels|ResourceQueue)\b' apps/web/src/components/sidebar/SidebarChrome.tsx`
-is `3`.
+Probe: `grep -cE '<Sidebar(LocalModels|ResourceQueue)\b' apps/web/src/components/sidebar/SidebarChrome.tsx`
+is `2`.
 
 ### 5c. RETIRED with orchestrator v2: boot reconciliation
 
@@ -1334,16 +1334,10 @@ three steps on one line, so the probe strips whitespace first:
 `tr -d '\n ' < apps/server/src/serverRuntimeStartup.ts | grep -oE 'runWatchRescanBackstop\(\[serverSettings\.rescan,keybindings\.rescan,environmentTheme\.current,?\]' | wc -l`
 is `1`.
 
-### 63. The subagent dispatch instruction is fixed per conversation
+### 63. RETIRED: the subagent dispatch instruction is fixed per conversation
 
-The Subagents toggle reaches a live Claude conversation only through the per-turn flag file, which
-the dispatch wrapper reads on every call (`prepareSubagentBackend` runs before the process-reuse
-check in `ClaudeAdapterV2.ts`). The dispatch INSTRUCTION is part of the system prompt, and the CLI
-replays the original prompt on `--resume` (measured 2026-10-03), so reopening the process on a
-toggle flip changes nothing. A backend key in the reuse check was tried and reverted: its mocked
-tests passed while the real CLI ignored it. Per-turn instruction delivery is an open follow-up.
-Probe: `grep -c subagentBackendKey apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts` is
-`0` (the reverted version, `e716ce3135`, gives 4).
+The Cursor subagent backend (the Subagents toggle, its per-thread flag files and the dispatch
+instruction in the Claude system prompt) was removed from the fork, so nothing is left to hold.
 
 ### 64. A sidebar drop arranges around keyed rows it cannot write instead of refusing
 
