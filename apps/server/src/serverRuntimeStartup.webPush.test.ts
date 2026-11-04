@@ -15,7 +15,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as FileSystem from "effect/FileSystem";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -245,7 +245,7 @@ it.live("the startup finalizer silences web push before shutdown cancels running
       Layer.succeed(ServerSettings.ServerSettingsService, stub()),
       Layer.succeed(EnvironmentThemeService, stub()),
       Layer.succeed(ServerEnvironment, stub()),
-      Layer.succeed(Crypto.Crypto, stub()),
+      Layer.succeed(SecureRandom.SecureRandom, stub()),
       Layer.succeed(ServiceLauncherClient.ServiceLauncherClient, stub()),
       // Startup reads these only on paths this test never reaches.
       Layer.succeed(AnalyticsService.AnalyticsService, stub()),

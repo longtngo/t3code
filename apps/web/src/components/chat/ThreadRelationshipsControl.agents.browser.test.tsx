@@ -158,6 +158,8 @@ it("shows the matching child agent details and refreshes them when the agent set
     <ThreadRelationshipsPanel
       environmentId={EnvironmentId.make("test")}
       threadId={ThreadId.make("parent")}
+      showLineage
+      showSideChats
     />
   );
   await using _screen = await renderPanel(panel);

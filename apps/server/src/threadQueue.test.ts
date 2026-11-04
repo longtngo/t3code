@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { ThreadQueueEntry, ThreadQueueInFlight, ThreadQueueState } from "@t3tools/contracts";
@@ -63,7 +64,7 @@ const tempDir = Effect.gen(function* () {
   return yield* fs.makeTempDirectoryScoped({ prefix: "t3code-thread-queue-" });
 });
 
-it.layer(NodeServices.layer)("thread queue service", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("thread queue service", (it) => {
   it.effect("starts empty at revision 0 when there is no file", () =>
     Effect.gen(function* () {
       const dir = yield* tempDir;

@@ -144,6 +144,11 @@ function harness(
       settings: {
         ...host.settings,
         get: Effect.sync(() => settingsReads.count++).pipe(Effect.andThen(host.settings.get)),
+        // Credentials read settings with their secrets resolved.
+        getWithSecrets: (kind) =>
+          Effect.sync(() => settingsReads.count++).pipe(
+            Effect.andThen(host.settings.getWithSecrets(kind)),
+          ),
       },
     })),
   );

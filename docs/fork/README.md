@@ -31,6 +31,17 @@ units rather than merged. The server core is `apps/server/src/orchestration-v2/`
 what a fork feature did, upstream's version was adopted and the entry below is marked RETIRED with
 what superseded it. Every probe below was re-run against the ported tree.
 
+The 55th reconcile (2026-11-04, 1,203 commits) brought Effect 4.1.2: `effect/Crypto` is gone
+(fork code uses `effect/crypto/SecureRandom`, tests provide `NodeCrypto.layer`) and `pipe` takes at
+most 20 arguments, so long fork test layer pipes are split in two. Upstream's managed policy and
+secret providers are ported onto the fork's `serverSettings.ts` structure (raw-file cache, rescan,
+queue-slot guard); a test layer now needs `ManagedPolicy.layerTest()`. Upstream's pin/archive projects
+(migration id 85) sits beside the fork's `members`. Upstream's rm-safety deny for bypass mode in
+`ClaudeAdapterV2.ts` is unreachable here: the fork's full-access grant (`8e23d07b0`) allows a forwarded
+ask first. Upstream's event compaction is gone for pruning, and with it the fork's section-set
+compaction rule. The Claude context window is the CLI's number, then the catalog's, then the window
+Claude reports (no 200k fallback); see invariant 22.
+
 The 45th reconcile (2026-10-07, 188 commits) brought effect 4.0.1 stable (`effect/unstable/*`
 imports are now `effect/*`) and upstream's flattening of `Services/` and `Layers/` into one module
 per service, with layers named `layer`/`layerXyz`. Fork-only services stay at their old
@@ -150,7 +161,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 81 entries, ids 1-81, unique and monotonic. Upstream's v2 schema
+Current: 88 entries, ids 1-88, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
@@ -158,8 +169,9 @@ Current: 81 entries, ids 1-81, unique and monotonic. Upstream's v2 schema
 `063_DropUnusedV1Projections` is **72**, `064_CanonicalizeThreadPullRequestLinks` is **73**,
 `065_CodexUsageNativeTurnIndex` is **74**, `066_RepairClientSettlementTimestamps` is **75** and
 `067_WebhookDedupe` is **76**, `068_ShellStopRequestIndex` is **77**,
-`069_ThreadMessageSearch` is **78**, `070_PeerLinks` is **79**, `071_PeerLinkFence` is **80** and
-`072_WaitingLinkRequestIndex` is **81**.
+`069_ThreadMessageSearch` is **78**, `070_PeerLinks` is **79**, `071_PeerLinkFence` is **80**,
+`072_WaitingLinkRequestIndex` is **81**, and upstream's `073`-`079` are **82**-**88** (a flat +9;
+`076_ProjectionProjectsPinArchive` is **85**).
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
 upstream's `reconcileV2PreviewMigration` stays out.
@@ -168,7 +180,7 @@ Filename numbers double up on `033`, `037`, `038`, `039`, `041` and `042`. Id `3
 registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
 report the database's history as divergent. Upstream's "registers every migration file" test
 (`Migrations.test.ts`) therefore compares distinct names here, not entries.
-Upstream's `scripts/build-npm-launcher.ts` reads the head migration from file names (72, not 81);
+Upstream's `scripts/build-npm-launcher.ts` reads the head migration from file names (79, not 88);
 the fork does not publish the npm launcher, so it is left alone.
 
 The manifest is a list of **positional tuples** (`[1, "OrchestrationEvents", Migration0001]`), not
@@ -181,7 +193,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `81 81 ok` and `1`.
+Expect `88 88 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -900,7 +912,7 @@ Three fork deltas keep the gauge honest on top of upstream:
 
 Not carried: Codex credits, Cursor on-demand spend and request count.
 
-### 30. A failed hard stop still ends the turn (the compaction exception is retired)
+### 30. A failed hard stop never leaves a dead spinner (upstream's Force stop since the 55th)
 
 FORK `868ed1c02`: a provider that cannot be stopped must not leave a spinner. In v2 the hard
 paths of the adapters already end the turn locally when the provider does not answer. The one
@@ -908,6 +920,13 @@ gap was Claude: `ClaudeAdapterV2.interruptTurn` yielded `query.interrupt` before
 rejected request (dead transport) aborted the stop, and a CLI wedged in a tool never answered
 it. That call is now bounded at 8 s and its failure logged, so the close and the 10 s finalize
 fallback always run.
+
+**55th reconcile: upstream #27252 replaced the 10 s finalize fallback.** When the close is not
+confirmed in 10 s, `interruptTurn` now fails with `ProviderAdapterInterruptTimeoutError`;
+`EffectWorker` dispatches `thread.interrupt.unresponsive` instead of settling, and the thread shows
+upstream's Force stop banner (`useForceStopThread`), which ends the agent's process scope. The turn
+stays open because the CLI may still be working. The fork's goal holds by a visible action rather
+than a silent finalize; the fork's 8 s bound on `query.interrupt` stays in front of it.
 
 The V1 exception "unless a compaction was in flight" protected upstream #9293's
 `restoreCompaction` session write. v2 has no compaction-owned session state: `/compact` is an
@@ -1411,6 +1430,12 @@ prune in front, which merged without a conflict. Probe, expect `0` and `3`:
 git grep -n 'pruneWorktrees' -- apps/server/src/orchestration-v2 | grep -v -e '\.test\.' -e testkit | wc -l
 git grep -n 'reuseRegisteredPath: true' -- apps/server/src/orchestration-v2 | grep -v '\.test\.' | wc -l
 ```
+
+The recreation runs inside the turn start's (or rollback's) `withWorkspaceLease` on the same
+resolved path, so the lease is re-entrant for the holder while its hold is active
+(`workspace/workspaceLease.ts`). Before the 55th reconcile it was a plain semaphore and every
+recreation on Linux deadlocked (macOS hid it: `/var` vs `/private/var` made the keys differ).
+`workspaceLease.test.ts` pins it.
 
 `GitVcsDriverCore.removeWorktree` still prunes after a remove finds the worktree already gone;
 that is upstream's and outside this rule for now.

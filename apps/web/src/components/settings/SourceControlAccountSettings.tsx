@@ -1,6 +1,8 @@
 import {
   AuthSettingsWriteScope,
   type EnvironmentId,
+  isSecretReference,
+  type SecretReference,
   type SourceControlProviderAuth,
 } from "@t3tools/contracts";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
@@ -148,8 +150,9 @@ export function SourceControlAccountSettings({
         const state = hostAccountPickerState({
           pin: choice?.account,
           enabled,
-          // A saved token reads as its redaction marker, so non-empty means one is set.
-          savedToken: (tokens[group.host] ?? "").length > 0,
+          // A saved token reads as its redaction marker, so non-empty means one is set; a
+          // secret-store reference is set too.
+          savedToken: hasSavedToken(tokens[group.host]),
           group,
         });
         const unusablePin = state.pinProblem === null ? null : (choice?.account ?? null);
@@ -271,4 +274,8 @@ export function SourceControlAccountSettings({
       })}
     </div>
   );
+}
+
+function hasSavedToken(token: string | SecretReference | undefined): boolean {
+  return token !== undefined && (isSecretReference(token) || token.length > 0);
 }

@@ -6,6 +6,7 @@ import {
   isImagePreviewFile,
   isVideoPreviewFile,
   rendersFromAssetUrl,
+  needsWorkspaceFileContents,
   resolveFileLinkPath,
   resolveWorkspaceRelativeFilePath,
 } from "./filePath";
@@ -85,5 +86,13 @@ describe("rendersFromAssetUrl", () => {
   it("leaves text and markdown on the source path", () => {
     expect(rendersFromAssetUrl("src/main.ts")).toBe(false);
     expect(rendersFromAssetUrl("README.md")).toBe(false);
+  });
+});
+
+describe("needsWorkspaceFileContents", () => {
+  it("reads a text file while its metadata is still pending, but not a directory", () => {
+    const input = { relativePath: "package.json", activeMode: "source" } as const;
+    expect(needsWorkspaceFileContents({ ...input, metadataKind: undefined })).toBe(true);
+    expect(needsWorkspaceFileContents({ ...input, metadataKind: "directory" })).toBe(false);
   });
 });

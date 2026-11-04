@@ -8,8 +8,8 @@ import type {
   SDKMessage,
   SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as Crypto from "effect/Crypto";
 import {
   ClaudeSettings,
   MessageId,
@@ -32,6 +32,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -343,7 +344,7 @@ const makeHarness = (options?: {
       environment: {},
       attachmentsDir,
       fileSystem,
-      crypto: yield* Crypto.Crypto,
+      random: yield* SecureRandom.SecureRandom,
       path: yield* Path.Path,
       idAllocator,
       ...(options?.prepareSubagentBackend === undefined
@@ -443,7 +444,12 @@ const makeHarness = (options?: {
   });
 
 const provide = Effect.provide(
-  Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+  Layer.mergeAll(
+    IdAllocator.layer,
+    McpProviderSessions.layer,
+    NodeServices.layer,
+    NodeCrypto.layer,
+  ),
 );
 
 let uuidCounter = 0;

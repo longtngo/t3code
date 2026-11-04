@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -11,8 +11,8 @@ import { RuntimeBootId } from "../Services/RuntimeBootId.ts";
 export const RuntimeBootIdLive = Layer.effect(
   RuntimeBootId,
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
-    const bootId = yield* crypto.randomUUIDv4();
+    const random = yield* SecureRandom.SecureRandom;
+    const bootId = yield* random.uuidV4();
     yield* Effect.logInfo("runtime.boot-id.minted", { bootId });
     return { bootId } satisfies typeof RuntimeBootId.Service;
   }),

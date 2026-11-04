@@ -28,12 +28,13 @@ export function useEnvironmentScope(
   environmentId: EnvironmentId | null,
   scope: AuthEnvironmentScope,
 ): boolean {
-  const result = useAtomValue(
+  // Select the grant: every revalidation emits a new result, and most consumers are list rows.
+  return useAtomValue(
     environmentId === null
       ? EMPTY_SESSION_STATE_ATOM
       : environmentSession.sessionStateAtom(environmentId),
+    (result) => sessionHasScope(result, scope),
   );
-  return sessionHasScope(result, scope);
 }
 
 /** See `sessionResultDeniesScope`: only a current answer without `scope` is a denial, so

@@ -62,7 +62,7 @@ const testLayer = Layer.mergeAll(
   GitHubCredentials.layer.pipe(Layer.provide(NodeCrypto.layer), Layer.provideMerge(hostLayer)),
   Logger.layer([capturingLogger]),
   Layer.succeed(Tracer.Tracer, capturingTracer),
-).pipe(Layer.provideMerge(NodeServices.layer));
+).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 let root: string;
 

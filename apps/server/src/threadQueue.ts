@@ -15,7 +15,7 @@ import {
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
@@ -116,11 +116,11 @@ const make = Effect.gen(function* () {
   const { stateDir } = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const filePath = path.join(stateDir, THREAD_QUEUE_FILE_NAME);
 
   const stored = yield* loadFile(filePath);
-  const bootId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+  const bootId = yield* random.uuidV4();
   const document = yield* Ref.make<ThreadQueueDocument>({ bootId, ...stored });
   /** Sliding(1): every message is the whole document, so a slow subscriber needs only the newest. */
   const published = yield* PubSub.sliding<ThreadQueueDocument>(1);

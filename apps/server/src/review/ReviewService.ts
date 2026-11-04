@@ -5,6 +5,8 @@ import * as Layer from "effect/Layer";
 
 import {
   VcsUnsupportedOperationError,
+  type ReviewBranchCommitsInput,
+  type ReviewBranchCommitsResult,
   type ReviewDiffFileContentsInput,
   type ReviewDiffFileContentsResult,
   type ReviewDiffPreviewError,
@@ -18,6 +20,9 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 export class ReviewService extends Context.Service<
   ReviewService,
   {
+    readonly getBranchCommits: (
+      input: ReviewBranchCommitsInput,
+    ) => Effect.Effect<ReviewBranchCommitsResult, ReviewDiffPreviewError>;
     readonly getDiffPreview: (
       input: ReviewDiffPreviewInput,
     ) => Effect.Effect<ReviewDiffPreviewResult, ReviewDiffPreviewError>;
@@ -36,6 +41,21 @@ export class ReviewService extends Context.Service<
 export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
+
+  const getBranchCommits: ReviewService["Service"]["getBranchCommits"] = Effect.fn(
+    "ReviewService.getBranchCommits",
+  )(function* (input) {
+    const handle = yield* vcsRegistry.detect({ cwd: input.cwd, requestedKind: "auto" });
+    if (!handle) return { commits: [], truncated: false };
+    if (handle.kind !== "git") {
+      return yield* new VcsUnsupportedOperationError({
+        operation: "ReviewService.getBranchCommits",
+        kind: handle.kind,
+        detail: "Review commit lists require a Git repository.",
+      });
+    }
+    return yield* git.getReviewBranchCommits(input);
+  });
 
   const getDiffPreview: ReviewService["Service"]["getDiffPreview"] = Effect.fn(
     "ReviewService.getDiffPreview",
@@ -68,6 +88,7 @@ export const make = Effect.gen(function* () {
   });
 
   return ReviewService.of({
+    getBranchCommits,
     getDiffPreview,
     getDiffFileContents,
   });

@@ -174,7 +174,13 @@ describe("rejectRequestsUntilServing", () => {
     // A file that shrinks mid-stream: headers declared N bytes, the body stops early, and Node
     // calls the response complete. Back in the keep-alive pool, the next response lands inside
     // what the client still counts as this body (a measured cross-response desync).
-    server.on("request", (_request, response) => {
+    server.on("request", (request, response) => {
+      // Only this test's request is short: a local port prober (the live t3code server probes
+      // every new listening port with `GET /`) must get an honest response, not a second error.
+      if (request.url !== "/f") {
+        response.writeHead(404, { "Content-Length": "0" }).end();
+        return;
+      }
       response.writeHead(200, { "Content-Length": "100", "Content-Type": "text/plain" });
       response.end("short");
     });

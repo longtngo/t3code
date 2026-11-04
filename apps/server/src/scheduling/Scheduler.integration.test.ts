@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -606,7 +607,8 @@ it.effect("restarts the inconclusive count after a conclusive answer", () =>
     const sentAt = yield* Ref.make<number | null>(null);
     const deps = Layer.mergeAll(
       // The worker auto-arms limit recovery through the orchestrator; no case here arms one.
-      Layer.mock(Orchestrator.OrchestratorV2)({}),
+      // The sweep also watches domain events and settings changes to wake early.
+      Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.never }),
       Layer.succeed(
         CreditSpendGuard,
         CreditSpendGuard.of({
@@ -620,6 +622,7 @@ it.effect("restarts the inconclusive count after a conclusive answer", () =>
       ),
       Layer.mock(ServerSettings.ServerSettingsService)({
         getSettings: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, allowSpendingCredits: false }),
+        streamChanges: Stream.never,
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: () => Effect.succeed(shell),
@@ -632,6 +635,7 @@ it.effect("restarts the inconclusive count after a conclusive answer", () =>
       Layer.mock(ProjectionStore.ProjectionStoreV2)({
         getLimitRecoveryCandidates: () =>
           Ref.get(sentAt).pipe(Effect.map((sent) => (sent === null ? [shell] : []))),
+        getLimitRecoveryWakeAt: () => Effect.succeed(null),
       }),
     );
     const sweep = yield* UsageLimitRecoveryWorker.makeSweep.pipe(Effect.provide(deps));

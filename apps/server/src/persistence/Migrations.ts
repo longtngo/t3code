@@ -179,6 +179,15 @@ import Migration0078 from "./Migrations/069_ThreadMessageSearch.ts";
 import Migration0079 from "./Migrations/070_PeerLinks.ts";
 import Migration0080 from "./Migrations/071_PeerLinkFence.ts";
 import Migration0081 from "./Migrations/072_WaitingLinkRequestIndex.ts";
+// Upstream's 073-079 arrived after the fork deployed ids 33-81, so they take the next free
+// ids (82-88) rather than their filename numbers (registry section 1).
+import Migration0082 from "./Migrations/073_ActiveTurnItemIndexes.ts";
+import Migration0083 from "./Migrations/074_ExcludeAttachmentPlaceholdersFromSearch.ts";
+import Migration0084 from "./Migrations/075_SubagentDeliveryState.ts";
+import Migration0085 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
+import Migration0086 from "./Migrations/077_RepairBooleanSettledOverride.ts";
+import Migration0087 from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
+import Migration0088 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -265,6 +274,13 @@ export const migrationEntries = [
   [79, "PeerLinks", Migration0079],
   [80, "PeerLinkFence", Migration0080],
   [81, "WaitingLinkRequestIndex", Migration0081],
+  [82, "ActiveTurnItemIndexes", Migration0082],
+  [83, "ExcludeAttachmentPlaceholdersFromSearch", Migration0083],
+  [84, "SubagentDeliveryState", Migration0084],
+  [85, "ProjectionProjectsPinArchive", Migration0085],
+  [86, "RepairBooleanSettledOverride", Migration0086],
+  [87, "DropOrchestrationEventCorrelationIndex", Migration0087],
+  [88, "DelegatedRecoveryIndexes", Migration0088],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

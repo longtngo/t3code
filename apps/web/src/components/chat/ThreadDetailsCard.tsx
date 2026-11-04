@@ -78,15 +78,14 @@ export function ThreadDetailsCard({
     const measure = () => {
       const frame = element.closest<HTMLElement>("[data-thread-details-card]");
       const next = element.offsetHeight + (frame ? frame.offsetHeight - frame.clientHeight : 0);
-      // Activity sections (Tasks, Background, Lineage) and PR lists grow with Show more and
-      // scroll with the card. Counting them toward density would hide the workspace controls as
-      // a list grows.
-      const activityHeight = Array.from(
-        element.querySelectorAll<HTMLElement>(
-          "[data-thread-relationships-panel], [data-thread-details-activity], [data-thread-details-pr-list]",
-        ),
-      ).reduce((sum, section) => sum + section.offsetHeight, 0);
-      const fittingHeight = next - activityHeight;
+      // Activity sections (Tasks, Background, Lineage), side chats, automations, servers and PR
+      // lists grow with Show more and scroll with the card. Counting them toward density would
+      // hide the section and workspace controls as a list grows.
+      const lists = element.querySelectorAll<HTMLElement>(
+        "[data-thread-relationships-panel], [data-thread-details-activity], [data-thread-side-chats-panel], [data-thread-details-pr-list], [data-thread-automations-panel], [data-thread-details-server-overflow]",
+      );
+      const fittingHeight =
+        next - Array.from(lists).reduce((sum, list) => sum + list.offsetHeight, 0);
       setMeasurements((current) => {
         const heights = current.key === measurementKey ? current.heights : { full: 0, compact: 0 };
         return current.key === measurementKey && heights[density] === fittingHeight

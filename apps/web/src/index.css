@@ -1578,6 +1578,7 @@ html[data-theme-id] [data-app-sidebar] {
   --accent-foreground: var(--app-theme-accent-surface-foreground);
   --muted: var(--app-theme-muted);
   --muted-foreground: var(--app-theme-muted-foreground);
+  --secondary-label: var(--app-theme-secondary-label);
   --border: var(--app-theme-border);
   --input: var(--app-theme-input);
   --sidebar: var(--app-theme-sidebar);
@@ -1725,6 +1726,10 @@ body {
   font-family: var(--font-sans);
   margin: 0;
   padding: 0;
+}
+
+[data-preview-url-input] {
+  font-variant-ligatures: none;
 }
 
 /* Lighter default icon stroke. In the base layer so stroke-* utilities still win; any
@@ -2074,8 +2079,13 @@ code {
   margin: 0.65rem 0;
 }
 
-/* Preflight already draws the 1px rule, as it does in chat; only the block
-   spacing needs to match. */
+/* Surface borders can blend into dark message bubbles; rules need a readable color. */
+:is(.chat-markdown, .composer-tiptap) hr {
+  @variant dark {
+    border-color: var(--contrast-muted-foreground);
+  }
+}
+
 .composer-tiptap hr {
   margin: 0.65rem 0;
 }
@@ -2202,6 +2212,20 @@ code {
   color: var(--foreground);
 }
 
+/* Plain-text fences override the highlighter's inline foreground colors. */
+:is(.chat-markdown, .composer-tiptap)
+  .chat-markdown-codeblock:is(
+    [data-language="text" i],
+    [data-language="txt" i],
+    [data-language="plain" i],
+    [data-language="plaintext" i]
+  ) {
+  &,
+  & :is(pre, pre *) {
+    color: inherit !important;
+  }
+}
+
 /* Paragraphs and code blocks arrive in chunks while a response streams. Fade
    each new block in so the chunk does not pop. @starting-style only applies
    when an element is first inserted, and the rule is gated on data-streaming,
@@ -2265,9 +2289,10 @@ code {
 
 /* Narrow viewports: don't let auto table-layout crush columns into
    one-word-per-line towers — keep a usable minimum table width and let the
-   container scroll horizontally instead. */
+   container scroll horizontally instead. Scoped to that scroll container (every
+   chat table renders in one): a bare table has nothing to scroll it. */
 @media (max-width: 640px) {
-  .chat-markdown table {
+  .chat-markdown .chat-markdown-table-container table {
     min-width: 32rem;
   }
 }

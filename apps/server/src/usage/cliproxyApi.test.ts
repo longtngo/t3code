@@ -345,6 +345,77 @@ describe("CLIProxyAPI built-in management API", () => {
     }),
   );
 
+  // FORK (invariant 70): monthly spend rides on `usageLimits.spend`, not a `monthly_spend` window.
+  it.effect.each([
+    {
+      name: "spend budget",
+      budget: {
+        spend: {
+          enabled: true,
+          used: { amount_minor: 4_631, currency: "USD", exponent: 2 },
+          limit: { amount_minor: 50_000, currency: "USD", exponent: 2 },
+        },
+      },
+      usedPercent: 9.262,
+    },
+    {
+      name: "extra usage",
+      budget: {
+        extra_usage: {
+          is_enabled: true,
+          used_credits: 4_631,
+          monthly_limit: 50_000,
+          utilization: 9,
+        },
+      },
+      // The record's own utilization wins over used / limit.
+      usedPercent: 9,
+    },
+  ])("keeps Claude monthly spend from $name beside rolling windows", ({ budget, usedPercent }) =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [{ ...accounts[0]!, provider: "claude" }],
+        upstream: () => ({
+          status: 200,
+          body: { five_hour: { utilization: 10, resets_at: null }, ...budget },
+        }),
+      });
+      const result = yield* (yield* test.api).readAccounts(config);
+      expect(
+        result[0]?.usageLimits.windows.map((window) => [window.id, window.usedPercent]),
+      ).toEqual([["five_hour", 10]]);
+      expect(result[0]?.usageLimits.spend).toEqual({
+        used: 46.31,
+        limit: 500,
+        currency: "USD",
+        usedPercent: expect.closeTo(usedPercent, 10),
+      });
+    }),
+  );
+
+  it.effect("omits disabled Claude budgets without losing rolling windows", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [{ ...accounts[0]!, provider: "claude" }],
+        upstream: () => ({
+          status: 200,
+          body: {
+            five_hour: { utilization: 10, resets_at: null },
+            spend: { enabled: false, used: null, limit: null },
+            extra_usage: {
+              is_enabled: false,
+              used_credits: null,
+              monthly_limit: null,
+              utilization: null,
+            },
+          },
+        }),
+      });
+      const result = yield* (yield* test.api).readAccounts(config);
+      expect(result[0]?.usageLimits.windows.map((window) => window.id)).toEqual(["five_hour"]);
+    }),
+  );
+
   it.effect("pins redemption to the displayed credit and clears only that account's cooldown", () =>
     Effect.gen(function* () {
       const test = fixture();

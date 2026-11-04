@@ -178,6 +178,13 @@ export const layerExecutor: Layer.Layer<
                         cause,
                       }),
                 ),
+                Effect.map((outcome) => ({ unresponsive: false, outcome }) as const),
+                // Settling here would end the run while the agent may still be running; the
+                // user decides with Force stop instead.
+                Effect.catchIf(
+                  (cause) => request.subagent === undefined && cause.unresponsive === true,
+                  () => Effect.succeed({ unresponsive: true, outcome: undefined } as const),
+                ),
                 Effect.catchIf(
                   (cause) =>
                     request.subagent === undefined &&
@@ -185,13 +192,22 @@ export const layerExecutor: Layer.Layer<
                       request.type,
                       Cause.pretty(Cause.fail(cause)),
                     ),
-                  () => Effect.void,
+                  () => Effect.succeed({ unresponsive: false, outcome: undefined } as const),
                 ),
                 // Whatever the thread still shows on a stopped provider thread gets no further reports, so
                 // the Stop ends it too, keyed by effect (one Stop can hit several provider threads).
                 // FORK: nothing is settled after the cooperative rung, which keeps the process and the
                 // background work it still reports on.
-                Effect.flatMap((outcome) => {
+                Effect.andThen(({ unresponsive, outcome }) => {
+                  if (unresponsive) {
+                    return threads.dispatch({
+                      type: "thread.interrupt.unresponsive",
+                      commandId: CommandId.make(`${effect.id}:unresponsive`),
+                      threadId: effect.threadId,
+                      providerThreadId: request.providerThreadId,
+                      providerTurnId: request.providerTurnId,
+                    });
+                  }
                   const subagentOutcome =
                     typeof outcome === "object" ? outcome.subagent : undefined;
                   return (request.subagent !== undefined && subagentOutcome === undefined) ||
@@ -271,6 +287,10 @@ export const layerExecutor: Layer.Layer<
                     const message = projection.messages.find((item) => item.id === messageId);
                     const run = projection.runs.find((item) => item.id === message?.runId);
                     if (message === undefined || run === undefined) return yield* error;
+                    // Notifications must be queued messages.
+                    const queued =
+                      message.delegatedCompletion !== undefined ||
+                      message.notification !== undefined;
                     // Reuse message ids and receipts so retries cannot duplicate messages or follow-ups.
                     yield* threads
                       .dispatch({
@@ -285,10 +305,7 @@ export const layerExecutor: Layer.Layer<
                           ? {}
                           : { modelSelection: run.modelSelection }),
                         dispatchMode: {
-                          type:
-                            message.delegatedCompletion === undefined
-                              ? "start_immediately"
-                              : "queue_after_active",
+                          type: queued ? "queue_after_active" : "start_immediately",
                         },
                         createdBy: message.createdBy,
                         creationSource: message.creationSource,

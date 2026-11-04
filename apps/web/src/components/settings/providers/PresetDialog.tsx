@@ -129,7 +129,8 @@ export function PresetDialog(props: {
                     >
                       <code className="truncate">{e.name}</code>
                       <code className="truncate text-muted-foreground">
-                        {e.sensitive ? "••••••" : e.value}
+                        {/* A secret-store reference is masked like a sensitive value. */}
+                        {e.sensitive || typeof e.value !== "string" ? "••••••" : e.value}
                       </code>
                       <span className="shrink-0 text-3xs text-muted-foreground">
                         {added ? "＋ added" : overridden ? "⚠ overrides" : "kept"}

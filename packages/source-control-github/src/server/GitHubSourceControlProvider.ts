@@ -1,4 +1,4 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { settingsSecretLiteral, SourceControlProviderKind } from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -239,7 +239,7 @@ export const makeDiscovery = Effect.gen(function* () {
     probe: Effect.fn("GitHubSourceControlProvider.discovery")(function* (cwd: string) {
       const settings = readSourceControlHostSettings(
         GitHubClient.settings,
-        yield* sourceControlHost.settings.get.pipe(
+        yield* sourceControlHost.settings.getWithSecrets(GitHubClient.definition.kind).pipe(
           Effect.map((current) => current.sourceControlHosts[GitHubClient.definition.kind]),
           Effect.orElseSucceed(() => undefined),
         ),
@@ -254,7 +254,8 @@ export const makeDiscovery = Effect.gen(function* () {
           parseAuth: (input) => parseGitHubAuth(input, settings, environment),
         },
       });
-      const savedToken = (settings.tokens["github.com"] ?? "").trim() !== "";
+      const token = settings.tokens["github.com"];
+      const savedToken = settingsSecretLiteral(token).trim() !== "";
       const signedIn =
         appSignIn.enabled && !savedToken && (settings.signIns["github.com"] ?? "").trim() !== "";
       const variable = environmentTokenVariable(environment);
@@ -894,6 +895,9 @@ export const make = Effect.gen(function* () {
 
   return SourceControlProvider.SourceControlProvider.of({
     kind: SourceControlProviderKind.make("github"),
+    resolveRemoteWebHost: Effect.fn("GitHubSourceControlProvider.resolveRemoteWebHost")(
+      ({ context }) => Effect.succeed(gitHubApiHostForRemote(context.remoteUrl)),
+    ),
     // GitHub matches bare heads; read a full page to disambiguate forks by owner.
     headBranchProbe: ({ headSelectors }) => ({
       headSelectors: headSelectors.filter((selector) => !selector.includes(":")),
@@ -1030,10 +1034,13 @@ export const make = Effect.gen(function* () {
     getRepositoryCloneUrls: Effect.fn("GitHubSourceControlProvider.getRepositoryCloneUrls")(
       function* (input) {
         const cwd = input.cwdIsServerDefault ? null : input.cwd;
-        const fallbackHost = (yield* resolveRepository(input).pipe(
-          Effect.map((locator) => locator.host),
-          Effect.orElseSucceed(() => environment.GH_HOST ?? "github.com"),
-        )).toLowerCase();
+        const fallbackHost = (
+          input.host ??
+          (yield* resolveRepository(input).pipe(
+            Effect.map((locator) => locator.host),
+            Effect.orElseSucceed(() => environment.GH_HOST ?? "github.com"),
+          ))
+        ).toLowerCase();
         const bareName = input.repository.trim().replace(/\.git$/i, "");
         const locator =
           parseGitHubRepositorySelector(input.repository, fallbackHost) ??

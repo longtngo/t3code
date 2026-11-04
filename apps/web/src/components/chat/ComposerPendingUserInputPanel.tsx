@@ -1,4 +1,5 @@
 import { type RuntimeRequestId, type ScopedThreadRef } from "@t3tools/contracts";
+import { markdownProseDirection, textDirection } from "~/textDirection";
 import { memo, use, useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { BackgroundThreadContext } from "./backgroundThread";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -12,6 +13,7 @@ import {
   describePendingOptionsVisibility,
   PENDING_OPTIONS_MAX_HEIGHT_CLASS,
 } from "./pendingUserInputPanelLayout";
+import { isInSideChatPane } from "~/lib/sideChatPane";
 import ChatMarkdown from "../ChatMarkdown";
 
 interface PendingUserInputPanelProps {
@@ -175,6 +177,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     const handler = (event: globalThis.KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
+      if (isInSideChatPane(target)) return;
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
         return;
       }
@@ -205,11 +208,24 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     optionCount: activeQuestion.options.length,
     isCollapsed,
   });
+  const promptDirection = markdownProseDirection(
+    prompt.questions
+      .flatMap((question) => [
+        question.header,
+        question.question,
+        ...question.options.flatMap((option) => [option.label, option.description ?? ""]),
+      ])
+      .join(" "),
+  );
+  const questionTextAlign = promptDirection === "rtl" ? "text-right" : "text-left";
 
   return (
-    <div className="px-4 py-3 sm:px-5">
+    <div dir={promptDirection} className="px-4 py-3 sm:px-5">
       <div className="mb-2 flex items-center gap-3">
-        <span className="text-secondary-label text-2xs font-semibold tracking-widest uppercase">
+        <span
+          className="min-w-0 truncate text-secondary-label text-2xs font-semibold tracking-widest uppercase"
+          dir={textDirection(activeQuestion.header)}
+        >
           {activeQuestion.header}
         </span>
         {prompt.questions.length > 1 ? (
@@ -265,7 +281,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         text={activeQuestion.question}
         cwd={cwd}
         threadRef={threadRef}
-        className="text-foreground/90"
+        className={cn("text-foreground/90", questionTextAlign)}
       />
       {activeQuestion.multiSelect ? (
         <p className="mt-1 text-secondary-label text-xs">Select one or more options.</p>
@@ -299,7 +315,8 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           const isSelected = isOptimisticallySelected || draftSelectedOptions?.[index] === true;
           const shortcutKey = index < 9 ? index + 1 : null;
           const className = cn(
-            "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25",
+            questionTextAlign,
+            "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25",
             isSelected
               ? "border-primary/30 bg-primary/8 text-foreground"
               : "border-transparent bg-muted/22 text-foreground/85 hover:border-border/45 hover:bg-muted/34",
@@ -309,9 +326,16 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           const content = (
             <>
               <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-                <span className="text-sm font-medium">{option.label}</span>
+                <span className="text-sm font-medium" dir={textDirection(option.label)}>
+                  {option.label}
+                </span>
                 {option.description && option.description !== option.label ? (
-                  <span className="text-secondary-label text-xs">{option.description}</span>
+                  <span
+                    className="text-secondary-label text-xs"
+                    dir={textDirection(option.description)}
+                  >
+                    {option.description}
+                  </span>
                 ) : null}
               </div>
               {isSelected ? (

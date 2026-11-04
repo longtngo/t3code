@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -43,6 +44,7 @@ describe("ClaudeDriver idle compaction wiring", () => {
   const driverDeps = (idleCompaction: IdleCompactionMode) =>
     ServerConfig.layerTest(process.cwd(), { prefix: "t3-claude-driver-idle-compaction-" }).pipe(
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(NodeCrypto.layer),
       Layer.provideMerge(IdAllocator.layer),
       Layer.provideMerge(McpProviderSessions.layer),
       Layer.provideMerge(ProviderLatestVersions.layer),

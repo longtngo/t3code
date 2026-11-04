@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -12,6 +13,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
+import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
 import { layerMemory as SqlitePersistenceMemory } from "./persistence/Sqlite.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
 
@@ -23,6 +25,7 @@ const capture = Logger.make(({ message }) => {
 const layer = () =>
   ServerSettingsModule.layer.pipe(
     Layer.provide(ServerSecretStore.layer),
+    Layer.provide(ManagedPolicy.layerTest()),
     Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
     Layer.provideMerge(
       Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3-rescan-" })),
@@ -48,7 +51,7 @@ const withEmits = <A, E, R>(body: Effect.Effect<A, E, R>) =>
     return { result, emitted };
   }).pipe(Effect.scoped);
 
-it.layer(NodeServices.layer)("settings rescan", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("settings rescan", (it) => {
   it.effect("I1: delivers a file change with no watch event", () =>
     Effect.gen(function* () {
       logs.length = 0;
@@ -325,5 +328,10 @@ it.live("a watch event applies an untrusted file the timer would skip", () =>
       Effect.timeout("90 seconds"),
     );
     assert.isFalse((yield* settings.getRawSettings).enableAgentDeviceAccess);
-  }).pipe(Effect.scoped, Effect.provide(Layer.provideMerge(layer(), NodeServices.layer))),
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.provideMerge(layer(), Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+    ),
+  ),
 );

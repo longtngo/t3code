@@ -1,7 +1,7 @@
 import { normalizeHost } from "@t3tools/source-control-core/server/pullRequestUtils";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -16,6 +16,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import { readSourceControlHostSettings } from "@t3tools/source-control-core/shared/definition";
+import { settingsSecretLiteral } from "@t3tools/contracts";
 
 import * as GitHubClient from "../shared/definition.ts";
 import { parseGitHubAuthStatus } from "./gitHubAuthStatus.ts";
@@ -177,12 +178,12 @@ export function parseFillUsername(stdout: string): string | null {
 export const make = Effect.gen(function* () {
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
   const process = sourceControlHost.process;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const environment = yield* HostProcess.Environment;
   const workingDirectory = yield* HostProcess.WorkingDirectory;
 
   const fingerprintOf = (host: string, token: string) =>
-    crypto.digest("SHA-256", new TextEncoder().encode(token)).pipe(
+    crypto.digest(Digest.sha256, new TextEncoder().encode(token)).pipe(
       Effect.map((digest) => `${host}:${Hex.encode(digest)}`),
       Effect.orDie,
     );
@@ -237,13 +238,16 @@ export const make = Effect.gen(function* () {
    * Unreadable settings fall back to gh's own choice and no saved token.
    */
   const hostSettings = (host: string) =>
-    sourceControlHost.settings.get.pipe(
+    sourceControlHost.settings.getWithSecrets(GitHubClient.definition.kind).pipe(
       Effect.map((settings) => {
         const github = readSourceControlHostSettings(
           GitHubClient.settings,
           settings.sourceControlHosts[GitHubClient.definition.kind],
         );
-        return { choice: github.hosts[host], saved: github.tokens[host]?.trim() || null };
+        return {
+          choice: github.hosts[host],
+          saved: settingsSecretLiteral(github.tokens[host]).trim() || null,
+        };
       }),
       Effect.orElseSucceed(() => ({ choice: undefined, saved: null })),
     );

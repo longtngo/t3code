@@ -167,6 +167,8 @@ export const Project = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   // Fork: workspace member repositories. Absent decodes as [].
   members: WorkspaceMembers,
+  pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -199,6 +201,12 @@ export const ProjectUpdatePayload = Schema.Struct({
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   // Fork: replaces the whole member list. The server validates every path.
   members: Schema.optional(Schema.Array(WorkspaceMember)),
+  pinned: Schema.optional(Schema.Boolean),
+  archived: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "Threads and files are kept.",
+    }),
+  ),
 });
 export type ProjectUpdatePayload = typeof ProjectUpdatePayload.Type;
 

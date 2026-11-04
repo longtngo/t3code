@@ -2,8 +2,8 @@
 
 Permission modes control when an agent needs your approval to act. Choose a mode in the message
 composer; it applies to that thread. A new thread names its mode under the composer. In a thread
-on your default mode, open **Permissions** from the effort menu or press `mod+shift+a`. A thread on
-another mode, or a model without an effort menu, shows the mode next to the model.
+on your default mode, open the model picker and choose **Permissions** at its bottom, or press
+`mod+shift+a`. A thread on another mode shows the mode next to the model.
 
 Set the default for new threads in **Settings → Threads → New threads → Permissions**.
 Projects can override the environment default. New threads use this setting rather than the
@@ -17,8 +17,12 @@ and modes you choose in a draft keep their permissions.
 | **Auto**              | Uses the provider's automatic review to approve routine actions and ask about others. |
 | **Full access**       | Allows commands and edits without approval prompts.                                   |
 
+An administrator can cap the modes available on a machine with a
+[managed policy](./managed-policy.md#permission-modes); modes above the cap show who manages them.
+
 Approve or reject requests in the conversation to let the agent continue. Permission modes do
-not prevent the agent from asking questions about the task.
+not prevent the agent from asking questions about the task. Subagent approval requests appear in
+the parent conversation with the subagent's name, so you can respond without switching threads.
 
 ## Provider differences
 
@@ -48,5 +52,8 @@ directly to the agent that asked, including a subagent. Other pending requests s
 
 Antigravity can still send native approval requests in **Full access**. It only offers remembered
 approvals for actions that support them.
+
+Kiro offers only **Supervised** and **Full access**. In **Supervised** Kiro also asks you to
+review a turn's file changes. See [Kiro permissions](./providers-kiro.md#permission-modes).
 
 See the [provider guides](./install.md#providers) for setup and provider-specific limits.

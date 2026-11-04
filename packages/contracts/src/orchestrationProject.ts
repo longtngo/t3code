@@ -21,6 +21,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   // Fork: additional repositories this project's threads work in. Absent decodes
   // as [] so shells from servers without workspace members still decode.
   members: WorkspaceMembers,
+  // Pinned projects lead project pickers; archived ones leave them. Optional so older servers decode.
+  pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

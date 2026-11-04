@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -47,6 +48,8 @@ const TestLayer = WorkspaceMemberHooks.live.pipe(
             members,
             createdAt: "2026-06-21T00:00:00.000Z",
             updatedAt: "2026-06-21T00:00:00.000Z",
+            pinnedAt: null,
+            archivedAt: null,
             deletedAt: null,
           }),
       }),
@@ -72,6 +75,7 @@ const TestLayer = WorkspaceMemberHooks.live.pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-member-hooks-test-" })),
   Layer.provideMerge(VcsProcess.layer),
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(NodeCrypto.layer),
 );
 
 const git = (cwd: string, args: ReadonlyArray<string>) =>
