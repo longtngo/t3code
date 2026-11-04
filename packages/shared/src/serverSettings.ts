@@ -557,11 +557,6 @@ export function applyServerSettingsPatch(
     ...(patch.providerInstances !== undefined
       ? { providerInstances: patch.providerInstances }
       : {}),
-    // Whole-object replacement so dropped perModel/ds4 keys persist (deepMerge never deletes).
-    ...(patch.localModels !== undefined ? { localModels: patch.localModels } : {}),
-    // Same rationale: deepMerge would keep deleted model configs / provider overrides and
-    // corrupt the models array (it merges arrays positionally), so replace wholesale.
-    ...(patch.localLlm !== undefined ? { localLlm: patch.localLlm } : {}),
     ...(patch.worktreesDirectory !== undefined &&
     patch.worktreesDirectory !== current.worktreesDirectory
       ? {

@@ -1134,113 +1134,6 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
-/**
- * Local-model manager (mlx-serve): scans `modelsDir`, spawns with `defaultArgs` plus per-model
- * `args`, refuses a load past `ramBudgetBytes`. Host is always loopback; ports are internal.
- */
-/**
- * HISTORICAL ds4 engine config: retired and absent from the catalog, kept so older settings files
- * still decode; `migrateLocalModels` reads and drops it. Disabled by default so CI never globs a
- * missing dir or spawns anything.
- */
-export const Ds4Settings = Schema.Struct({
-  /** When false (default) the engine is skipped entirely — no discovery, probe, or spawn. */
-  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  /** ds4-server binary; resolved on PATH by default. `~` is expanded server-side. */
-  binaryPath: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("ds4-server"))),
-  /** Directory globbed for `*.gguf` model files. `~` is expanded server-side. */
-  modelsDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("~/ds4/gguf"))),
-  /** Default ds4-server launch args (host/port/model are added by the manager). */
-  defaultArgs: Schema.Array(TrimmedString).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  /** Optional per-model launch-arg overrides, keyed by GGUF filename. */
-  perModel: Schema.Record(
-    TrimmedNonEmptyString,
-    Schema.Struct({ args: Schema.optional(Schema.Array(TrimmedString)) }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-});
-export type Ds4Settings = typeof Ds4Settings.Type;
-
-export const LocalModelsSettings = Schema.Struct({
-  /** Directory scanned for loadable model subdirectories. `~` is expanded server-side. */
-  modelsDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("~/llm/models"))),
-  /** RAM budget in bytes; 0 ⇒ the server uses ~80% of total system memory. */
-  ramBudgetBytes: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
-  /**
-   * Default mlx-serve launch args (host/port/model are added by the manager).
-   * `--no-pld` was dropped 2026-06-18: mlx-serve 26.6.8+ adaptive Prompt-Lookup Decoding
-   * ties or beats it everywhere, so PLD is left at its (on) default.
-   */
-  defaultArgs: Schema.Array(TrimmedString).pipe(
-    Schema.withDecodingDefault(Effect.succeed(["--reasoning-budget", "0"])),
-  ),
-  /** Optional per-model launch-arg overrides, keyed by model-directory basename. */
-  perModel: Schema.Record(
-    TrimmedNonEmptyString,
-    Schema.Struct({
-      args: Schema.optional(Schema.Array(TrimmedString)),
-    }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  /**
-   * HISTORICAL: a second local-model engine, ds4 / DeepSeek V4 Flash. Retired — it is gone
-   * from the model catalog, so `migrateLocalModels` reads this block and drops it. Kept in
-   * the schema only so a settings file written before the retirement still decodes.
-   */
-  ds4: Ds4Settings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-});
-export type LocalModelsSettings = typeof LocalModelsSettings.Type;
-
-/**
- * Sparse per-catalog-provider overrides (only changed fields; the rest come from
- * `@t3tools/shared/localLlm`), keyed by provider id. `visible` only hides a provider from model
- * pickers; it stays configurable and usable.
- */
-export const LocalLlmProviderConfig = Schema.Struct({
-  visible: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  host: Schema.optional(TrimmedString),
-  port: Schema.optional(Schema.Number),
-  /** managed engines: executable override. `~` expanded server-side. */
-  binaryPath: Schema.optional(TrimmedString),
-  /** managed engines: directory holding model resources. `~` expanded server-side. */
-  modelsDir: Schema.optional(TrimmedString),
-  /** external providers: probe URL override (otherwise host:port from catalog). */
-  baseUrl: Schema.optional(TrimmedString),
-  /** Overrides the catalog `defaultArgs` when present (grouped tokens). */
-  defaultArgs: Schema.optional(Schema.Array(TrimmedString)),
-});
-export type LocalLlmProviderConfig = typeof LocalLlmProviderConfig.Type;
-
-/**
- * A catalog model paired with a catalog provider, driving the load list and env-var presets.
- * `port` is stable per config so status survives restarts; `argsOverride` replaces BOTH provider
- * and model catalog defaults; `contextWindow` owns `--ctx-size`.
- */
-export const LocalLlmModelConfig = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  name: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
-  providerId: TrimmedNonEmptyString,
-  modelId: TrimmedNonEmptyString,
-  contextWindow: Schema.optional(Schema.Number),
-  visible: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  port: Schema.optional(Schema.Number),
-  argsOverride: Schema.optional(Schema.Array(TrimmedString)),
-  modelPathOverride: Schema.optional(TrimmedString),
-});
-export type LocalLlmModelConfig = typeof LocalLlmModelConfig.Type;
-
-/**
- * Replacement for `LocalModelsSettings`: provider overrides keyed by catalog id +
- * an ordered list of model configs. `localModels` is migrated into this on first
- * decode (see localLlmMigration.ts) and then retired.
- */
-export const LocalLlmSettings = Schema.Struct({
-  /** RAM budget in bytes; 0 ⇒ the server uses ~80% of total system memory. */
-  ramBudgetBytes: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
-  providers: Schema.Record(TrimmedNonEmptyString, LocalLlmProviderConfig).pipe(
-    Schema.withDecodingDefault(Effect.succeed({})),
-  ),
-  models: Schema.Array(LocalLlmModelConfig).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-});
-export type LocalLlmSettings = typeof LocalLlmSettings.Type;
 export const SourceControlWritingStyleMode = Schema.Literals([
   "repo_conventions",
   "conventional_commits",
@@ -1771,11 +1664,6 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  // Sidebar local-model manager (mlx-serve) configuration.
-  // DEPRECATED: read only to migrate into `localLlm` on first decode.
-  localModels: LocalModelsSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  // Local LLM overhaul: catalog-driven provider overrides + user model configs.
-  localLlm: LocalLlmSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Opt-in open access: every client is authenticated with admin scopes, i.e. authentication is
   // disabled, not just the pairing UI. Overridable per launch via T3CODE_DISABLE_AUTH or
   // --disable-auth; read once at startup.
@@ -2179,11 +2067,6 @@ export const ServerSettingsPatch = Schema.Struct({
   sourceControlHosts: Schema.optionalKey(Schema.Record(Schema.String, SourceControlHostSettings)),
   // Replace whole maps to avoid half-merged driver configs.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
-  // Whole-object replacement (like providerInstances): deepMerge never deletes keys, so only a
-  // replacement lets removing a `perModel` / `ds4.perModel` key persist.
-  localModels: Schema.optionalKey(LocalModelsSettings),
-  // Whole-object replacement, same rationale: removing a provider override must persist.
-  localLlm: Schema.optionalKey(LocalLlmSettings),
   allowSpendingCredits: Schema.optionalKey(Schema.Boolean),
   // `disableAuthentication` is deliberately NOT patchable: it is a startup-only switch that boot
   // falls back to when persisted, so a settings-write client could turn auth off for the next

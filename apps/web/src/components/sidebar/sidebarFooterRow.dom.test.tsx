@@ -2,16 +2,13 @@ import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 /**
- * Both fork-only footer panels render inside the bottom row and depend on two properties no
- * typecheck sees: each is an `<li>` (the row is a `<ul>`), and each uses `static` to opt out of
+ * The fork-only Resource Queue panel renders inside the bottom row and depends on two properties
+ * no typecheck sees: it is an `<li>` (the row is a `<ul>`), and it uses `static` to opt out of
  * `SidebarMenuItem`'s `relative`, or its popover shrinks to its ~40px trigger.
  */
 
 const queueState = vi.hoisted(() => ({
   snapshot: null as null | Record<string, unknown>,
-}));
-const modelState = vi.hoisted(() => ({
-  online: false,
 }));
 
 vi.mock("../../state/environments", () => ({
@@ -20,21 +17,7 @@ vi.mock("../../state/environments", () => ({
 vi.mock("../../hooks/useResourceQueue", () => ({
   useResourceQueue: () => ({ snapshot: queueState.snapshot }),
 }));
-vi.mock("../../hooks/useSettings", () => ({
-  usePrimarySettings: (select: (state: { localLlm: { models: unknown[] } }) => unknown) =>
-    select({ localLlm: { models: [] } }),
-}));
-vi.mock("../../hooks/useLlmModels", () => ({
-  useLlmModels: () => ({
-    sample: modelState.online
-      ? { models: [{ configId: "m1", status: "online", pid: 42 }] }
-      : { models: [] },
-  }),
-  useLlmModelActions: () => ({ pending: new Set<string>(), load: () => {}, unload: () => {} }),
-}));
 
-import { sidebarFooterBadgeClass } from "./sidebarFooterBadge";
-import { SidebarLocalModels } from "./SidebarLocalModels";
 import { SidebarResourceQueue } from "./SidebarResourceQueue";
 import { SidebarMenu, SidebarProvider } from "../ui/sidebar";
 import { renderDom } from "../../testing/renderDom";
@@ -46,7 +29,7 @@ function renderInRow(child: ReactNode) {
 
 type RowView = Awaited<ReturnType<typeof renderInRow>>;
 
-/** Both panels are controlled by the footer now; closed is the default fixture. */
+/** The panel is controlled by the footer; closed is the default fixture. */
 const closedPanel = { isOpen: false, onOpenChange: () => {} };
 
 /** The control's own list item, as a direct child of the row's `<ul>`. */
@@ -56,61 +39,9 @@ function rowItem(view: RowView) {
 
 beforeEach(() => {
   queueState.snapshot = null;
-  modelState.online = false;
 });
 
-describe("Local models in the footer row", () => {
-  it("is a list item, so it is valid inside the row's <ul>", async () => {
-    const view = await renderInRow(createElement(SidebarLocalModels, closedPanel));
-    expect(rowItem(view)).not.toBeNull();
-  });
-
-  it("opts out of item-relative positioning so its panel spans the footer", async () => {
-    // `static` is what redirects the panel's anchor to the row wrapper. Asserted
-    // on the class the component actually sets, and paired with the negative so
-    // a stray `relative` cannot creep back in.
-    const view = await renderInRow(createElement(SidebarLocalModels, closedPanel));
-    const item = rowItem(view);
-    expect(item?.classList.contains("static")).toBe(true);
-    expect(item?.classList.contains("relative")).toBe(false);
-  });
-
-  it("keeps its icon and status tag in the row", async () => {
-    const view = await renderInRow(createElement(SidebarLocalModels, closedPanel));
-    expect(view.find('[aria-label="Local models"]')).not.toBeNull();
-    // The count badge — the tag that makes the control worth glancing at. Asserted on the
-    // shared footer-badge geometry, so a local restyle that drifts away from Resource Queue
-    // fails here rather than only showing up side by side in the row.
-    const badge = view.find('[aria-label="0 local models loaded"]');
-    expect(badge).not.toBeNull();
-    expect(badge?.className).toBe(sidebarFooterBadgeClass("idle"));
-  });
-
-  it("does not carry its old full-width text label into the row", async () => {
-    // The label moved to the tooltip and the panel heading. A visible inline
-    // "Local models" span in the row would mean the trigger never shrank.
-    const view = await renderInRow(createElement(SidebarLocalModels, closedPanel));
-    const inlineLabels = view
-      .findAll("span.text-xs")
-      .filter((span) => span.textContent === "Local models");
-    expect(inlineLabels).toHaveLength(0);
-  });
-});
-
-describe("only one footer panel may be open", () => {
-  // The two panels anchor to the SAME row wrapper with identical absolute insets
-  // (`absolute right-0 bottom-full left-0 z-50`), so two open panels sit in one
-  // box and one paints over the other. `SidebarChromeFooter` arbitrates via
-  // `nextOpenFooterPanel`; these pin that each panel actually honours the prop.
-
-  it("draws the Local models panel only when the footer says it is open", async () => {
-    const open = { isOpen: true, onOpenChange: () => {} };
-    const opened = await renderInRow(createElement(SidebarLocalModels, open));
-    expect(opened.text()).toContain("No model configs yet");
-    const closed = await renderInRow(createElement(SidebarLocalModels, closedPanel));
-    expect(closed.text()).not.toContain("No model configs yet");
-  });
-
+describe("the footer owns the panel's open state", () => {
   it("draws the Resource Queue panel only when the footer says it is open", async () => {
     // Keyed on the panel's id, not its label: the trigger's own label is
     // "Resource Queue" and the panel's was "Resource queue", which differ by
@@ -122,9 +53,7 @@ describe("only one footer panel may be open", () => {
     expect(closed.find("#sidebar-resource-queue-panel")).toBeNull();
   });
 
-  it("keeps both triggers visible while one panel is open", async () => {
-    // Exclusivity is about the PANELS, not the controls. Closing the other
-    // panel must never take its trigger out of the row.
+  it("keeps its trigger visible while the panel is open", async () => {
     const view = await renderInRow(
       createElement(SidebarResourceQueue, { isOpen: true, onOpenChange: () => {} }),
     );
@@ -173,8 +102,8 @@ describe("Resource Queue in the footer row", () => {
   });
 });
 
-describe("both footer panels are disclosures, not dialogs", () => {
-  // Each opens on hover or click and closes on a mouse-leave timer, so `dialog` would promise a
+describe("the Resource Queue panel is a disclosure, not a dialog", () => {
+  // It opens on hover or click and closes on a mouse-leave timer, so `dialog` would promise a
   // focus move, trap and restore that a panel vanishing on pointer drift cannot honour.
   const open = { isOpen: true, onOpenChange: () => {} };
 
@@ -188,57 +117,28 @@ describe("both footer panels are disclosures, not dialogs", () => {
     expect(view.find("[aria-haspopup]")).toBeNull();
   });
 
-  it.each([
-    ["Resource Queue", SidebarResourceQueue, "sidebar-resource-queue-panel"],
-    ["Local models", SidebarLocalModels, "sidebar-local-models-panel"],
-  ] as const)("points %s's trigger at the panel it expands", async (_label, Component, panelId) => {
-    const view = await renderInRow(createElement(Component, open));
+  it("points the trigger at the panel it expands", async () => {
+    const view = await renderInRow(createElement(SidebarResourceQueue, open));
 
-    expect(view.find(`[aria-controls="${panelId}"]`)).not.toBeNull();
-    expect(view.find(`#${panelId}`)).not.toBeNull();
+    expect(view.find('[aria-controls="sidebar-resource-queue-panel"]')).not.toBeNull();
+    expect(view.find("#sidebar-resource-queue-panel")).not.toBeNull();
     expect(view.find('[aria-expanded="true"]')).not.toBeNull();
   });
 
-  it.each([
-    ["Resource Queue", SidebarResourceQueue],
-    ["Local models", SidebarLocalModels],
-  ] as const)("drops %s's aria-controls while the panel is gone", async (_label, Component) => {
+  it("drops aria-controls while the panel is gone", async () => {
     // A reference to an id that is not in the document is invalid ARIA, and the
     // panel only exists while open.
-    const view = await renderInRow(createElement(Component, closedPanel));
+    const view = await renderInRow(createElement(SidebarResourceQueue, closedPanel));
 
     expect(view.find("[aria-controls]")).toBeNull();
     expect(view.find('[aria-expanded="false"]')).not.toBeNull();
   });
 });
 
-// Only reachable with a real DOM: `onOpenChange` is the whole contract between these controls
-// and `SidebarChromeFooter`'s arbitration, and static markup could never dispatch the click
+// Only reachable with a real DOM: `onOpenChange` is the whole contract between this control
+// and `SidebarChromeFooter`'s open state, and static markup could never dispatch the click
 // that drives it.
 describe("footer controls report their open state to the footer", () => {
-  it("asks the footer to open Local models when the trigger is clicked", async () => {
-    const onOpenChange = vi.fn();
-    const view = await renderInRow(
-      createElement(SidebarLocalModels, { isOpen: false, onOpenChange }),
-    );
-
-    await view.click(view.find('[aria-label="Local models"]'));
-
-    expect(onOpenChange).toHaveBeenCalledTimes(1);
-    expect(onOpenChange).toHaveBeenCalledWith(true);
-  });
-
-  it("asks the footer to close Local models when the open trigger is clicked", async () => {
-    const onOpenChange = vi.fn();
-    const view = await renderInRow(
-      createElement(SidebarLocalModels, { isOpen: true, onOpenChange }),
-    );
-
-    await view.click(view.find('[aria-label="Local models"]'));
-
-    expect(onOpenChange).toHaveBeenCalledWith(false);
-  });
-
   it("pins Resource Queue open when its trigger is clicked", async () => {
     const onOpenChange = vi.fn();
     const view = await renderInRow(

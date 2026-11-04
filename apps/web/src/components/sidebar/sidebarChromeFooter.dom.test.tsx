@@ -2,10 +2,10 @@ import { createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 /**
- * Where the two fork-only panels sit relative to the footer's Back-button ternary was got wrong
- * once. Local models and Resource Queue are status readouts, not navigation, so placing them in
- * the Back branch would hide them on those pages. The panels are mocked: the question is the
- * footer's JSX structure (their internals: `sidebarFooterRow.dom.test.tsx`).
+ * Where the fork-only panel sits relative to the footer's Back-button ternary was got wrong
+ * once. Resource Queue is a status readout, not navigation, so placing it in the Back branch
+ * would hide it on those pages. The panel is mocked: the question is the footer's JSX
+ * structure (its internals: `sidebarFooterRow.dom.test.tsx`).
  */
 
 const locationState = vi.hoisted(() => ({ pathname: "/" }));
@@ -25,9 +25,6 @@ vi.mock("../../state/environments", () => ({
     environments: [{ serverConfig: { environment: { capabilities: { pullRequests: true } } } }],
   }),
   usePullRequestsSupported: () => true,
-}));
-vi.mock("./SidebarLocalModels", () => ({
-  SidebarLocalModels: () => createElement("li", { "data-panel": "models" }),
 }));
 vi.mock("./SidebarResourceQueue", () => ({
   SidebarResourceQueue: () => createElement("li", { "data-panel": "queue" }),
@@ -53,17 +50,15 @@ beforeEach(() => {
 });
 
 describe("SidebarChromeFooter panel placement", () => {
-  it("renders both status panels on a normal page", async () => {
+  it("renders the status panel on a normal page", async () => {
     const view = await renderFooterAt("/");
-    expect(view.find('[data-panel="models"]')).not.toBeNull();
     expect(view.find('[data-panel="queue"]')).not.toBeNull();
   });
 
-  it("KEEPS the status panels on the Pull Requests page, where Back replaces navigation", async () => {
-    // "Back" swaps out the navigation controls; it must not take the readouts with it.
+  it("KEEPS the status panel on the Pull Requests page, where Back replaces navigation", async () => {
+    // "Back" swaps out the navigation controls; it must not take the readout with it.
     const view = await renderFooterAt("/pull-requests");
     expect(view.text()).toContain("Back");
-    expect(view.find('[data-panel="models"]')).not.toBeNull();
     expect(view.find('[data-panel="queue"]')).not.toBeNull();
   });
 
@@ -79,14 +74,13 @@ describe("SidebarChromeFooter panel placement", () => {
     expect(onPullRequests.text()).toContain("Back");
   });
 
-  it("anchors the panels' popovers to the row rather than to a menu item", async () => {
-    // The panels position themselves `absolute` against the nearest positioned
-    // ancestor. That ancestor must be the row wrapper, or each popover collapses
+  it("anchors the panel's popover to the row rather than to a menu item", async () => {
+    // The panel positions itself `absolute` against the nearest positioned
+    // ancestor. That ancestor must be the row wrapper, or the popover collapses
     // to the width of its ~40px trigger.
     const view = await renderFooterAt("/");
     const row = view.find("div.relative");
     expect(row).not.toBeNull();
-    expect(row?.querySelector('[data-panel="models"]')).not.toBeNull();
     expect(row?.querySelector('[data-panel="queue"]')).not.toBeNull();
   });
 });

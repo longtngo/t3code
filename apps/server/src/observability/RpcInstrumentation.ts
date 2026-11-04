@@ -229,14 +229,11 @@ const RPC_AGGREGATES = {
   [WS_METHODS.workspaceMemberBranches]: "workspace",
   [WS_METHODS.workspaceMemberActionPrepare]: "workspace",
   [WS_METHODS.workspaceMemberPrBaseWrite]: "workspace",
-  [WS_METHODS.llmServeLoad]: "server",
-  [WS_METHODS.llmServeUnload]: "server",
   [WS_METHODS.getResourceQueue]: "server",
   [WS_METHODS.pushSubscriptionsRegister]: "server",
   [WS_METHODS.serverSetThreadQueue]: "server",
   [WS_METHODS.serverSubscribeThreadQueue]: "server",
   [WS_METHODS.subscribeHostMetrics]: "diagnostics",
-  [WS_METHODS.subscribeLlmModels]: "diagnostics",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 
 const RPC_SPAN_PREFIX = "ws.rpc";

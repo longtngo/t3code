@@ -29,7 +29,6 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
-  | "/settings/local-models"
   | "/settings/threads"
   | "/settings/browser"
   | "/settings/devices"
@@ -106,7 +105,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": "Keybindings",
   "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Providers",
-  "/settings/local-models": "Local LLM",
   "/settings/threads": "Threads",
   "/settings/browser": "Browser",
   "/settings/devices": "Devices",
@@ -1292,8 +1290,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/threads": null,
   "/settings/browser": null,
   "/settings/devices": null,
-  // FORK pages: local models is machine-wide, notifications is per device.
-  "/settings/local-models": null,
+  // FORK pages: notifications is per device.
   "/settings/notifications": null,
   "/settings/queue": null,
   "/settings/source-control": "environment-defaults",

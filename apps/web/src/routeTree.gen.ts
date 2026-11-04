@@ -36,7 +36,6 @@ import { Route as ChatSettingsProjectsRouteImport } from './routes/_chat.setting
 import { Route as ChatSettingsOpenSourceLicensesRouteImport } from './routes/_chat.settings.open-source-licenses'
 import { Route as ChatSettingsNotificationsRouteImport } from './routes/_chat.settings.notifications'
 import { Route as ChatSettingsMaintenanceRouteImport } from './routes/_chat.settings.maintenance'
-import { Route as ChatSettingsLocalModelsRouteImport } from './routes/_chat.settings.local-models'
 import { Route as ChatSettingsLabsRouteImport } from './routes/_chat.settings.labs'
 import { Route as ChatSettingsKeybindingsRouteImport } from './routes/_chat.settings.keybindings'
 import { Route as ChatSettingsIntegrationsRouteImport } from './routes/_chat.settings.integrations'
@@ -194,11 +193,6 @@ const ChatSettingsMaintenanceRoute = ChatSettingsMaintenanceRouteImport.update({
   path: '/maintenance',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
-const ChatSettingsLocalModelsRoute = ChatSettingsLocalModelsRouteImport.update({
-  id: '/local-models',
-  path: '/local-models',
-  getParentRoute: () => ChatSettingsRoute,
-} as any)
 const ChatSettingsLabsRoute = ChatSettingsLabsRouteImport.update({
   id: '/labs',
   path: '/labs',
@@ -317,7 +311,6 @@ export interface FileRoutesByFullPath {
   '/settings/integrations': typeof ChatSettingsIntegrationsRoute
   '/settings/keybindings': typeof ChatSettingsKeybindingsRoute
   '/settings/labs': typeof ChatSettingsLabsRoute
-  '/settings/local-models': typeof ChatSettingsLocalModelsRoute
   '/settings/maintenance': typeof ChatSettingsMaintenanceRoute
   '/settings/notifications': typeof ChatSettingsNotificationsRoute
   '/settings/open-source-licenses': typeof ChatSettingsOpenSourceLicensesRoute
@@ -363,7 +356,6 @@ export interface FileRoutesByTo {
   '/settings/integrations': typeof ChatSettingsIntegrationsRoute
   '/settings/keybindings': typeof ChatSettingsKeybindingsRoute
   '/settings/labs': typeof ChatSettingsLabsRoute
-  '/settings/local-models': typeof ChatSettingsLocalModelsRoute
   '/settings/maintenance': typeof ChatSettingsMaintenanceRoute
   '/settings/notifications': typeof ChatSettingsNotificationsRoute
   '/settings/open-source-licenses': typeof ChatSettingsOpenSourceLicensesRoute
@@ -411,7 +403,6 @@ export interface FileRoutesById {
   '/_chat/settings/integrations': typeof ChatSettingsIntegrationsRoute
   '/_chat/settings/keybindings': typeof ChatSettingsKeybindingsRoute
   '/_chat/settings/labs': typeof ChatSettingsLabsRoute
-  '/_chat/settings/local-models': typeof ChatSettingsLocalModelsRoute
   '/_chat/settings/maintenance': typeof ChatSettingsMaintenanceRoute
   '/_chat/settings/notifications': typeof ChatSettingsNotificationsRoute
   '/_chat/settings/open-source-licenses': typeof ChatSettingsOpenSourceLicensesRoute
@@ -459,7 +450,6 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/labs'
-    | '/settings/local-models'
     | '/settings/maintenance'
     | '/settings/notifications'
     | '/settings/open-source-licenses'
@@ -505,7 +495,6 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/labs'
-    | '/settings/local-models'
     | '/settings/maintenance'
     | '/settings/notifications'
     | '/settings/open-source-licenses'
@@ -552,7 +541,6 @@ export interface FileRouteTypes {
     | '/_chat/settings/integrations'
     | '/_chat/settings/keybindings'
     | '/_chat/settings/labs'
-    | '/_chat/settings/local-models'
     | '/_chat/settings/maintenance'
     | '/_chat/settings/notifications'
     | '/_chat/settings/open-source-licenses'
@@ -772,13 +760,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsMaintenanceRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
-    '/_chat/settings/local-models': {
-      id: '/_chat/settings/local-models'
-      path: '/local-models'
-      fullPath: '/settings/local-models'
-      preLoaderRoute: typeof ChatSettingsLocalModelsRouteImport
-      parentRoute: typeof ChatSettingsRoute
-    }
     '/_chat/settings/labs': {
       id: '/_chat/settings/labs'
       path: '/labs'
@@ -917,7 +898,6 @@ interface ChatSettingsRouteChildren {
   ChatSettingsIntegrationsRoute: typeof ChatSettingsIntegrationsRoute
   ChatSettingsKeybindingsRoute: typeof ChatSettingsKeybindingsRoute
   ChatSettingsLabsRoute: typeof ChatSettingsLabsRoute
-  ChatSettingsLocalModelsRoute: typeof ChatSettingsLocalModelsRoute
   ChatSettingsMaintenanceRoute: typeof ChatSettingsMaintenanceRoute
   ChatSettingsNotificationsRoute: typeof ChatSettingsNotificationsRoute
   ChatSettingsOpenSourceLicensesRoute: typeof ChatSettingsOpenSourceLicensesRoute
@@ -949,7 +929,6 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsIntegrationsRoute: ChatSettingsIntegrationsRoute,
   ChatSettingsKeybindingsRoute: ChatSettingsKeybindingsRoute,
   ChatSettingsLabsRoute: ChatSettingsLabsRoute,
-  ChatSettingsLocalModelsRoute: ChatSettingsLocalModelsRoute,
   ChatSettingsMaintenanceRoute: ChatSettingsMaintenanceRoute,
   ChatSettingsNotificationsRoute: ChatSettingsNotificationsRoute,
   ChatSettingsOpenSourceLicensesRoute: ChatSettingsOpenSourceLicensesRoute,

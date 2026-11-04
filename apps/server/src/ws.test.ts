@@ -139,7 +139,6 @@ import {
 import { ProjectMemberInvalidError, ProjectOperationError } from "./project/ProjectService.ts";
 import * as HostMetrics from "./diagnostics/HostMetrics.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
-import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts";
 import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
 import { CreditSpendGuard } from "./provider/Services/CreditSpendGuard.ts";
@@ -788,7 +787,6 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(CommandReceiptStore.CommandReceiptStoreV2)({}),
   Layer.mock(CreditSpendGuard)({}),
   Layer.mock(HostMetrics.HostMetrics)({}),
-  Layer.mock(LlmServeManager)({}),
   Layer.mock(MarkdownHtmlRenderer)({}),
   Layer.mock(PushSubscriptionRepository)({}),
   Layer.mock(ResourceQueue.ResourceQueue)({}),

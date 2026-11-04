@@ -112,9 +112,6 @@ import {
   WsWorkspaceMemberActionPrepareRpc,
   WsWorkspaceMemberPrBaseWriteRpc,
   WsSubscribeHostMetricsRpc,
-  WsLlmServeLoadRpc,
-  WsLlmServeUnloadRpc,
-  WsSubscribeLlmModelsRpc,
   WsServerSubscribeThreadQueueRpc,
 } from "@t3tools/contracts";
 import {
@@ -261,7 +258,6 @@ import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { RpcInstrumentation, rpcInstrumentationLayer } from "./observability/RpcInstrumentation.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostMetrics from "./diagnostics/HostMetrics.ts";
-import { llmModelsStream } from "./diagnostics/LlmModels.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
@@ -271,7 +267,6 @@ import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
-import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as TriageService from "./triage/TriageService.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
@@ -698,9 +693,6 @@ const ForkServerWsRpcGroup = RpcGroup.make(
   WsWorkspaceMemberActionPrepareRpc,
   WsWorkspaceMemberPrBaseWriteRpc,
   WsSubscribeHostMetricsRpc,
-  WsLlmServeLoadRpc,
-  WsLlmServeUnloadRpc,
-  WsSubscribeLlmModelsRpc,
   WsServerSubscribeThreadQueueRpc,
 ).middleware(RpcInstrumentation);
 const UpstreamServerWsRpcGroup = ServerWsRpcGroup.omit(
@@ -715,9 +707,6 @@ const UpstreamServerWsRpcGroup = ServerWsRpcGroup.omit(
   WS_METHODS.workspaceMemberActionPrepare,
   WS_METHODS.workspaceMemberPrBaseWrite,
   WS_METHODS.subscribeHostMetrics,
-  WS_METHODS.llmServeLoad,
-  WS_METHODS.llmServeUnload,
-  WS_METHODS.subscribeLlmModels,
   WS_METHODS.serverSubscribeThreadQueue,
 );
 
@@ -1668,7 +1657,6 @@ export const layerWsRpc = (
       const webPushRelay = yield* WebPushRelay.WebPushRelay;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const hostMetrics = yield* HostMetrics.HostMetrics;
-      const llmServeManager = yield* LlmServeManager;
       const relayClient = yield* RelayClient.RelayClient;
       // Webhook URLs start agents; expose them only to operate-scoped sessions while keeping tasks readable.
       const withVisibleWebhookUrls = (result: ScheduledTaskListResult): ScheduledTaskListResult =>
@@ -3616,12 +3604,6 @@ export const layerWsRpc = (
           workspaceMemberRpc.actionPrepare(input),
         [WS_METHODS.workspaceMemberPrBaseWrite]: (input) => workspaceMemberRpc.prBaseWrite(input),
         [WS_METHODS.subscribeHostMetrics]: (input) => hostMetrics.stream(input.intervalMs),
-        [WS_METHODS.llmServeLoad]: (input) => llmServeManager.load(input.configId),
-        [WS_METHODS.llmServeUnload]: (input) => llmServeManager.unload(input.configId),
-        [WS_METHODS.subscribeLlmModels]: (input) =>
-          llmModelsStream(input.intervalMs ?? 2000).pipe(
-            Stream.provideService(LlmServeManager, llmServeManager),
-          ),
         [WS_METHODS.serverSubscribeThreadQueue]: (_input) => threadQueue.changes,
       });
       const splitHandlers: Pick<typeof handlers, SplitWsRpc["_tag"]> = handlers;

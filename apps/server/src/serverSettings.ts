@@ -54,7 +54,6 @@ import {
   fallbackTextGenerationModelSelection,
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
-import { migrateLocalModels } from "@t3tools/shared/localLlm";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
 import { secretProviderDefinitions } from "./secrets/secretProviderDefinitions.ts";
@@ -562,31 +561,6 @@ function fallbackTextGenerationProvider(
   return fallback === null ? settings : { ...settings, textGenerationModelSelection: fallback };
 }
 
-/**
- * Read-time migration of the deprecated `localModels` into `localLlm` (the local
- * LLM overhaul). Applied alongside `resolveTextGenerationProvider`: when `localLlm`
- * is still empty but the legacy `localModels` carries real user data, surface a
- * migrated `localLlm`. Idempotent — once `localLlm` has providers/models it wins.
- */
-function migrateLocalLlmSettings(settings: ServerSettings): ServerSettings {
-  const llm = settings.localLlm;
-  if (llm.models.length > 0 || Object.keys(llm.providers).length > 0) return settings;
-
-  const lm = settings.localModels;
-  const def = DEFAULT_SERVER_SETTINGS.localModels;
-  const meaningful =
-    Object.keys(lm.perModel).length > 0 ||
-    lm.ds4.enabled ||
-    Object.keys(lm.ds4.perModel).length > 0 ||
-    lm.modelsDir !== def.modelsDir ||
-    lm.ds4.modelsDir !== def.ds4.modelsDir ||
-    lm.ds4.binaryPath !== def.ds4.binaryPath ||
-    lm.defaultArgs.join(" ") !== def.defaultArgs.join(" ");
-  if (!meaningful) return settings;
-
-  return { ...settings, localLlm: migrateLocalModels(lm) };
-}
-
 const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "backgroundActivity",
   "automaticGitFetchInterval",
@@ -729,8 +703,7 @@ const make = Effect.gen(function* () {
   // Locks are laid over every settings value that leaves this service, never persisted.
   const toEffective = (settings: ServerSettings) =>
     resolveTextGenerationProvider(
-      // FORK: the read-time localModels -> localLlm migration runs before policy locks.
-      managedProviders.applyLimits(managed.applyLocks(migrateLocalLlmSettings(settings))),
+      managedProviders.applyLimits(managed.applyLocks(settings)),
       managedProviders.isDriverAllowed,
     );
   // Parse, let the policy fill its defaults, then decode.
@@ -1381,17 +1354,9 @@ const make = Effect.gen(function* () {
           }
         }
         yield* ensureSecretProviderWritesAllowed(effectivePatch, settingsPath);
-        return yield* persistSettingsUnlocked(effectivePatch, (current) => {
-          const patched = applyServerSettingsPatch(current, effectivePatch);
-          // Retire the deprecated `localModels` once the user writes `localLlm` directly, so
-          // the read-time migration can't resurrect deleted configs from the stale legacy blob.
-          // (No caller patches both fields at once — the web UI only ever sends `localLlm`.)
-          return Effect.succeed(
-            effectivePatch.localLlm !== undefined
-              ? { ...patched, localModels: DEFAULT_SERVER_SETTINGS.localModels }
-              : patched,
-          );
-        });
+        return yield* persistSettingsUnlocked(effectivePatch, (current) =>
+          Effect.succeed(applyServerSettingsPatch(current, effectivePatch)),
+        );
       }),
     );
 

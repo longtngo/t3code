@@ -38,8 +38,6 @@ import {
 } from "@t3tools/shared/model";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { usePrimarySettings } from "../../hooks/useSettings";
-import { PresetDialog } from "./providers/PresetDialog";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
@@ -209,53 +207,6 @@ function ProviderAuthEmail(props: { readonly email: string | undefined }) {
       hideTooltip="Click to hide email"
       className="max-w-full truncate"
     />
-  );
-}
-
-/**
- * Opens the local-LLM preset dialog for this one instance, so the env vars pointing an agent
- * at a local model need not be typed by hand. Scoped to the card whose environment it
- * rewrites, and hidden when no model configs exist (they are created on the settings page).
- */
-function LocalLlmPresetAction(props: {
-  readonly instanceId: string;
-  readonly label: string;
-  readonly driver: string;
-  readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
-  readonly onApply: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
-}) {
-  const localLlm = usePrimarySettings((settings) => settings.localLlm);
-  const [open, setOpen] = useState(false);
-
-  if (localLlm.models.length === 0) return null;
-
-  return (
-    <>
-      <Button
-        className="mt-2"
-        onClick={() => setOpen(true)}
-        size="sm"
-        type="button"
-        variant="outline"
-      >
-        Apply a local-LLM preset
-      </Button>
-      <PresetDialog
-        models={localLlm.models}
-        onApply={(_targetId, mergedEnv) => props.onApply(mergedEnv)}
-        onOpenChange={setOpen}
-        open={open}
-        settings={localLlm}
-        targets={[
-          {
-            id: props.instanceId,
-            label: props.label,
-            driver: props.driver,
-            environment: props.environment,
-          },
-        ]}
-      />
-    </>
   );
 }
 
@@ -1421,15 +1372,6 @@ export function ProviderInstanceCard({
                 reason: instanceLocks.reason,
               }
             }
-          />
-          {/* FORK: the preset writes the environment rows a local LLM needs, so it
-              belongs beside the editor it fills in. */}
-          <LocalLlmPresetAction
-            instanceId={instanceId}
-            label={displayName}
-            driver={instance.driver}
-            environment={instance.environment ?? []}
-            onApply={updateEnvironment}
           />
         </div>
       </SettingsSection>

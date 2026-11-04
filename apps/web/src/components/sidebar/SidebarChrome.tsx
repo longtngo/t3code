@@ -33,8 +33,6 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
-import { nextOpenFooterPanel, type SidebarFooterPanel } from "./sidebarChrome.logic";
-import { SidebarLocalModels } from "./SidebarLocalModels";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
@@ -258,19 +256,16 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigateToMainApp();
   };
 
-  const [openFooterPanel, setOpenFooterPanel] = useState<SidebarFooterPanel | null>(null);
-  const setFooterPanelOpen = (panel: SidebarFooterPanel, open: boolean) => {
-    setOpenFooterPanel((current) => nextOpenFooterPanel({ current, panel, open }));
-  };
+  const [queuePanelOpen, setQueuePanelOpen] = useState(false);
   const footerRowRef = useRef<HTMLDivElement | null>(null);
 
-  // Escape and outside-click dismissal for whichever panel is open. It lives here because the
-  // footer owns which one is open and both draw into the same row wrapper, so one listener covers
-  // both and no panel can ship as an overlay with no way out.
+  // Escape and outside-click dismissal for the Resource Queue panel. It lives here because the
+  // footer owns the open state and the panel draws into the row wrapper, so it cannot ship as an
+  // overlay with no way out.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- dismisses the open footer panel on an outside mousedown or Escape
   useEffect(() => {
-    if (openFooterPanel === null) return;
-    const dismiss = () => setOpenFooterPanel(null);
+    if (!queuePanelOpen) return;
+    const dismiss = () => setQueuePanelOpen(false);
     const onPointerDown = (event: MouseEvent) => {
       if (footerRowRef.current && !footerRowRef.current.contains(event.target as Node)) {
         dismiss();
@@ -285,14 +280,13 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [openFooterPanel]);
+  }, [queuePanelOpen]);
 
   return (
     <>
-      {/* Positioning context for the two floating fork panels: their triggers opt out of
-       `relative`, so each panel draws at footer width above the whole row with no width
-       arithmetic. The row wraps because six controls plus the update pill do not always
-       fit 240px. */}
+      {/* Positioning context for the floating fork panel: its trigger opts out of `relative`,
+       so the panel draws at footer width above the whole row with no width arithmetic. The
+       row wraps because the controls plus the update pill do not always fit 240px. */}
       <div className="relative" ref={footerRowRef}>
         <SidebarMenu className="flex-row flex-wrap items-center">
           {isOnUtilityPage ? (
@@ -324,16 +318,8 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             </>
           )}
           {/* Fork-only, OUTSIDE the branch above on purpose: "Back" replaces navigation, but
-            these are live status readouts. Local models and Resource Queue share open state
-            here because both anchor to the wrapper above with identical insets. */}
-          <SidebarLocalModels
-            isOpen={openFooterPanel === "models"}
-            onOpenChange={(open) => setFooterPanelOpen("models", open)}
-          />
-          <SidebarResourceQueue
-            isOpen={openFooterPanel === "queue"}
-            onOpenChange={(open) => setFooterPanelOpen("queue", open)}
-          />
+            this is a live status readout. */}
+          <SidebarResourceQueue isOpen={queuePanelOpen} onOpenChange={setQueuePanelOpen} />
           <SidebarThreadUndoNotice />
           <SidebarUpdatePill />
         </SidebarMenu>

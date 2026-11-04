@@ -316,6 +316,52 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  // FORK: the local LLM manager was removed; settings files written before that still carry
+  // `localLlm` and the older `localModels`. They must not fail the load (which would reset every
+  // other setting), and neither key may survive into the decoded settings or the next save.
+  it.effect("loads and saves a settings file that still carries the removed local LLM keys", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fs.writeFileString(
+        config.settingsPath,
+        JSON.stringify({
+          localModels: {
+            modelsDir: "~/llm/models",
+            perModel: { "gemma-4-12B-it-4bit": { args: ["--kv-quant", "8"] } },
+          },
+          localLlm: {
+            ramBudgetBytes: 0,
+            providers: { "mlx-serve": { visible: true } },
+            models: [
+              {
+                id: "m1",
+                name: "Gemma",
+                providerId: "mlx-serve",
+                modelId: "gemma-4-12B-it-4bit",
+                visible: true,
+              },
+            ],
+          },
+          enableProviderUpdateChecks: false,
+        }),
+      );
+
+      const loaded = yield* service.getSettings;
+      assert.strictEqual(loaded.enableProviderUpdateChecks, false);
+      assert.isFalse(Object.hasOwn(loaded, "localLlm"));
+      assert.isFalse(Object.hasOwn(loaded, "localModels"));
+
+      yield* service.updateSettings({ defaultAutoPull: true });
+      const persisted = JSON.parse(yield* fs.readFileString(config.settingsPath));
+      assert.strictEqual(persisted.enableProviderUpdateChecks, false);
+      assert.strictEqual(persisted.defaultAutoPull, true);
+      assert.notProperty(persisted, "localLlm");
+      assert.notProperty(persisted, "localModels");
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   // FORK: the retired "Offer to compact threads" switch (fork registry invariant 71).
   it.effect(
     "turns idle compaction off for a saved offerThreadCompaction false and drops the key",
@@ -1626,83 +1672,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         serverUrl: "http://127.0.0.1:4097",
         serverPassword: "legacy-password",
       });
-    }).pipe(Effect.provide(layerServerSettings())),
-  );
-
-  it.effect("migrates legacy localModels into localLlm on read", () =>
-    Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-
-      const next = yield* serverSettings.updateSettings({
-        localModels: {
-          modelsDir: "~/llm/models",
-          ramBudgetBytes: 0,
-          defaultArgs: ["--reasoning-budget", "0"],
-          perModel: { "gemma-4-12B-it-4bit": { args: ["--kv-quant", "8"] } },
-          ds4: {
-            enabled: true,
-            binaryPath: "ds4-server",
-            modelsDir: "~/ds4/gguf",
-            defaultArgs: [],
-            perModel: {},
-          },
-        },
-      });
-
-      const cfg = next.localLlm.models.find((m) => m.modelId === "gemma-4-12B-it-4bit");
-      assert.isDefined(cfg);
-      assert.deepEqual(cfg?.argsOverride, ["--kv-quant 8"]);
-      // The legacy ds4 block is read and dropped: the engine is retired and absent from the
-      // catalog, so a provider override naming it would resolve to nothing.
-      assert.isUndefined(next.localLlm.providers.ds4);
-    }).pipe(Effect.provide(layerServerSettings())),
-  );
-
-  it.effect("writing localLlm retires legacy localModels so deletions cannot resurrect", () =>
-    Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-
-      // Seed a meaningful legacy localModels (would otherwise migrate on read).
-      yield* serverSettings.updateSettings({
-        localModels: {
-          modelsDir: "~/llm/models",
-          ramBudgetBytes: 0,
-          defaultArgs: [],
-          perModel: { "gemma-4-12B-it-4bit": { args: ["--kv-quant", "8"] } },
-          ds4: {
-            enabled: false,
-            binaryPath: "ds4-server",
-            modelsDir: "~/ds4/gguf",
-            defaultArgs: [],
-            perModel: {},
-          },
-        },
-      });
-
-      // User then directly edits localLlm down to a single config.
-      const afterWrite = yield* serverSettings.updateSettings({
-        localLlm: {
-          ramBudgetBytes: 0,
-          providers: {},
-          models: [
-            {
-              id: "keep",
-              name: "Keep",
-              providerId: "mlx-serve",
-              modelId: "gemma-4-12B-it-4bit",
-              visible: true,
-            },
-          ],
-        },
-      });
-      // localModels was retired to default — so a later read won't re-migrate.
-      assert.deepEqual(afterWrite.localModels.perModel, {});
-
-      // Now delete the last config: empty localLlm must persist, not resurrect the legacy one.
-      const afterDelete = yield* serverSettings.updateSettings({
-        localLlm: { ramBudgetBytes: 0, providers: {}, models: [] },
-      });
-      assert.deepEqual(afterDelete.localLlm.models, []);
     }).pipe(Effect.provide(layerServerSettings())),
   );
 

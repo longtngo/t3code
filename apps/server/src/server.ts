@@ -179,7 +179,6 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as HostMetrics from "./diagnostics/HostMetrics.ts";
-import { layer as llmServeManagerLayer } from "./llm/LlmServeManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -780,15 +779,6 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(ProcessResourceMonitor.layer),
   Layer.provideMerge(ResourceQueue.layer),
   Layer.provideMerge(HostMetrics.layer),
-  // The local-model manager reads `settings.localLlm` live, so it must share the one
-  // `ServerSettingsService`. `layerRuntimeCoreDependencies` is this pipe's base reference, so
-  // Effect memoizes it to one build. `FetchHttpClient` is for the /v1/models probe.
-  Layer.provideMerge(
-    llmServeManagerLayer.pipe(
-      Layer.provide(FetchHttpClient.layer),
-      Layer.provide(layerRuntimeCoreDependencies),
-    ),
-  ),
   Layer.provideMerge(layerUsage),
   Layer.provideMerge(layerBackground),
   Layer.provideMerge(layerResourceDiagnostics),

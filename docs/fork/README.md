@@ -356,22 +356,22 @@ every unset install steer instead. Steer stays one setting away.
 ### 5b. The fork's footer panels live inside upstream's `SidebarUtilityMenu`
 
 Upstream `#7153` extracted the sidebar footer into `SidebarUtilityMenu` and reused it from
-`SettingsSidebarNav`. Two fork panels (`SidebarLocalModels`, `SidebarResourceQueue`) live
-**inside that component**, along with the shared
-open state and the `relative` row wrapper the status panels anchor to. `SidebarChromeFooter` keeps
-only `SidebarProviderUpdatePill` and `SidebarUpdateArchitectureWarning`. Keeping the two out of
-the menu would have hidden them on the settings page, which is the one surface upstream added.
+`SettingsSidebarNav`. The fork panel (`SidebarResourceQueue`) lives **inside that component**,
+along with its open state and the `relative` row wrapper it anchors to. `SidebarChromeFooter`
+keeps only `SidebarProviderUpdatePill` and `SidebarUpdateArchitectureWarning`. Keeping the panel
+out of the menu would have hidden it on the settings page, which is the one surface upstream
+added. (A second panel, Local models, was removed with the local LLM feature.)
 
 Since the 53rd reconcile settings is a modal over the thread (upstream #24847), so the settings nav
-no longer renders the utility menu and the panels show only in the thread sidebar's footer. The
+no longer renders the utility menu and the panel shows only in the thread sidebar's footer. The
 old `items-end` row in `SettingsSidebarNav.tsx` went with it.
 
 `sidebarChromeFooter.dom.test.tsx` covers this, and it mocks `@tanstack/react-router` — so a new
 router hook in the utility menu breaks it with "No X export is defined on the mock" rather than
 with anything about panels. Add the export; the test's subject still applies.
 
-Probe: `grep -cE '<Sidebar(LocalModels|ResourceQueue)\b' apps/web/src/components/sidebar/SidebarChrome.tsx`
-is `2`.
+Probe: `grep -cE '<SidebarResourceQueue\b' apps/web/src/components/sidebar/SidebarChrome.tsx`
+is `1`.
 
 ### 5c. RETIRED with orchestrator v2: boot reconciliation
 
@@ -571,7 +571,7 @@ no minimum version, and an older one would never compact. Upstream's
 ### 13. The provider-settings re-seed is UPSTREAM's, deliberately
 
 Fork commit `8fe3190f5` fixed a silent data loss in `ProviderInstanceCard` ("applying a
-local-LLM preset appeared to do nothing, then undid itself") with a render-phase `seededRef` +
+local-LLM preset appeared to do nothing, then undid itself"; that preset has since been removed) with a render-phase `seededRef` +
 `environmentKey` value comparison. Upstream fixed the same class too, now as `reconcileRowsDraft`,
 which keeps the draft's `lastPublished` value so the card's own round-trip cannot re-seed it.
 
@@ -608,7 +608,7 @@ green — an absence assertion that has never been seen to fail is not evidence.
 
 Upstream #8569 added both to `ServerSettings` and not to `ServerSettingsPatch`, which trips the
 fork's patch-parity guard in `packages/contracts/src/settings.test.ts` (the guard exists because
-a field missing from the mirror silently drops edits — that is how `localModels` was found). It
+a field missing from the mirror silently drops edits — that is how a since-removed fork setting was found). It
 is deliberate here: `t3 theme set` (`apps/server/src/cli/theme.ts`) rewrites `settings.json`
 directly and removes both keys when cleared, and clients only ever read them. They are listed in
 `deliberatelyUnpatchable` rather than mirrored, so there is one writer, not two.

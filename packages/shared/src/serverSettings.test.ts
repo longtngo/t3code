@@ -897,60 +897,6 @@ describe("serverSettings helpers", () => {
     expect(Object.getPrototypeOf(next.sidebarSections)).toBe(Object.prototype);
     expect(Object.keys(next.sidebarSections)).toEqual([]);
   });
-
-  it("replaces localModels so dropped perModel/ds4 keys are cleared (not deep-merged)", () => {
-    const current = {
-      ...DEFAULT_SERVER_SETTINGS,
-      localModels: {
-        ...DEFAULT_SERVER_SETTINGS.localModels,
-        modelsDir: "~/llm/models",
-        defaultArgs: ["--reasoning-budget", "0"],
-        perModel: { "model-a": { args: ["--kv-quant", "8"] } },
-        ds4: { ...DEFAULT_SERVER_SETTINGS.localModels.ds4, enabled: true, perModel: { x: {} } },
-      },
-    };
-
-    const next = applyServerSettingsPatch(current, {
-      localModels: {
-        ...current.localModels,
-        perModel: {}, // the user removed the only override
-        ds4: { ...current.localModels.ds4, perModel: {} },
-      },
-    }).localModels;
-
-    // A deep merge would have kept "model-a" / "x"; a replacement clears them.
-    expect(next.perModel).toEqual({});
-    expect(next.ds4.perModel).toEqual({});
-    expect(next.ds4.enabled).toBe(true);
-  });
-
-  it("replaces localLlm so a deleted model config and cleared provider override persist", () => {
-    const current = {
-      ...DEFAULT_SERVER_SETTINGS,
-      localLlm: {
-        ramBudgetBytes: 0,
-        providers: { "mlx-serve": { visible: true, modelsDir: "~/m" }, ollama: { visible: false } },
-        models: [
-          { id: "a", name: "A", providerId: "mlx-serve", modelId: "x", visible: true },
-          { id: "b", name: "B", providerId: "mlx-serve", modelId: "y", visible: true },
-        ],
-      },
-    } as never;
-
-    const next = applyServerSettingsPatch(current, {
-      localLlm: {
-        ramBudgetBytes: 0,
-        providers: { "mlx-serve": { visible: true } }, // dropped modelsDir + the ollama override
-        models: [{ id: "b", name: "B", providerId: "mlx-serve", modelId: "y", visible: true }], // deleted "a"
-      },
-    } as never).localLlm;
-
-    // A deep merge would keep model "a", leave the array shape corrupt, and keep ollama/modelsDir.
-    expect(Array.isArray(next.models)).toBe(true);
-    expect(next.models.map((m) => m.id)).toEqual(["b"]);
-    expect(next.providers["mlx-serve"]!.modelsDir).toBeUndefined();
-    expect(next.providers.ollama).toBeUndefined();
-  });
 });
 
 describe("queue slots import", () => {
