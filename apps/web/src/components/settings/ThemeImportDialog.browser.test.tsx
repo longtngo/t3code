@@ -42,7 +42,11 @@ describe("ThemeImportDialog", () => {
   // StrictMode replays ref attach/detach on mount, which must not end the session.
   it("searches Open VSX under StrictMode", async () => {
     searchOpenVsxThemes.mockReset();
-    searchOpenVsxThemes.mockResolvedValue([extension]);
+    // Only the full query finds the theme: a keystroke gap longer than the search debounce
+    // (as under a loaded suite) searches a prefix first, which must not satisfy the wait below.
+    searchOpenVsxThemes.mockImplementation(async (query: string) =>
+      query === "night" ? [extension] : [],
+    );
     await using _screen = await render(
       <StrictMode>
         <ThemeImportDialog

@@ -2,6 +2,9 @@ import { render } from "../../../test/render";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
+// Imported statically so the module graph loads while the file is collected, outside any test's
+// timeout: imported inside the test it took 13 s of the 15 s budget in a full-suite run.
+import { PullRequestPrimaryAction } from "./PullRequestDetailActions";
 import { useInlineActionConfirm } from "./useInlineActionConfirm";
 
 function MergeButton({ scopeKey, onConfirm }: { scopeKey: string; onConfirm: () => void }) {
@@ -81,7 +84,6 @@ it.each(["merge", "enable-auto-merge"] as const)(
   "keeps a blocked %s action reachable without arming or performing it",
   async (primaryAction) => {
     const perform = vi.fn(async () => true);
-    const { PullRequestPrimaryAction } = await import("./PullRequestDetailActions");
     const control = (mergeBlockedReason: string | null) => (
       <PullRequestPrimaryAction
         pullRequestKey="owner/repo/7"

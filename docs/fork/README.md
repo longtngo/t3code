@@ -1514,6 +1514,22 @@ Upstream deleted `scripts/effect-budget.json` for the lint rule `t3code/no-unrea
 every effect carries `// oxlint-disable-next-line t3code/no-unreasoned-state-sync -- <why>`, and
 fork effects do too.
 
+### 74. Three upstream browser tests are fixed for the full-suite load
+
+Upstream-identical tests that pass alone and time out or race in the full web suite, where the
+suite's own projects keep the machine near full load and every `userEvent` round trip slows 5-20x.
+`useInlineActionConfirm.browser.test.tsx` imports `PullRequestDetailActions` statically (upstream
+imports it inside the test, which spent 13 s of the 15 s budget loading it).
+`AddEnvironmentDialog.browser.test.tsx` "clears the form" uses `userEvent.fill` (47 typed keys took
+about 7 s). `ThemeImportDialog.browser.test.tsx` "searches Open VSX under StrictMode" returns the
+theme only for the full query (a keystroke gap past the 350 ms debounce searched "n" first). If a
+reconcile brings upstream's lines back, re-apply. Probes:
+`grep -c 'await import("./PullRequestDetailActions")' apps/web/src/components/pullRequest/useInlineActionConfirm.browser.test.tsx`
+is `0` and `grep -c 'from "./PullRequestDetailActions"' apps/web/src/components/pullRequest/useInlineActionConfirm.browser.test.tsx`
+is `1`; `grep -c 'userEvent.fill(' apps/web/src/components/settings/AddEnvironmentDialog.browser.test.tsx`
+is `6`; `grep -c 'query === "night"' apps/web/src/components/settings/ThemeImportDialog.browser.test.tsx`
+is `1`. Report: `~/reports/t3code/2026-11/2026-11-04/mevq-run/flaky-browser-rca.md`.
+
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 
 On orchestrator v2 the hubs are `EventSink`'s `liveEvents` plus one `PubSub.unbounded` per
