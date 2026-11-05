@@ -525,6 +525,8 @@ export const ResourceQueueSnapshot = Schema.Struct({
   running: Schema.Array(ResourceQueueItem),
   /** Jobs waiting in queues, ordered by resource then queue position. */
   waiting: Schema.Array(ResourceQueueItem),
+  /** Why `available` is false, when known. */
+  unavailableReason: Schema.optional(TrimmedNonEmptyString),
 });
 export type ResourceQueueSnapshot = typeof ResourceQueueSnapshot.Type;
 

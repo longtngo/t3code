@@ -1,4 +1,6 @@
-import type { ResourceQueueItem } from "@t3tools/contracts";
+import type { HostMetricsDisk, ResourceQueueItem, ResourceQueueSnapshot } from "@t3tools/contracts";
+import { Cause } from "effect";
+import { AsyncResult } from "effect/reactivity";
 
 /**
  * A resctl job carries only free-form `reason` text plus timing anchors. These pure helpers
@@ -129,4 +131,129 @@ export function rowProgress(item: ResourceQueueItem, nowMs: number): RowProgress
   if (total == null || total <= 0) return { state: "running", pct: null };
   const pct = Math.round((elapsedSeconds(item, nowMs) / total) * 100);
   return { state: "running", pct: Math.max(0, Math.min(100, pct)) };
+}
+
+export type QueueStatus = "ok" | "unsupported" | "failed";
+
+const FAILED_FALLBACK = "The environment request failed.";
+
+/**
+ * Unsupported means exactly one thing: the server's RPC router rejected the tag, which surfaces
+ * as a Die whose defect is the bare string `Unknown request tag: <tag>`. An Error with the same
+ * text, a different tag, or any typed failure is a real failure.
+ */
+export function classifyQueryFailure(
+  cause: Cause.Cause<unknown>,
+  tag: string,
+): { status: "unsupported" | "failed"; message: string } {
+  const unsupportedText = `Unknown request tag: ${tag}`;
+  if (cause.reasons.some((r) => Cause.isDieReason(r) && r.defect === unsupportedText)) {
+    return { status: "unsupported", message: unsupportedText };
+  }
+  // The first reason that names itself: a string defect, or an Error a defect or failure carries.
+  for (const reason of cause.reasons) {
+    if (Cause.isDieReason(reason) && typeof reason.defect === "string") {
+      return { status: "failed", message: reason.defect };
+    }
+    const error = Cause.isDieReason(reason)
+      ? reason.defect
+      : Cause.isFailReason(reason)
+        ? reason.error
+        : undefined;
+    if (error instanceof Error) return { status: "failed", message: error.message };
+  }
+  return { status: "failed", message: FAILED_FALLBACK };
+}
+
+export interface QueryView<A> {
+  /** Latest value; after a failure, the last success (the atom keeps it). */
+  readonly data: A | null;
+  readonly status: QueueStatus;
+  readonly message: string | null;
+  /** When `data` arrived (the success's timestamp), or 0 before any success. */
+  readonly receivedAt: number;
+}
+
+export type QueueView = QueryView<ResourceQueueSnapshot>;
+
+/** One query result as the panel reads it; `tag` names the RPC for the unsupported check. */
+export function queryView<A>(
+  result: AsyncResult.AsyncResult<A, unknown>,
+  tag: string,
+): QueryView<A> {
+  const data = AsyncResult.getOrElse(result, () => null);
+  switch (result._tag) {
+    case "Success":
+      return { data, status: "ok", message: null, receivedAt: result.timestamp };
+    case "Failure": {
+      const previous = result.previousSuccess;
+      const receivedAt = previous._tag === "Some" ? previous.value.timestamp : 0;
+      return { data, receivedAt, ...classifyQueryFailure(result.cause, tag) };
+    }
+    case "Initial":
+      return { data: null, status: "ok", message: null, receivedAt: 0 };
+  }
+}
+
+/** The fullest disk by percentage, or null when there are none. */
+export function diskSummary(
+  disks: ReadonlyArray<HostMetricsDisk> | undefined,
+): HostMetricsDisk | null {
+  let fullest: HostMetricsDisk | null = null;
+  for (const disk of disks ?? []) {
+    if (fullest == null || disk.pct > fullest.pct) fullest = disk;
+  }
+  return fullest;
+}
+
+const DISK_STALE_MS = 60_000;
+
+export function isDiskStale(sampleTs: number, disk: HostMetricsDisk): boolean {
+  return sampleTs - disk.readAt > DISK_STALE_MS;
+}
+
+export type FoldPart = "machine" | "usage" | "reservations";
+
+const foldKey = (envId: string, part: FoldPart) => JSON.stringify([envId, part]);
+
+/** Fold state: an explicit override wins; otherwise machine opens for the primary or when it has jobs. */
+export function foldOpen(
+  overrides: Record<string, boolean>,
+  envId: string,
+  part: FoldPart,
+  defaults: { isPrimary: boolean; hasJobs: boolean },
+): boolean {
+  const override = overrides[foldKey(envId, part)];
+  if (override !== undefined) return override;
+  return part === "machine" ? defaults.isPrimary || defaults.hasJobs : true;
+}
+
+/**
+ * Record an override, dropping keys of environments that no longer exist. `knownEnvIds` is every
+ * environment in the catalog, enabled or not; while it is empty (still loading) nothing is pruned.
+ */
+export function setFold(
+  overrides: Record<string, boolean>,
+  envId: string,
+  part: FoldPart,
+  open: boolean,
+  knownEnvIds: ReadonlyArray<string>,
+): Record<string, boolean> {
+  if (knownEnvIds.length === 0) return { ...overrides, [foldKey(envId, part)]: open };
+  const known = new Set(knownEnvIds);
+  const next: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries({ ...overrides, [foldKey(envId, part)]: open })) {
+    const owner = parseFoldKey(key);
+    if (owner != null && known.has(owner)) next[key] = value;
+  }
+  return next;
+}
+
+function parseFoldKey(key: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(key);
+    return Array.isArray(parsed) && typeof parsed[0] === "string" ? parsed[0] : null;
+  } catch {
+    return null;
+  }
 }

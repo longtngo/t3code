@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { ResourceQueueItem } from "@t3tools/contracts";
+import type { HostMetricsDisk, ResourceQueueItem } from "@t3tools/contracts";
+import { Cause } from "effect";
 
 import {
+  classifyQueryFailure,
+  diskSummary,
+  foldOpen,
+  isDiskStale,
+  setFold,
   elapsedSeconds,
   estimatedTotalSeconds,
   parseEstimateSeconds,
@@ -148,5 +154,169 @@ describe("resourceAccent", () => {
       badge: "bg-muted text-muted-foreground",
       bar: "bg-foreground",
     });
+  });
+});
+
+describe("classifyQueryFailure", () => {
+  const get = "resourceQueue.get";
+  const sub = "subscribeHostMetrics";
+  const cases: ReadonlyArray<[string, Cause.Cause<unknown>, string, string, string]> = [
+    [
+      "upstream get",
+      Cause.die(`Unknown request tag: ${get}`),
+      get,
+      "unsupported",
+      `Unknown request tag: ${get}`,
+    ],
+    [
+      "upstream subscribe",
+      Cause.die(`Unknown request tag: ${sub}`),
+      sub,
+      "unsupported",
+      `Unknown request tag: ${sub}`,
+    ],
+    [
+      "other tag",
+      Cause.die(`Unknown request tag: ${get}`),
+      sub,
+      "failed",
+      `Unknown request tag: ${get}`,
+    ],
+    [
+      "typed auth failure",
+      Cause.fail(Object.assign(new Error("denied"), { _tag: "EnvironmentAuthorizationError" })),
+      get,
+      "failed",
+      "denied",
+    ],
+    [
+      "Error with same text",
+      Cause.die(new Error(`Unknown request tag: ${sub}`)),
+      sub,
+      "failed",
+      `Unknown request tag: ${sub}`,
+    ],
+    ["string die boom", Cause.die("boom"), get, "failed", "boom"],
+    [
+      "decode rejected",
+      Cause.die('Missing key\n  at ["v"]'),
+      get,
+      "failed",
+      'Missing key\n  at ["v"]',
+    ],
+    [
+      "decode Error",
+      Cause.die(new Error('Missing key\n  at [0]["extra"]')),
+      sub,
+      "failed",
+      'Missing key\n  at [0]["extra"]',
+    ],
+    [
+      "typed Fail with the unknown-tag text",
+      Cause.fail(`Unknown request tag: ${get}`),
+      get,
+      "failed",
+      "The environment request failed.",
+    ],
+    [
+      "typed Fail of an Error with the unknown-tag text",
+      Cause.fail(new Error(`Unknown request tag: ${get}`)),
+      get,
+      "failed",
+      `Unknown request tag: ${get}`,
+    ],
+    [
+      "opaque transport fail",
+      Cause.fail({ _tag: "SocketOpenError" }),
+      get,
+      "failed",
+      "The environment request failed.",
+    ],
+  ];
+  it.each(cases)("%s", (_name, cause, tag, status, message) => {
+    expect(classifyQueryFailure(cause, tag)).toEqual({ status, message });
+  });
+
+  it("an unknown-tag Die beside another reason is still unsupported", () => {
+    const both = Cause.combine(Cause.fail("x"), Cause.die(`Unknown request tag: ${get}`));
+    expect(classifyQueryFailure(both, get).status).toBe("unsupported");
+  });
+
+  it("a string failure (not a defect) falls back to the generic message", () => {
+    expect(classifyQueryFailure(Cause.fail("boom"), get)).toEqual({
+      status: "failed",
+      message: "The environment request failed.",
+    });
+  });
+
+  it("the first named reason wins", () => {
+    const cause = Cause.combine(Cause.fail(new Error("first")), Cause.die("second"));
+    expect(classifyQueryFailure(cause, get).message).toBe("first");
+  });
+
+  it("a non-string, non-Error defect falls back to the generic message", () => {
+    expect(classifyQueryFailure(Cause.die(42), get)).toEqual({
+      status: "failed",
+      message: "The environment request failed.",
+    });
+  });
+});
+
+describe("disks", () => {
+  const disk = (mount: string, pct: number, readAt = 0): HostMetricsDisk => ({
+    mount,
+    usedBytes: 1,
+    totalBytes: 2,
+    pct,
+    readAt,
+  });
+  it("diskSummary picks the fullest, null when none", () => {
+    expect(diskSummary([disk("/a", 40), disk("/b", 90), disk("/c", 70)])?.mount).toBe("/b");
+    expect(diskSummary(undefined)).toBeNull();
+    expect(diskSummary([])).toBeNull();
+  });
+  it("isDiskStale is strictly greater than 60 000 ms", () => {
+    expect(isDiskStale(160_000, disk("/", 1, 100_000))).toBe(false);
+    expect(isDiskStale(160_001, disk("/", 1, 100_000))).toBe(true);
+  });
+});
+
+describe("folds", () => {
+  const idle = { isPrimary: false, hasJobs: false };
+  it("defaults: machine open for primary or jobs, parts open", () => {
+    expect(foldOpen({}, "e", "machine", idle)).toBe(false);
+    expect(foldOpen({}, "e", "machine", { isPrimary: true, hasJobs: false })).toBe(true);
+    expect(foldOpen({}, "e", "machine", { isPrimary: false, hasJobs: true })).toBe(true);
+    expect(foldOpen({}, "e", "usage", idle)).toBe(true);
+    expect(foldOpen({}, "e", "reservations", idle)).toBe(true);
+  });
+  it("an override wins, including false over an open default", () => {
+    const o = setFold({}, "e", "usage", false, ["e"]);
+    expect(foldOpen(o, "e", "usage", idle)).toBe(false);
+    const m = setFold({}, "e", "machine", true, ["e"]);
+    expect(foldOpen(m, "e", "machine", idle)).toBe(true);
+  });
+  it("overrides are per env and per part", () => {
+    const o = setFold({}, "a", "usage", false, ["a", "b"]);
+    expect(foldOpen(o, "b", "usage", idle)).toBe(true);
+    expect(foldOpen(o, "a", "reservations", idle)).toBe(true);
+  });
+  it("setFold prunes unknown envs, including a colon-bearing id, and keeps known ones", () => {
+    let o = setFold({}, "gone", "usage", false, ["gone", "a:b", "a"]);
+    o = setFold(o, "a:b", "usage", false, ["gone", "a:b", "a"]);
+    o = setFold(o, "a", "usage", false, ["a:b", "a"]);
+    expect(foldOpen(o, "gone", "usage", idle)).toBe(true);
+    expect(foldOpen(o, "a:b", "usage", idle)).toBe(false);
+    expect(foldOpen(o, "a", "usage", idle)).toBe(false);
+    expect(Object.keys(o)).toHaveLength(2);
+  });
+  it("setFold does not store an override for an unknown env itself", () => {
+    expect(setFold({}, "x", "usage", false, ["a"])).toEqual({});
+  });
+  it("setFold prunes nothing while no environment is known yet", () => {
+    const prior = setFold({}, "a", "usage", false, ["a"]);
+    const next = setFold(prior, "b", "machine", true, []);
+    expect(foldOpen(next, "a", "usage", idle)).toBe(false);
+    expect(foldOpen(next, "b", "machine", idle)).toBe(true);
   });
 });

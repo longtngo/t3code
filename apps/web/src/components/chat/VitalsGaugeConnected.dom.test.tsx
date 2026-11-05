@@ -14,11 +14,8 @@ vi.mock("~/state/server", async () => {
     primaryServerEnvironmentThemesAtom: Atom.make([]),
   };
 });
-vi.mock("~/state/environments", () => ({ useEnvironment: () => null }));
-vi.mock("~/hooks/useHostMetrics", () => ({
-  useHostMetricsEnabled: () => [false, () => {}] as const,
-  useHostMetrics: () => ({ sample: null, streaming: false }),
-}));
+const useHostMetrics = vi.fn();
+vi.mock("~/hooks/useHostMetrics", () => ({ useHostMetrics }));
 
 const { VitalsGaugeConnected } = await import("./VitalsGauge");
 
@@ -51,7 +48,9 @@ describe("VitalsGaugeConnected usage refresh", () => {
         usageProvider={provider}
       />,
     );
+    expect(useHostMetrics).not.toHaveBeenCalled();
     await view.click(view.find("button"));
+    expect(view.text()).not.toContain("Machine");
     const refresh = document.querySelector<HTMLButtonElement>(
       '[aria-label="Refresh usage from the provider"]',
     );

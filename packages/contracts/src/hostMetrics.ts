@@ -33,6 +33,18 @@ export const HostMetricsHost = Schema.Struct({
   cores: Schema.Number,
 });
 
+/** One mounted filesystem's usage. */
+export const HostMetricsDisk = Schema.Struct({
+  mount: Schema.String,
+  usedBytes: Schema.Number,
+  totalBytes: Schema.Number,
+  /** usedBytes / (usedBytes + bytes available to non-root) · 100, as df Use%. */
+  pct: Schema.Number,
+  /** When this reading was taken (epoch ms). */
+  readAt: Schema.Number,
+});
+export type HostMetricsDisk = typeof HostMetricsDisk.Type;
+
 /** One push from the host-metrics subscription, emitted roughly every 1–2s. */
 export const HostMetricsSample = Schema.Struct({
   /** Sample wall-clock time (epoch ms). */
@@ -43,5 +55,7 @@ export const HostMetricsSample = Schema.Struct({
   gpu: Schema.NullOr(HostMetricsGpu),
   /** Static host descriptor; sent on every sample so the client never loses it. */
   host: Schema.optional(HostMetricsHost),
+  /** Mounted filesystems; absent when the server does not report disks. */
+  disks: Schema.optional(Schema.Array(HostMetricsDisk)),
 });
 export type HostMetricsSample = typeof HostMetricsSample.Type;

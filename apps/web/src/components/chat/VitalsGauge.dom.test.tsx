@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { ContextWindowSnapshot } from "~/lib/contextWindow";
-import type { HostMetricsSample } from "~/lib/hostMetrics";
 import type { AccountUsageView } from "~/lib/vitals";
-import { FIVE_HOUR_MS, SEVERITY_STROKE, fullnessArc, vitalsLevel, windowArc } from "~/lib/vitals";
+import {
+  FIVE_HOUR_MS,
+  GAUGE_RINGS,
+  SEVERITY_STROKE,
+  fullnessArc,
+  vitalsLevel,
+  windowArc,
+} from "~/lib/vitals";
 import { renderDom } from "../../testing/renderDom";
 import {
-  MachineDetailList,
   VitalsDetail,
   VitalsGauge,
   VitalsGaugeIcon,
@@ -17,7 +22,7 @@ type View = Awaited<ReturnType<typeof renderDom>>;
 
 /** Every arc's stroke colour, which is where severity shows up in the glyph. */
 function strokes(view: View): Array<string | null> {
-  return view.findAll("path").map((path) => path.getAttribute("stroke"));
+  return view.findAll("circle").map((ring) => ring.getAttribute("stroke"));
 }
 
 const emptyContext: ContextWindowSnapshot = {
@@ -42,17 +47,7 @@ const emptyContext: ContextWindowSnapshot = {
   updatedAt: "2026-07-27T00:00:00.000Z",
 };
 
-const sample: HostMetricsSample = {
-  ts: 0,
-  cpu: { pct: 22, perCore: [], loadAvg: [] },
-  mem: { usedBytes: 8_000_000_000, totalBytes: 16_000_000_000, pct: 50 },
-  gpu: { pct: 44 },
-};
-
 const COMPACT_SENTENCE = "automatically compacts its context when needed";
-
-const compactionHost = { sample, streaming: true, enabled: true, onToggle: () => {} };
-
 function renderCompactionNote(overrides: Partial<ContextWindowSnapshot>) {
   return renderDom(
     <VitalsDetail
@@ -64,7 +59,6 @@ function renderCompactionNote(overrides: Partial<ContextWindowSnapshot>) {
         fetchedAt: null,
         extraWindows: [],
       }}
-      host={compactionHost}
       now={0}
       timestampFormat="24-hour"
       providerDisplayName="Claude"
@@ -103,7 +97,6 @@ describe("VitalsDetail auto-compaction note", () => {
           fetchedAt: null,
           extraWindows: [],
         }}
-        host={compactionHost}
         now={0}
         timestampFormat="24-hour"
         providerDisplayName="Claude"
@@ -118,32 +111,49 @@ describe("VitalsGaugeIcon", () => {
     context: { pct: null, level: null },
     fiveHour: { pct: null, level: null },
     sevenDay: { pct: null, level: null },
-    cpu: { pct: null, level: null },
-    gpu: { pct: null, level: null },
-    mem: { pct: null, level: null },
   } as const;
 
-  it("renders a track for every ring half and a fill for each non-null metric", async () => {
+  /** The severity-filled rings: the ones carrying a dasharray. */
+  const fills = (view: View) => view.findAll("circle[pathLength]");
+
+  it("renders three track circles and a pathLength=100 fill per non-null metric", async () => {
     const view = await renderDom(
       <VitalsGaugeIcon
-        inputs={{
-          context: fullnessArc(40),
-          fiveHour: fullnessArc(60),
-          sevenDay: fullnessArc(30),
-          cpu: fullnessArc(22),
-          gpu: fullnessArc(44),
-          mem: fullnessArc(50),
-        }}
+        inputs={{ context: fullnessArc(40), fiveHour: fullnessArc(60), sevenDay: fullnessArc(30) }}
       />,
     );
-    // 6 halves × (track + fill) = 12 paths when every metric is present.
-    expect(view.findAll("path")).toHaveLength(12);
+    expect(view.findAll("circle")).toHaveLength(6);
+    expect(fills(view).map((ring) => ring.getAttribute("pathLength"))).toEqual([
+      "100",
+      "100",
+      "100",
+    ]);
+    expect(fills(view).map((ring) => ring.getAttribute("stroke-dasharray"))).toEqual([
+      "40 100",
+      "60 100",
+      "30 100",
+    ]);
+    expect(fills(view).map((ring) => ring.getAttribute("r"))).toEqual(
+      [GAUGE_RINGS.outer, GAUGE_RINGS.middle, GAUGE_RINGS.inner].map(String),
+    );
+    for (const ring of fills(view)) {
+      expect(ring.getAttribute("transform")).toBe("rotate(-90 22 22)");
+    }
   });
 
-  it("omits the fill path for a null metric (track only)", async () => {
-    const view = await renderDom(<VitalsGaugeIcon inputs={NO_ARCS} />);
-    // 6 tracks, no fills.
-    expect(view.findAll("path")).toHaveLength(6);
+  it("draws a full ring at 100%, which a zero-length arc path cannot", async () => {
+    const view = await renderDom(
+      <VitalsGaugeIcon inputs={{ ...NO_ARCS, context: fullnessArc(100) }} />,
+    );
+    expect(fills(view).map((ring) => ring.getAttribute("stroke-dasharray"))).toEqual(["100 100"]);
+  });
+
+  it("omits the fill for a null or zero metric (track only)", async () => {
+    const view = await renderDom(
+      <VitalsGaugeIcon inputs={{ ...NO_ARCS, sevenDay: fullnessArc(0) }} />,
+    );
+    expect(view.findAll("circle")).toHaveLength(3);
+    expect(fills(view)).toHaveLength(0);
   });
 
   it("colours an under-pace window by pace, matching the detail row, not by fullness", async () => {
@@ -197,9 +207,7 @@ describe("VitalsGaugeIcon", () => {
 });
 
 describe("VitalsGauge detail", () => {
-  const host = { sample, streaming: true, enabled: true, onToggle: () => {} };
-
-  it("shows context tokens, both usage windows, and machine rows", async () => {
+  it("shows context tokens, both usage windows, and no machine block", async () => {
     const accountUsage: AccountUsageView = {
       fiveHour: { utilization: 70, resetsAt: new Date(FIVE_HOUR_MS / 2).toISOString() },
       sevenDay: { utilization: 30, resetsAt: null },
@@ -211,7 +219,6 @@ describe("VitalsGauge detail", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={accountUsage}
-        host={host}
         now={0}
         timestampFormat="24-hour"
       />,
@@ -226,44 +233,7 @@ describe("VitalsGauge detail", () => {
     expect(text).toContain("+20% over pace");
     // 7d has no resetsAt → no projection → plain usage, no pace label.
     expect(text).toContain("30% used");
-    expect(text).toContain("Machine");
-    expect(text).toContain("CPU");
-    expect(text).toContain("GPU");
-    expect(text).toContain("MEM");
-  });
-
-  // On a phone or a second laptop these are the server's numbers, not the
-  // reader's, and until now nothing on the panel said whose they were.
-  it("names the environment the machine numbers come from", async () => {
-    const view = await renderDom(
-      <VitalsDetail
-        context={null}
-        accountUsage={null}
-        host={host}
-        now={0}
-        timestampFormat="24-hour"
-        machineName="studio-mini"
-      />,
-    );
-    expect(view.text()).toContain("studio-mini");
-  });
-
-  it("renders nothing at all beside the caption when the environment has no name", async () => {
-    const view = await renderDom(
-      <VitalsDetail
-        context={null}
-        accountUsage={null}
-        host={host}
-        now={0}
-        timestampFormat="24-hour"
-      />,
-    );
-    const text = view.text();
-    expect(text).toContain("CPU");
-    // The caption runs straight into the live/paused toggle. Pins the whole slot because
-    // `not.toContain("undefined")` was near vacuous (React renders nothing for undefined),
-    // so a placeholder like "unknown" or a stray separator fails too.
-    expect(text).toContain("Machinelive");
+    expect(text).not.toContain("Machine");
   });
 
   it("explains a missing context block when the session's provider never reports usage", async () => {
@@ -275,7 +245,6 @@ describe("VitalsGauge detail", () => {
       <VitalsDetail
         context={null}
         accountUsage={null}
-        host={host}
         now={0}
         timestampFormat="24-hour"
         sessionProvider="cursor"
@@ -292,7 +261,6 @@ describe("VitalsGauge detail", () => {
       <VitalsDetail
         context={null}
         accountUsage={null}
-        host={host}
         now={0}
         timestampFormat="24-hour"
         sessionProvider="claudeAgent"
@@ -310,7 +278,6 @@ describe("VitalsGauge detail", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={null}
-        host={host}
         now={0}
         timestampFormat="24-hour"
         sessionProvider="cursor"
@@ -331,13 +298,12 @@ describe("VitalsGauge detail", () => {
           fetchedAt: null,
           extraWindows: [],
         }}
-        host={host}
         now={0}
         timestampFormat="24-hour"
       />,
     );
     expect(view.text()).not.toContain("Usage limits");
-    expect(view.text()).toContain("Machine");
+    expect(view.text()).not.toContain("Machine");
   });
 
   it("renders Codex and Cursor provider windows as extra limit rows", async () => {
@@ -367,7 +333,6 @@ describe("VitalsGauge detail", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={accountUsage}
-        host={host}
         now={0}
         timestampFormat="24-hour"
       />,
@@ -380,70 +345,6 @@ describe("VitalsGauge detail", () => {
     expect(text).toContain("Cursor auto");
     // Cursor has no fixed window → utilization only, no pace label.
     expect(text).toContain("25% used");
-  });
-
-  it("shows a connecting state when host metrics are enabled but absent", async () => {
-    const view = await renderDom(
-      <VitalsDetail
-        context={emptyContext}
-        accountUsage={null}
-        host={{ sample: null, streaming: false, enabled: true, onToggle: () => {} }}
-        now={0}
-        timestampFormat="24-hour"
-      />,
-    );
-    expect(view.text()).toContain("Connecting to host");
-  });
-
-  it("shows a paused state when host metrics are disabled", async () => {
-    const view = await renderDom(
-      <VitalsDetail
-        context={emptyContext}
-        accountUsage={null}
-        host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
-        now={0}
-        timestampFormat="24-hour"
-      />,
-    );
-    expect(view.text()).toContain("Metrics paused");
-  });
-
-  // The live/paused control was only ever rendered, never pressed, so nothing proved it was
-  // wired to `host.onToggle` — or that it asks for the opposite of the current state.
-  it("asks its owner to pause host metrics while they are live", async () => {
-    const onToggle = vi.fn();
-    const view = await renderDom(
-      <VitalsDetail
-        context={emptyContext}
-        accountUsage={null}
-        host={{ sample, streaming: true, enabled: true, onToggle }}
-        now={0}
-        timestampFormat="24-hour"
-      />,
-    );
-
-    await view.click(view.find('[aria-label="Pause host metrics"]'));
-
-    expect(onToggle).toHaveBeenCalledTimes(1);
-    expect(onToggle).toHaveBeenCalledWith(false);
-  });
-
-  it("asks its owner to resume host metrics while they are paused", async () => {
-    const onToggle = vi.fn();
-    const view = await renderDom(
-      <VitalsDetail
-        context={emptyContext}
-        accountUsage={null}
-        host={{ sample: null, streaming: false, enabled: false, onToggle }}
-        now={0}
-        timestampFormat="24-hour"
-      />,
-    );
-
-    await view.click(view.find('[aria-label="Resume host metrics"]'));
-
-    expect(onToggle).toHaveBeenCalledTimes(1);
-    expect(onToggle).toHaveBeenCalledWith(true);
   });
 });
 
@@ -463,7 +364,6 @@ describe("VitalsDetail usage refresh", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={usageWithLimits}
-        host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
         now={0}
         timestampFormat="24-hour"
         refreshUsage={{ run: () => {}, pending: false }}
@@ -480,7 +380,6 @@ describe("VitalsDetail usage refresh", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={usageWithLimits}
-        host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
         now={0}
         timestampFormat="24-hour"
         refreshUsage={{ run, pending: false }}
@@ -501,7 +400,6 @@ describe("VitalsDetail usage refresh", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={usageWithLimits}
-        host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
         now={0}
         timestampFormat="24-hour"
         refreshUsage={{ run, pending: true }}
@@ -521,7 +419,6 @@ describe("VitalsDetail usage refresh", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={usageWithLimits}
-        host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
         now={0}
         timestampFormat="24-hour"
       />,
@@ -544,22 +441,15 @@ describe("VitalsGauge trigger", () => {
           fetchedAt: null,
           extraWindows: [],
         }}
-        host={{ sample, streaming: true, enabled: true, onToggle: () => {} }}
       />,
     );
     expect(view.find("button")?.getAttribute("aria-label")).toBe(
-      "Vitals: context 46%, 5-hour 88%, 7-day 41%, CPU 22%, GPU 44%, memory 50%",
+      "Vitals: context 46%, 5-hour 88%, 7-day 41%",
     );
   });
 
   it("draws the glyph at the full size of its button, with nothing insetting it", async () => {
-    const view = await renderDom(
-      <VitalsGauge
-        context={emptyContext}
-        accountUsage={null}
-        host={{ sample, streaming: true, enabled: true, onToggle: () => {} }}
-      />,
-    );
+    const view = await renderDom(<VitalsGauge context={emptyContext} accountUsage={null} />);
 
     // The button is `size-8`. The glyph used to be a 24px svg inside a `size-6`
     // wrapper inside a transparent border, so a quarter of the control was
@@ -577,146 +467,7 @@ describe("VitalsGauge trigger", () => {
   });
 });
 
-describe("machine details", () => {
-  const detailedSample: HostMetricsSample = {
-    ts: 0,
-    cpu: { pct: 22, perCore: [10, 90, 45], loadAvg: [1.5, 2.25, 0.75] },
-    mem: { usedBytes: 8_000_000_000, totalBytes: 16_000_000_000, pct: 50 },
-    gpu: { pct: 44, name: "Apple M5 Max", vramUsedBytes: 3_000_000_000 },
-    host: { platform: "darwin", arch: "arm64", cores: 3 },
-  };
-  const detailedHost = {
-    sample: detailedSample,
-    streaming: true,
-    enabled: true,
-    onToggle: () => {},
-  };
-
-  const detailsToggle = (view: View) =>
-    view.findAll("button").find((button) => button.textContent?.trim() === "details") ?? null;
-
-  it("keeps the detail collapsed so the summary bars stay the answer", async () => {
-    const view = await renderDom(
-      <VitalsDetail
-        context={emptyContext}
-        accountUsage={null}
-        host={detailedHost}
-        now={0}
-        timestampFormat="24-hour"
-      />,
-    );
-
-    expect(view.text()).toContain("details");
-    // Collapsed, so none of the values are rendered yet.
-    expect(view.text()).not.toContain("Apple M5 Max");
-    expect(view.find('[aria-expanded="true"]')).toBeNull();
-  });
-
-  // The collapsed state above is only half the disclosure. Static markup could never press
-  // the toggle, so the way back in was untested and `MachineDetailList` was only ever
-  // exercised directly, never through the control that mounts it.
-  it("reveals the machine detail when the toggle is pressed", async () => {
-    const view = await renderDom(
-      <VitalsDetail
-        context={emptyContext}
-        accountUsage={null}
-        host={detailedHost}
-        now={0}
-        timestampFormat="24-hour"
-      />,
-    );
-
-    await view.click(detailsToggle(view));
-
-    expect(view.find('[aria-expanded="true"]')).not.toBeNull();
-    expect(view.text()).toContain("Apple M5 Max");
-  });
-
-  it("still renders the three summary bars alongside the toggle", async () => {
-    const view = await renderDom(
-      <VitalsDetail
-        context={emptyContext}
-        accountUsage={null}
-        host={detailedHost}
-        now={0}
-        timestampFormat="24-hour"
-      />,
-    );
-
-    expect(view.text()).toContain("CPU");
-    expect(view.text()).toContain("GPU");
-    expect(view.text()).toContain("MEM");
-  });
-
-  it("offers no detail toggle before a sample arrives", async () => {
-    const view = await renderDom(
-      <VitalsDetail
-        context={emptyContext}
-        accountUsage={null}
-        host={{ sample: null, streaming: false, enabled: true, onToggle: () => {} }}
-        now={0}
-        timestampFormat="24-hour"
-      />,
-    );
-
-    expect(view.text()).toContain("Connecting to host…");
-    expect(view.text()).not.toContain("details");
-  });
-});
-
-describe("MachineDetailList", () => {
-  const detailed: HostMetricsSample = {
-    ts: 0,
-    cpu: { pct: 22, perCore: [10, 90, 45], loadAvg: [1.5, 2.25, 0.75] },
-    mem: { usedBytes: 8_000_000_000, totalBytes: 16_000_000_000, pct: 50 },
-    gpu: { pct: 44, name: "Apple M5 Max", vramUsedBytes: 3_000_000_000 },
-    host: { platform: "darwin", arch: "arm64", cores: 3 },
-  };
-
-  it("restores the detail the three summary bars leave out", async () => {
-    const view = await renderDom(<MachineDetailList sample={detailed} />);
-    const text = view.text();
-
-    expect(text).toContain("1.50  2.25  0.75");
-    expect(text).toContain("Apple M5 Max");
-    expect(text).toContain("darwin arm64");
-    // Bytes, not just the percentage the summary bar already shows.
-    expect(text).toContain("8 GB of 16 GB");
-    expect(text).toContain("3 GB");
-  });
-
-  it("draws one bar per core, labelled with its own utilization", async () => {
-    const view = await renderDom(<MachineDetailList sample={detailed} />);
-
-    // The hover text moved into a Tooltip popup, which is portalled and only
-    // mounts on hover — so the per-core value rides on the bar's accessible
-    // name, which is where a screen reader could reach it anyway.
-    expect(view.find('[aria-label="Core 0: 10%"]')).not.toBeNull();
-    expect(view.find('[aria-label="Core 1: 90%"]')).not.toBeNull();
-    expect(view.find('[aria-label="Core 2: 45%"]')).not.toBeNull();
-  });
-
-  it("omits every row the host does not report rather than showing an empty one", async () => {
-    const bare: HostMetricsSample = {
-      ts: 0,
-      cpu: { pct: 22, perCore: [], loadAvg: [] },
-      mem: { usedBytes: 1_000, totalBytes: 2_000, pct: 50 },
-      gpu: null,
-    };
-    const view = await renderDom(<MachineDetailList sample={bare} />);
-    const text = view.text();
-
-    expect(text).not.toContain("Load");
-    expect(text).not.toContain("GPU");
-    expect(text).not.toContain("VRAM");
-    expect(text).not.toContain("Host");
-    // Memory always reports, so it is always shown.
-    expect(text).toContain("Memory");
-  });
-});
-
 describe("VitalsGauge window reset time", () => {
-  const host = { sample, streaming: true, enabled: true, onToggle: () => {} };
   // Local-time constructor so the rendered clock is timezone-stable.
   const at = (h: number, m = 0) => new Date(2026, 7, 14, h, m, 0, 0);
   const now = at(12).getTime();
@@ -733,7 +484,6 @@ describe("VitalsGauge window reset time", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={accountUsage}
-        host={host}
         now={now}
         timestampFormat="24-hour"
       />,
@@ -756,7 +506,6 @@ describe("VitalsGauge window reset time", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={accountUsage}
-        host={host}
         now={now}
         timestampFormat="24-hour"
       />,
@@ -777,7 +526,6 @@ describe("VitalsGauge window reset time", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={accountUsage}
-        host={host}
         now={now}
         timestampFormat="12-hour"
       />,
@@ -801,7 +549,6 @@ describe("VitalsGauge window reset time", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={accountUsage}
-        host={host}
         now={now}
         timestampFormat="24-hour"
       />,
@@ -848,7 +595,6 @@ describe("VitalsGauge window reset time", () => {
       <VitalsDetail
         context={emptyContext}
         accountUsage={accountUsage}
-        host={host}
         now={now}
         timestampFormat="24-hour"
       />,
@@ -859,8 +605,6 @@ describe("VitalsGauge window reset time", () => {
 });
 
 describe("VitalsGauge context model name", () => {
-  const host = { sample, streaming: true, enabled: true, onToggle: () => {} };
-
   function render(options: { modelDisplayName?: string | null; maxTokens?: number | null }) {
     const context: ContextWindowSnapshot = {
       ...emptyContext,
@@ -870,7 +614,6 @@ describe("VitalsGauge context model name", () => {
       <VitalsDetail
         context={context}
         accountUsage={null}
-        host={host}
         now={0}
         timestampFormat="24-hour"
         modelDisplayName={options.modelDisplayName ?? null}
@@ -918,7 +661,6 @@ describe("VitalsDetail extra usage", () => {
           fetchedAt: null,
           extraWindows: [],
         }}
-        host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
         now={Date.UTC(2026, 9, 3, 12)}
         timestampFormat="24-hour"
       />,

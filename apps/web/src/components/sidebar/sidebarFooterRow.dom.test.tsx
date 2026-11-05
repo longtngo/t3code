@@ -13,9 +13,22 @@ const queueState = vi.hoisted(() => ({
 
 vi.mock("../../state/environments", () => ({
   usePrimaryEnvironmentId: () => "env-1",
+  useEnvironmentConnectionSummaries: () => [
+    {
+      environmentId: "env-1",
+      environmentLabel: "local",
+      isEnabled: true,
+      connectionState: "connected",
+    },
+  ],
 }));
-vi.mock("../../hooks/useResourceQueue", () => ({
-  useResourceQueue: () => ({ snapshot: queueState.snapshot }),
+vi.mock("../../hooks/useResourceQueues", () => ({
+  useResourceQueues: () => [
+    { data: queueState.snapshot, status: "ok", message: null, receivedAt: 0 },
+  ],
+}));
+vi.mock("../../hooks/useHostMetrics", () => ({
+  useHostMetrics: () => ({ sample: null, status: "ok", message: null, receivedAt: 0 }),
 }));
 
 import { SidebarResourceQueue } from "./SidebarResourceQueue";

@@ -1,3 +1,6 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- resolved once at module load, outside any Effect.
+import * as NodePath from "node:path";
+
 import type {
   ResourceQueueItem,
   ResourceQueueResource,
@@ -9,13 +12,28 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
+import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 
-/** Resolved resctl binary. Overridable for non-PATH installs; defaults to the name on PATH. */
-const RESCTL_CMD = process.env.T3CODE_RESCTL_CMD?.trim() || "resctl";
+/**
+ * A command with a path separator (`/`; also `\` on Windows) is resolved against `cwd` (an
+ * absolute one stays as is); a bare name stays a PATH lookup.
+ */
+export const resolveCommand = (raw: string, cwd: string): string =>
+  raw.includes("/") || (NodePath.sep === "\\" && raw.includes("\\"))
+    ? NodePath.resolve(cwd, raw)
+    : raw;
+
+/**
+ * Resolved resctl binary. Overridable for non-PATH installs; defaults to the name on PATH. A
+ * relative override is resolved once, against the startup cwd: the spawn passes no cwd, so the
+ * child would otherwise resolve it against whatever the server's cwd has become.
+ */
+const RESCTL_CMD = resolveCommand(process.env.T3CODE_RESCTL_CMD?.trim() || "resctl", process.cwd());
 /** A status read is cheap; bound it so a wedged broker never stalls the RPC. */
 const RESCTL_TIMEOUT = Duration.millis(2000);
 const MAX_OUTPUT_BYTES = 2_000_000;
@@ -64,7 +82,7 @@ function toItem(
  * Normalize one `resctl status --json` document into the client DTO: a flat list of
  * holders (`running`) and queued jobs (`waiting`) plus per-pool capacity. Absolute
  * `sinceMs` timestamps are carried through so the client can tick a live "elapsed"
- * between polls. Throws on malformed JSON — callers map that to an unavailable snapshot.
+ * between polls. Callers pass JSON text they have already parsed and validated.
  */
 export function parseResourceQueue(text: string, nowMs: number): ResourceQueueSnapshot {
   const root = asRecord(JSON.parse(text));
@@ -109,7 +127,7 @@ export function parseResourceQueue(text: string, nowMs: number): ResourceQueueSn
   };
 }
 
-function unavailable(nowMs: number): ResourceQueueSnapshot {
+function unavailable(nowMs: number, unavailableReason: string): ResourceQueueSnapshot {
   return {
     ts: nowMs,
     available: false,
@@ -117,47 +135,158 @@ function unavailable(nowMs: number): ResourceQueueSnapshot {
     resources: [],
     running: [],
     waiting: [],
+    unavailableReason,
   };
 }
 
-/** Run `resctl status --json --no-spawn`, returning its stdout, or `null` on any failure. */
-const runResctl: Effect.Effect<string | null, never, ChildProcessSpawner.ChildProcessSpawner> =
+/** What one `resctl status` attempt produced: a finished process, or why none finished. */
+export type ResctlRun =
+  | { readonly stdout: string; readonly stderrTail: string; readonly exitCode: number }
+  /** It started, then a signal ended it (e.g. the OOM killer's SIGKILL). */
+  | { readonly signal: string }
+  | { readonly spawnError: "not-found" | "permission-denied" | "timeout" | "spawn-failed" };
+
+const STDERR_TAIL_BYTES = 200;
+const MAX_ERROR_CHARS = 120;
+
+/** Collapse whitespace runs to one line, then drop the remaining control characters. */
+const oneLine = (text: string): string =>
+  text
+    .replace(/\s+/g, " ")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim();
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Turn one resctl attempt into a snapshot. Order matters: the error document (`error` key) is
+ * read before the exit code, because resctl prints it with a non-zero exit. Available only when
+ * exit 0 and `resources` is an object; every other outcome is unavailable with a named reason.
+ * The reason goes to clients, so it never carries stderr or the command path (the log does).
+ */
+export function classifyResctl(run: ResctlRun, nowMs: number): ResourceQueueSnapshot {
+  if ("signal" in run) return unavailable(nowMs, `resctl was killed (${run.signal})`);
+  if ("spawnError" in run) {
+    switch (run.spawnError) {
+      case "not-found":
+        return unavailable(nowMs, "resctl not found");
+      case "permission-denied":
+        return unavailable(nowMs, "resctl is not executable");
+      case "timeout":
+        return unavailable(nowMs, "resctl timed out after 2 s");
+      case "spawn-failed":
+        return unavailable(nowMs, "resctl could not be started");
+    }
+  }
+  let doc: unknown;
+  try {
+    doc = JSON.parse(run.stdout);
+  } catch {
+    doc = undefined;
+  }
+  if (isJsonObject(doc) && typeof doc.error === "string" && oneLine(doc.error) !== "") {
+    const error = oneLine(doc.error);
+    if (error === "daemon_unreachable") {
+      return unavailable(nowMs, "broker not running (daemon_unreachable)");
+    }
+    const shown = error.length > MAX_ERROR_CHARS ? `${error.slice(0, MAX_ERROR_CHARS)}…` : error;
+    return unavailable(nowMs, `resctl error (${shown})`);
+  }
+  if (run.exitCode !== 0) return unavailable(nowMs, `resctl exited ${run.exitCode}`);
+  if (isJsonObject(doc) && isJsonObject(doc.resources)) {
+    return parseResourceQueue(run.stdout, nowMs);
+  }
+  return unavailable(nowMs, "unexpected resctl output");
+}
+
+const keepTail = (tail: Uint8Array, chunk: Uint8Array): Uint8Array => {
+  const joined = new Uint8Array(tail.byteLength + chunk.byteLength);
+  joined.set(tail);
+  joined.set(chunk, tail.byteLength);
+  return joined.byteLength > STDERR_TAIL_BYTES
+    ? joined.slice(joined.byteLength - STDERR_TAIL_BYTES)
+    : joined;
+};
+
+/**
+ * The signal that ended a started process: the spawner fails its exit code with
+ * "Process interrupted due to receipt of signal: 'SIGKILL'". Anything else is undefined.
+ */
+const exitSignal = (error: PlatformError.PlatformError): string | undefined => {
+  const cause = error.reason.cause;
+  const match =
+    cause instanceof Error ? /receipt of signal: '(SIG[A-Z0-9]+)'/.exec(cause.message) : null;
+  return match?.[1];
+};
+
+/** Run `resctl status --json --no-spawn`. Never fails; every outcome is a `ResctlRun`. */
+const runResctl: Effect.Effect<ResctlRun, never, ChildProcessSpawner.ChildProcessSpawner> =
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const child = yield* spawner.spawn(
-      // --no-spawn: read the running broker; never start a daemon as a side effect of a status poll.
-      ChildProcess.make(RESCTL_CMD, ["status", "--json", "--no-spawn"], { cwd: process.cwd() }),
+    const spawned = yield* spawner
+      .spawn(
+        // --no-spawn: read the running broker; never start a daemon as a side effect of a status poll.
+        // No cwd: the spawner checks a given cwd with fs.access, which fails once the server's
+        // working directory is deleted; without one the child inherits it and still runs.
+        ChildProcess.make(RESCTL_CMD, ["status", "--json", "--no-spawn"]),
+      )
+      .pipe(
+        Effect.map((child) => ({ child }) as const),
+        Effect.catch((error) =>
+          Effect.succeed({
+            run: {
+              spawnError:
+                error.reason._tag === "NotFound"
+                  ? "not-found"
+                  : error.reason._tag === "PermissionDenied"
+                    ? "permission-denied"
+                    : "spawn-failed",
+            } satisfies ResctlRun,
+          } as const),
+        ),
+      );
+    if ("run" in spawned) return spawned.run;
+    const { child } = spawned;
+    // Drain stderr too: an unread pipe can fill and wedge the child.
+    const [collected, stderr, exited] = yield* Effect.all(
+      [
+        collectUint8StreamText({ stream: child.stdout, maxBytes: MAX_OUTPUT_BYTES }),
+        child.stderr.pipe(Stream.runFold(() => new Uint8Array(0), keepTail)),
+        child.exitCode.pipe(
+          Effect.map((code) => ({ code })),
+          Effect.catch((error) => {
+            const signal = exitSignal(error);
+            return signal === undefined ? Effect.fail(error) : Effect.succeed({ signal });
+          }),
+        ),
+      ],
+      { concurrency: "unbounded" },
     );
-    const collected = yield* collectUint8StreamText({
-      stream: child.stdout,
-      maxBytes: MAX_OUTPUT_BYTES,
-    });
-    return collected.text;
+    if ("signal" in exited) return { signal: exited.signal } satisfies ResctlRun;
+    const exitCode = exited.code;
+    return {
+      stdout: collected.text,
+      stderrTail: Buffer.from(stderr).toString("utf8"),
+      exitCode: Number(exitCode),
+    } satisfies ResctlRun;
   }).pipe(
     Effect.scoped,
     Effect.timeoutOption(RESCTL_TIMEOUT),
-    Effect.map((result) => (Option.isSome(result) ? result.value : null)),
-    Effect.catchCause(() => Effect.succeed(null)),
+    Effect.map((result): ResctlRun =>
+      Option.isSome(result) ? result.value : { spawnError: "timeout" },
+    ),
+    Effect.catchCause(() => Effect.succeed<ResctlRun>({ spawnError: "spawn-failed" })),
   );
 
-/**
- * One-shot read of the local resource broker. Degrades to `available:false` (never fails)
- * when resctl is missing, times out, or emits unparseable output, so the UI can show a
- * quiet "broker not running" rather than surfacing an error.
- */
-export const readResourceQueue: Effect.Effect<
-  ResourceQueueSnapshot,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner
-> = Effect.gen(function* () {
+/** Every RPC caller within this window gets the same snapshot; one resctl run serves them all. */
+const READ_TTL = Duration.seconds(2);
+
+const readDetailed = Effect.gen(function* () {
   const now = yield* DateTime.now;
-  const nowMs = DateTime.toEpochMillis(now);
-  const text = yield* runResctl;
-  if (text == null) return unavailable(nowMs);
-  // JSON.parse throws on malformed output; fall back to an unavailable snapshot.
-  return yield* Effect.try(() => parseResourceQueue(text, nowMs)).pipe(
-    Effect.orElseSucceed(() => unavailable(nowMs)),
-  );
+  const run = yield* runResctl;
+  return { run, snapshot: classifyResctl(run, DateTime.toEpochMillis(now)) };
 });
 
 /**
@@ -174,8 +303,31 @@ export class ResourceQueue extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const read: ResourceQueue["Service"]["read"] = readResourceQueue.pipe(
+  // Log only when the reason text changes (a poll runs every few seconds), plus recovery.
+  let lastReason: { readonly text: string; readonly sinceMs: number } | undefined;
+  // Never fails: degrades to `available:false` with a named `unavailableReason`. Concurrent
+  // callers share the in-flight run, and its result is reused for READ_TTL after it arrives.
+  const read: ResourceQueue["Service"]["read"] = yield* readDetailed.pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    Effect.tap(({ run, snapshot }) => {
+      const text = snapshot.unavailableReason;
+      if (text === undefined) {
+        const previous = lastReason;
+        lastReason = undefined;
+        return previous === undefined
+          ? Effect.void
+          : Effect.logInfo(
+              `resctl available again after ${Math.round((snapshot.ts - previous.sinceMs) / 1000)}s`,
+            );
+      }
+      if (lastReason?.text === text) return Effect.void;
+      lastReason = { text, sinceMs: lastReason?.sinceMs ?? snapshot.ts };
+      const detail =
+        "exitCode" in run ? `, exit ${run.exitCode}, stderr: ${oneLine(run.stderrTail)}` : "";
+      return Effect.logWarning(`resctl unavailable: ${text} (cmd: ${RESCTL_CMD}${detail})`);
+    }),
+    Effect.map(({ snapshot }) => snapshot),
+    Effect.cachedWithTTL(READ_TTL),
   );
   return ResourceQueue.of({ read });
 });

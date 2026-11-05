@@ -4,10 +4,10 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { formatShortTimestamp } from "../timestampFormat";
 
 /**
- * Vitals gauge logic — the pure (testable) core behind the header's combined
- * context / usage-limit / host-resource affordance. Covers the two severity
+ * Vitals gauge logic — the pure (testable) core behind the header's
+ * context / usage-limit affordance (host resources live in the sidebar). Covers the two severity
  * ramps the user specified, the pace projection for rolling usage windows, the
- * view of a provider's usage limits, and the split-ring arc geometry.
+ * view of a provider's usage limits, and the full-ring glyph geometry.
  */
 
 export type Severity = "ok" | "warn" | "high" | "crit";
@@ -54,6 +54,9 @@ export const SEVERITY_BG: Record<Severity, string> = {
   high: "bg-orange-400",
   crit: "bg-red-500",
 };
+
+/** Classes for a thin horizontal usage track (host rows, the gauge's pace bar). */
+export const TRACK_CLASS = "overflow-hidden rounded-full bg-muted";
 
 /** Unfilled arc / bar track — matches the context meter's track tint. */
 export const VITALS_TRACK_STROKE =
@@ -378,67 +381,14 @@ export function paceDiffLabel(diff: number): string {
   return `+${diff}% over pace`;
 }
 
-// Split-ring geometry
+// Ring geometry
 
 /** SVG side length of the gauge's viewBox (square). */
 export const GAUGE_VIEWBOX = 44;
-const CENTER = GAUGE_VIEWBOX / 2;
 
-/** Ring radii: outer = context/CPU, middle = 5h/GPU, inner = 7d/memory. */
+/** Ring radii: outer = context, middle = 5h, inner = 7d. */
 export const GAUGE_RINGS = { outer: 18.5, middle: 13, inner: 7.6 } as const;
 export const GAUGE_STROKE_WIDTH = 3;
-
-/**
- * Half-width of the straight vertical channel down the middle. Each ring's arc
- * ends where its circle crosses `x = CENTER ± DX`, so every radius's endpoints
- * land on one vertical line (a straight seam, not a V-splay).
- */
-const DX = 2.3;
-
-/** Mirror transform that turns a right-side arc group into its left-side twin. */
-export const GAUGE_MIRROR_TRANSFORM = `translate(${GAUGE_VIEWBOX} 0) scale(-1 1)`;
-
-function polar(r: number, deg: number): [number, number] {
-  const radians = (deg * Math.PI) / 180;
-  return [CENTER + r * Math.cos(radians), CENTER + r * Math.sin(radians)];
-}
-
-/** SVG path `d` for an arc of radius `r` sweeping clockwise from `a0` to `a1` (degrees). */
-export function arcPathD(r: number, a0: number, a1: number): string {
-  const [x0, y0] = polar(r, a0);
-  const [x1, y1] = polar(r, a1);
-  const largeArc = (((a1 - a0) % 360) + 360) % 360 > 180 ? 1 : 0;
-  return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${largeArc} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
-}
-
-export interface HalfArc {
-  /** The full (unfilled) half-ring track. */
-  readonly trackD: string;
-  /** The filled prefix, or null when `pct` is null/0. */
-  readonly fillD: string | null;
-}
-
-/**
- * Right-side half-ring cut by the vertical seam, filling from the top down.
- * `pct === null` (unknown metric) yields a track with no fill.
- */
-export function rightHalfArc(r: number, pct: number | null): HalfArc {
-  const t = (Math.acos(Math.min(0.999, DX / r)) * 180) / Math.PI;
-  const a0 = -t;
-  const a1 = t;
-  const span = a1 - a0;
-  const trackD = arcPathD(r, a0, a1);
-  let fillD: string | null = null;
-  if (pct !== null) {
-    const p = clampPct(pct);
-    if (p > 0) {
-      const end = a0 + (span * p) / 100;
-      // Floor the sweep so a tiny non-zero value still renders a rounded cap.
-      fillD = arcPathD(r, a0, Math.max(a0 + 0.4, end));
-    }
-  }
-  return { trackD, fillD };
-}
 
 /**
  * Derive a pace-able window from a billing-cycle start and reset instant.

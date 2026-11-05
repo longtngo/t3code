@@ -10,10 +10,7 @@ import {
   describeMissingContextUsage,
   formatContextWindowTokens,
 } from "~/lib/contextWindow";
-import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
-import { ChevronRightIcon, RotateCwIcon } from "lucide-react";
-import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
-import { useEnvironment } from "~/state/environments";
+import { RotateCwIcon } from "lucide-react";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import {
@@ -32,16 +29,15 @@ import {
   windowArc,
   type VitalsGaugeArc,
   FIVE_HOUR_MS,
-  GAUGE_MIRROR_TRANSFORM,
   GAUGE_RINGS,
   GAUGE_STROKE_WIDTH,
   GAUGE_VIEWBOX,
   paceDiffLabel,
-  rightHalfArc,
   SEVEN_DAY_MS,
   SEVERITY_BG,
   SEVERITY_STROKE,
   SEVERITY_TEXT,
+  TRACK_CLASS,
   VITALS_TRACK_STROKE,
   vitalsLevel,
   windowSeverity,
@@ -49,28 +45,38 @@ import {
 } from "~/lib/vitals";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
-// Icon — three rings cut by a straight vertical seam
+// Icon - three concentric full rings
 
-/** One right-side half-ring (track + optional severity-colored fill). */
-function HalfArc(props: { r: number; arc: VitalsGaugeArc; mirror?: boolean }) {
-  const { trackD, fillD } = rightHalfArc(props.r, props.arc.pct);
+/**
+ * One full ring: a track plus a severity-coloured fill. The fill is a circle with
+ * `pathLength=100`, so its dash length IS the percentage; an arc path whose ends
+ * coincide is dropped by SVG, so a 100% arc path would draw nothing.
+ */
+function Ring(props: { r: number; arc: VitalsGaugeArc }) {
+  const c = GAUGE_VIEWBOX / 2;
+  const { pct, level } = props.arc;
   // The severity travels on the arc rather than being re-derived from `pct`
   // here: a usage window is coloured by pace, not fullness, and deriving it at
   // draw time is exactly how this glyph drifted from the detail panel.
-  const fillStroke = props.arc.level === null ? undefined : SEVERITY_STROKE[props.arc.level];
-  const paths = (
+  return (
     <>
-      <path
-        d={trackD}
+      <circle
+        cx={c}
+        cy={c}
+        r={props.r}
         stroke={VITALS_TRACK_STROKE}
         strokeWidth={GAUGE_STROKE_WIDTH}
-        strokeLinecap="round"
         fill="none"
       />
-      {fillD && fillStroke ? (
-        <path
-          d={fillD}
-          stroke={fillStroke}
+      {pct !== null && pct > 0 && level !== null ? (
+        <circle
+          cx={c}
+          cy={c}
+          r={props.r}
+          pathLength={100}
+          strokeDasharray={`${clampPct(pct)} 100`}
+          transform={`rotate(-90 ${c} ${c})`}
+          stroke={SEVERITY_STROKE[level]}
           strokeWidth={GAUGE_STROKE_WIDTH}
           strokeLinecap="round"
           fill="none"
@@ -78,7 +84,6 @@ function HalfArc(props: { r: number; arc: VitalsGaugeArc; mirror?: boolean }) {
       ) : null}
     </>
   );
-  return props.mirror ? <g transform={GAUGE_MIRROR_TRANSFORM}>{paths}</g> : paths;
 }
 
 export interface VitalsGaugeInputs {
@@ -87,24 +92,17 @@ export interface VitalsGaugeInputs {
   /** Rolling windows: swept by usage, coloured by pace (see {@link windowArc}). */
   readonly fiveHour: VitalsGaugeArc;
   readonly sevenDay: VitalsGaugeArc;
-  readonly cpu: VitalsGaugeArc;
-  readonly gpu: VitalsGaugeArc;
-  readonly mem: VitalsGaugeArc;
 }
 
-/**
- * The split-ring glyph. Left arcs are limits (context / 5h / 7d), right arcs are
- * resources (CPU / GPU / memory); the halves never touch. Arc sweep is fullness,
- * color is severity.
- */
 /**
  * Edge length of the composer-footer glyph, in px. Matches the `size-8` button
  * it fills, so a change to one is a visible change to the other.
  */
 export const VITALS_GAUGE_TRIGGER_SIZE = 32;
 
+/** The glyph: outer ring context, middle 5h, inner 7d. Sweep is fullness, colour is severity. */
 export function VitalsGaugeIcon(props: { inputs: VitalsGaugeInputs; size?: number }) {
-  const { context, fiveHour, sevenDay, cpu, gpu, mem } = props.inputs;
+  const { context, fiveHour, sevenDay } = props.inputs;
   const size = props.size ?? 20;
   return (
     <svg
@@ -115,12 +113,9 @@ export function VitalsGaugeIcon(props: { inputs: VitalsGaugeInputs; size?: numbe
       aria-hidden="true"
       className="transform-gpu"
     >
-      <HalfArc r={GAUGE_RINGS.outer} arc={context} mirror />
-      <HalfArc r={GAUGE_RINGS.outer} arc={cpu} />
-      <HalfArc r={GAUGE_RINGS.middle} arc={fiveHour} mirror />
-      <HalfArc r={GAUGE_RINGS.middle} arc={gpu} />
-      <HalfArc r={GAUGE_RINGS.inner} arc={sevenDay} mirror />
-      <HalfArc r={GAUGE_RINGS.inner} arc={mem} />
+      <Ring r={GAUGE_RINGS.outer} arc={context} />
+      <Ring r={GAUGE_RINGS.middle} arc={fiveHour} />
+      <Ring r={GAUGE_RINGS.inner} arc={sevenDay} />
     </svg>
   );
 }
@@ -129,7 +124,6 @@ export function VitalsGaugeIcon(props: { inputs: VitalsGaugeInputs; size?: numbe
 
 const CAP_CLASS = "text-3xs font-semibold uppercase tracking-widest text-muted-foreground";
 const BLOCK_CLASS = "border-t border-border px-4 py-3 first:border-t-0";
-const TRACK_CLASS = "overflow-hidden rounded-full bg-muted";
 
 function ContextBlock(props: {
   usage: ContextWindowSnapshot;
@@ -392,188 +386,6 @@ function LimitsBlock(props: {
   );
 }
 
-function MetricRow(props: { label: string; pct: number | null }) {
-  const known = props.pct !== null && Number.isFinite(props.pct);
-  // Bucket the rounded reading, not the raw one: this row displays
-  // `Math.round(pct)`, so colouring from the unrounded value would let it show
-  // "50%" in yellow — the same split that made the glyph and the context block
-  // disagree.
-  const reading = known ? readingPct(props.pct as number) : null;
-  const level = reading === null ? null : vitalsLevel(reading);
-  return (
-    <div className="flex items-center gap-3 py-1">
-      <span className="w-9 text-xs font-semibold text-foreground">{props.label}</span>
-      <span className={cn("h-1.5 flex-1", TRACK_CLASS)}>
-        {level ? (
-          <span
-            className={cn("block h-full rounded-full", SEVERITY_BG[level])}
-            style={{ width: `${reading ?? 0}%` }}
-          />
-        ) : null}
-      </span>
-      <span
-        className={cn(
-          "w-10 text-right font-mono text-sm font-semibold",
-          level ? SEVERITY_TEXT[level] : "text-muted-foreground/50",
-        )}
-      >
-        {reading === null ? "-" : `${reading}%`}
-      </span>
-    </div>
-  );
-}
-
-function MachineBlock(props: {
-  sample: HostMetricsSample | null;
-  streaming: boolean;
-  enabled: boolean;
-  onToggle: (next: boolean) => void;
-  /**
-   * The environment these numbers belong to. On a phone or a second laptop the
-   * CPU/GPU/MEM here are the server's, not the reader's, and nothing else on
-   * the panel says so.
-   */
-  machineName?: string | null | undefined;
-}) {
-  const { sample, streaming, enabled, onToggle, machineName } = props;
-  return (
-    <div className={BLOCK_CLASS}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-baseline gap-1.5">
-          <span className={cn(CAP_CLASS, "shrink-0")}>Machine</span>
-          {machineName ? (
-            <span className="truncate text-3xs text-muted-foreground/70">{machineName}</span>
-          ) : null}
-        </div>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                onClick={() => onToggle(!enabled)}
-                aria-label={enabled ? "Pause host metrics" : "Resume host metrics"}
-                className="flex shrink-0 items-center gap-1 rounded-md p-0.5 text-3xs text-muted-foreground transition-colors hover:text-foreground"
-              />
-            }
-          >
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                enabled && streaming ? "animate-pulse bg-success" : "bg-muted-foreground/40",
-              )}
-            />
-            {enabled ? "live" : "paused"}
-          </TooltipTrigger>
-          <TooltipPopup>
-            {enabled ? "Live. Click to pause" : "Paused. Click to resume"}
-          </TooltipPopup>
-        </Tooltip>
-      </div>
-      {!enabled ? (
-        <div className="mt-1.5 text-xs text-muted-foreground">Metrics paused.</div>
-      ) : sample === null ? (
-        <div className="mt-1.5 text-xs text-muted-foreground">Connecting to host…</div>
-      ) : (
-        <div className="mt-1">
-          <MetricRow label="CPU" pct={sample.cpu.pct} />
-          <MetricRow label="GPU" pct={sample.gpu?.pct ?? null} />
-          <MetricRow label="MEM" pct={sample.mem.pct} />
-          <MachineDetails sample={sample} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * Per-core load, load average, GPU and memory detail, collapsed by default. Every value
- * already arrives on each sample, so opening it costs no traffic. Bars, not a sparkline:
- * a sample has no per-core history, so a line would invent a trend.
- */
-function MachineDetails(props: { sample: HostMetricsSample }) {
-  const [open, setOpen] = useState(false);
-  const { sample } = props;
-
-  return (
-    <div className="mt-1 border-t border-border/40 pt-1">
-      <button
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-1 text-3xs text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ChevronRightIcon className={cn("size-3 transition-transform", open && "rotate-90")} />
-        details
-      </button>
-      {open ? <MachineDetailList sample={sample} /> : null}
-    </div>
-  );
-}
-
-/** Split out from the disclosure so its contents are renderable in a test. */
-export function MachineDetailList(props: { sample: HostMetricsSample }) {
-  const { sample } = props;
-  const loadAvg = sample.cpu.loadAvg.filter((value) => Number.isFinite(value));
-  return (
-    <dl className="mt-1 space-y-1 text-2xs">
-      {sample.cpu.perCore.length > 0 ? (
-        <div>
-          <dt className="text-muted-foreground">
-            Cores{sample.host ? ` (${String(sample.host.cores)})` : ""}
-          </dt>
-          <dd className="mt-0.5 flex items-end gap-px" aria-label="Per-core utilization">
-            {sample.cpu.perCore.map((corePct, index) => (
-              <Tooltip
-                // oxlint-disable-next-line react/no-array-index-key -- Cores have no identity beyond their position, and the list is fixed for the life of the host.
-                key={index}
-              >
-                <TooltipTrigger
-                  render={
-                    <span
-                      aria-label={`Core ${String(index)}: ${String(Math.round(corePct))}%`}
-                      className={cn(
-                        "w-1 rounded-t-xs",
-                        SEVERITY_BG[vitalsLevel(clampPct(corePct))],
-                      )}
-                      style={{ height: `${String(Math.max(2, clampPct(corePct) * 0.16))}px` }}
-                    />
-                  }
-                />
-                <TooltipPopup>
-                  Core {String(index)}: {String(Math.round(corePct))}%
-                </TooltipPopup>
-              </Tooltip>
-            ))}
-          </dd>
-        </div>
-      ) : null}
-      {loadAvg.length > 0 ? (
-        <DetailRow label="Load" value={loadAvg.map((value) => value.toFixed(2)).join("  ")} />
-      ) : null}
-      <DetailRow
-        label="Memory"
-        value={`${formatBytes(sample.mem.usedBytes)} of ${formatBytes(sample.mem.totalBytes)}`}
-      />
-      {sample.gpu?.name ? <DetailRow label="GPU" value={sample.gpu.name} /> : null}
-      {sample.gpu?.vramUsedBytes !== undefined ? (
-        <DetailRow label="VRAM" value={formatBytes(sample.gpu.vramUsedBytes)} />
-      ) : null}
-      {sample.host ? (
-        <DetailRow label="Host" value={`${sample.host.platform} ${sample.host.arch}`} />
-      ) : null}
-    </dl>
-  );
-}
-
-function DetailRow(props: { label: string; value: string }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-muted-foreground">{props.label}</dt>
-      <dd className="min-w-0 truncate font-mono tabular-nums text-foreground/90">{props.value}</dd>
-    </div>
-  );
-}
-
 // Assembled gauge (presentational) + connected wrapper
 
 function describeInputs(inputs: VitalsGaugeInputs): string {
@@ -584,24 +396,13 @@ function describeInputs(inputs: VitalsGaugeInputs): string {
   push("context", inputs.context);
   push("5-hour", inputs.fiveHour);
   push("7-day", inputs.sevenDay);
-  push("CPU", inputs.cpu);
-  push("GPU", inputs.gpu);
-  push("memory", inputs.mem);
   return parts.length ? `Vitals: ${parts.join(", ")}` : "Vitals";
 }
 
-interface VitalsHost {
-  readonly sample: HostMetricsSample | null;
-  readonly streaming: boolean;
-  readonly enabled: boolean;
-  readonly onToggle: (next: boolean) => void;
-}
-
-/** The popover body: context / usage-limits / machine blocks. */
+/** The popover body: context / usage-limits blocks. */
 export function VitalsDetail(props: {
   context: ContextWindowSnapshot | null;
   accountUsage: AccountUsageView | null;
-  host: VitalsHost;
   now: number;
   /**
    * Passed in rather than read from the settings store here so the detail stays
@@ -626,10 +427,8 @@ export function VitalsDetail(props: {
    */
   sessionProvider?: string | null | undefined;
   reportsContextUsage?: boolean | undefined;
-  /** Environment whose machine the host block reports on. */
-  machineName?: string | null | undefined;
 }) {
-  const { context, accountUsage, host, now, timestampFormat } = props;
+  const { context, accountUsage, now, timestampFormat } = props;
   const missingContextReason = context
     ? null
     : describeMissingContextUsage(props.sessionProvider, props.reportsContextUsage);
@@ -666,13 +465,6 @@ export function VitalsDetail(props: {
           refresh={props.refreshUsage}
         />
       ) : null}
-      <MachineBlock
-        sample={host.sample}
-        streaming={host.streaming}
-        enabled={host.enabled}
-        onToggle={host.onToggle}
-        machineName={props.machineName}
-      />
     </div>
   );
 }
@@ -680,16 +472,13 @@ export function VitalsDetail(props: {
 export function VitalsGauge(props: {
   context: ContextWindowSnapshot | null;
   accountUsage: AccountUsageView | null;
-  host: VitalsHost;
   refreshUsage?: { run: () => void; pending: boolean } | undefined;
   providerDisplayName?: string | null | undefined;
   modelDisplayName?: string | null | undefined;
   sessionProvider?: string | null | undefined;
   reportsContextUsage?: boolean | undefined;
-  /** Environment whose machine the host block reports on. */
-  machineName?: string | null | undefined;
 }) {
-  const { context, accountUsage, host } = props;
+  const { context, accountUsage } = props;
   const [open, setOpen] = useState(false);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const paceTolerance = useClientSettings((s) => s.usagePaceTolerance);
@@ -702,9 +491,6 @@ export function VitalsGauge(props: {
     context: fullnessArc(context?.usedPercentage ?? null),
     fiveHour: windowArc(accountUsage?.fiveHour, FIVE_HOUR_MS, now, paceTolerance),
     sevenDay: windowArc(accountUsage?.sevenDay, SEVEN_DAY_MS, now, paceTolerance),
-    cpu: fullnessArc(host.sample?.cpu.pct ?? null),
-    gpu: fullnessArc(host.sample?.gpu?.pct ?? null),
-    mem: fullnessArc(host.sample?.mem.pct ?? null),
   };
 
   return (
@@ -740,7 +526,6 @@ export function VitalsGauge(props: {
         <VitalsDetail
           context={context}
           accountUsage={accountUsage}
-          host={host}
           now={now}
           timestampFormat={timestampFormat}
           refreshUsage={props.refreshUsage}
@@ -748,7 +533,6 @@ export function VitalsGauge(props: {
           modelDisplayName={props.modelDisplayName}
           sessionProvider={props.sessionProvider}
           reportsContextUsage={props.reportsContextUsage}
-          machineName={props.machineName}
         />
       </PopoverPopup>
     </Popover>
@@ -795,8 +579,7 @@ function useProviderUsageRefresh(
 }
 
 /**
- * Connects {@link VitalsGauge} to the live host-metrics stream, the persisted
- * enable/pause toggle, and the usage limits of the provider instance it is
+ * Connects {@link VitalsGauge} to the usage limits of the provider instance it is
  * given. Context is derived by the parent and passed in.
  */
 export function VitalsGaugeConnected(props: {
@@ -809,11 +592,6 @@ export function VitalsGaugeConnected(props: {
   sessionProvider?: string | null | undefined;
   reportsContextUsage?: boolean | undefined;
 }) {
-  const [enabled, setEnabled] = useHostMetricsEnabled();
-  const { sample, streaming } = useHostMetrics(props.environmentId, enabled);
-  // The environment the metrics are streamed from, which is the machine they
-  // describe - not necessarily the one the reader is holding.
-  const environment = useEnvironment(props.environmentId);
   const usageLimits = props.usageProvider?.usageLimits;
   const accountUsage = useMemo(() => accountUsageFromLimits(usageLimits), [usageLimits]);
   const refreshUsage = useProviderUsageRefresh(
@@ -824,13 +602,11 @@ export function VitalsGaugeConnected(props: {
     <VitalsGauge
       context={props.context}
       accountUsage={accountUsage}
-      host={{ sample, streaming, enabled, onToggle: setEnabled }}
       refreshUsage={refreshUsage}
       providerDisplayName={props.providerDisplayName}
       modelDisplayName={props.modelDisplayName}
       sessionProvider={props.sessionProvider}
       reportsContextUsage={props.reportsContextUsage}
-      machineName={environment?.label}
     />
   );
 }

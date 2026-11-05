@@ -1,7 +1,10 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's FileSystem has no statfs.
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
-import type { HostMetricsSample } from "@t3tools/contracts";
+import type { HostMetricsDisk, HostMetricsSample } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -13,6 +16,8 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
+
+import { type HostDisksDeps, makeHostDisks } from "./HostDisks.ts";
 
 /** Best-effort GPU probe is bounded so a slow/missing tool never stalls a tick. */
 const GPU_TIMEOUT = Duration.millis(800);
@@ -115,7 +120,9 @@ const readGpu: Effect.Effect<
   return yield* Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const child = yield* spawner.spawn(
-      ChildProcess.make("ioreg", ["-r", "-c", "IOAccelerator", "-d", "1"], { cwd: process.cwd() }),
+      // No cwd: the spawner checks a given cwd with fs.access, which fails once the server's
+      // working directory is deleted; without one the child inherits it and still runs.
+      ChildProcess.make("ioreg", ["-r", "-c", "IOAccelerator", "-d", "1"]),
     );
     const collected = yield* collectUint8StreamText({
       stream: child.stdout,
@@ -165,6 +172,7 @@ export function rampSampleInterval(currentMs: number, maxMs: number): number {
  */
 export function hostMetricsStream(
   intervalMs: number,
+  readDisks: () => ReadonlyArray<HostMetricsDisk> | undefined,
 ): Stream.Stream<HostMetricsSample, never, ChildProcessSpawner.ChildProcessSpawner> {
   const requested = Number.isFinite(intervalMs) ? intervalMs : DEFAULT_INTERVAL_MS;
   const startInterval = Math.max(MIN_INTERVAL_MS, Math.round(requested));
@@ -178,12 +186,16 @@ export function hostMetricsStream(
 
   return Stream.unfold(initial, (state) =>
     Effect.gen(function* () {
+      // After an idle spell the shared reader's values are old; this read starts their refresh
+      // so the bootstrap sample, taken after the short sleep, shows fresh ones.
+      if (state.first) readDisks();
       yield* Effect.sleep(state.first ? bootstrap : Duration.millis(state.intervalMs));
       const currentCpu = readCpuTimes();
       const cpu = cpuBusy(state.prevCpu, currentCpu);
       const gpu = yield* readGpu;
       const host = yield* readHostInfo;
       const now = yield* DateTime.now;
+      const disks = readDisks();
       const sample: HostMetricsSample = {
         ts: DateTime.toEpochMillis(now),
         cpu: { pct: cpu.pct, perCore: cpu.perCore, loadAvg: NodeOS.loadavg() },
@@ -192,6 +204,7 @@ export function hostMetricsStream(
         // Sent on every sample (not just the first) so the client, which replaces
         // the whole sample each tick, never loses the host descriptor.
         host,
+        ...(disks === undefined ? {} : { disks }),
       };
       // Keep the first real interval at the fast rate, then relax toward the ceiling.
       const nextInterval = state.first
@@ -220,13 +233,49 @@ export class HostMetrics extends Context.Service<
   }
 >()("t3/diagnostics/HostMetrics") {}
 
-export const make = Effect.gen(function* () {
+/** The file system calls the disk reader makes; tests inject fakes. */
+export type DiskFs = Pick<HostDisksDeps, "statfs" | "stat" | "readMounts" | "exists">;
+
+const nodeDiskFs: DiskFs = {
+  statfs: (path) => NodeFS.promises.statfs(path),
+  stat: (path) => NodeFS.promises.stat(path),
+  readMounts: () => NodeFS.readFileSync("/proc/self/mounts", "utf8"),
+  exists: (path) => NodeFS.existsSync(path),
+};
+
+/**
+ * One shared disk reader for every subscriber, so the in-flight cap holds process-wide.
+ * The reader reports nothing on platforms other than Linux and macOS.
+ */
+const makeDiskReader = Effect.fn("HostMetrics.makeDiskReader")(function* (fs: DiskFs) {
+  const platform = yield* HostProcess.Platform;
+  const clock = yield* Clock.Clock;
+  // The reader's callbacks settle on the event loop, outside any fiber.
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  const hostDisks = makeHostDisks({
+    ...fs,
+    monoNow: () => Number(clock.monotonicTimeNanosUnsafe() / 1_000_000n),
+    epochNow: () => clock.currentTimeMillisUnsafe(),
+    log: {
+      warn: (msg, data) => void runFork(Effect.logWarning(msg, data)),
+      info: (msg, data) => void runFork(Effect.logInfo(msg, data)),
+    },
+    platform,
+  });
+  return () => hostDisks.snapshot();
+});
+
+/** The service over the given file system calls; `make` uses Node's. */
+export const makeWith = Effect.fn("HostMetrics.make")(function* (fs: DiskFs) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const readDisks = yield* makeDiskReader(fs);
   const stream: HostMetrics["Service"]["stream"] = (intervalMs) =>
-    hostMetricsStream(intervalMs ?? DEFAULT_INTERVAL_MS).pipe(
+    hostMetricsStream(intervalMs ?? DEFAULT_INTERVAL_MS, readDisks).pipe(
       Stream.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
   return HostMetrics.of({ stream });
 });
+
+export const make = makeWith(nodeDiskFs);
 
 export const layer = Layer.effect(HostMetrics, make);

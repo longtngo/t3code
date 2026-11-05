@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   accountUsageFromLimits,
-  arcPathD,
   billingMonthWindow,
   clampPct,
   computeWindowPace,
@@ -15,7 +14,6 @@ import {
   formatWindowReset,
   paceDiffLabel,
   paceLevel,
-  rightHalfArc,
   SEVEN_DAY_MS,
   vitalsLevel,
   windowSeverity,
@@ -221,36 +219,6 @@ describe("paceDiffLabel", () => {
     expect(paceDiffLabel(0)).toBe("on pace");
     expect(paceDiffLabel(-4)).toBe("4% under pace");
     expect(paceDiffLabel(57)).toBe("+57% over pace");
-  });
-});
-
-describe("arcPathD", () => {
-  it("emits a deterministic move+arc command", () => {
-    expect(arcPathD(10, 0, 90)).toBe("M32.00 22.00 A10 10 0 0 1 22.00 32.00");
-  });
-
-  it("sets the large-arc flag past 180°", () => {
-    expect(arcPathD(10, 0, 200)).toContain("A10 10 0 1 1");
-    expect(arcPathD(10, 0, 90)).toContain("A10 10 0 0 1");
-  });
-});
-
-describe("rightHalfArc", () => {
-  it("always has a track and no fill for a null or zero metric", () => {
-    const nullArc = rightHalfArc(18.5, null);
-    expect(nullArc.trackD.startsWith("M")).toBe(true);
-    expect(nullArc.fillD).toBeNull();
-    expect(rightHalfArc(18.5, 0).fillD).toBeNull();
-  });
-
-  it("produces a fill for a positive metric", () => {
-    const full = rightHalfArc(18.5, 100);
-    expect(full.fillD).not.toBeNull();
-    expect(full.fillD?.startsWith("M")).toBe(true);
-  });
-
-  it("floors a tiny sweep so a rounded cap still renders", () => {
-    expect(rightHalfArc(18.5, 0.01).fillD).not.toBeNull();
   });
 });
 

@@ -11,7 +11,6 @@ export const FORK_REACT_COMPILER_BAILOUTS: ReadonlyArray<string> = [
   "apps/web/src/components/WorkspaceMemberEditor.tsx",
   "apps/web/src/components/chat/streamingMarkdownText.ts",
   "apps/web/src/components/settings/NotificationsSettings.tsx",
-  "apps/web/src/hooks/useResourceQueue.ts",
   "apps/web/src/hooks/useThreadCompletionNotifications.ts",
 ];
 
@@ -31,8 +30,6 @@ export const FORK_REACT_COMPILER_LINT_EXEMPT: ReadonlyArray<string> = [
   "apps/web/src/components/chat/useChatEscapeKey.dom.test.tsx",
   "apps/web/src/components/settings/NotificationsSettings.tsx",
   "apps/web/src/components/sidebar/SidebarResourceQueue.tsx",
-  "apps/web/src/hooks/useHostMetrics.ts",
-  "apps/web/src/hooks/useResourceQueue.ts",
   "apps/web/src/hooks/useThreadCompletionNotifications.ts",
   "apps/web/src/hooks/useWorkspaceRepos.ts",
   "apps/web/src/queueSlotSettings.ts",

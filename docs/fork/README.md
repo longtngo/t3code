@@ -379,6 +379,31 @@ is `1`.
 `ProviderRuntimeRecoveryService` settles restart-orphaned work, and `RestartContinuation` /
 `RestartBackgroundNote` resume a continuation-marked thread or tell its next turn.
 
+### 5d. The resource queue panel covers every enabled environment
+
+`SidebarResourceQueue` lists every enabled environment from the catalog (`useResourceQueues`),
+not only the primary one. Upstream servers lack the fork's `resourceQueue.get` and
+`subscribeHostMetrics` RPCs, so they answer with an `Unknown request tag: <tag>` Die.
+`classifyQueryFailure` (`sidebarResourceQueue.logic.ts`) treats that exact string as
+"unsupported" and shows it quietly. Anything else is a real failure and is shown as one. Do not
+loosen the match to a prefix or a substring.
+
+The server's disk reader (`HostDisks.ts`) is shared by all subscribers, single-flight per source
+device, and capped at 2 in-flight reads; a read's `stat` and `statfs` share its slot. A hung
+`statfs` cannot be cancelled and pins a libuv pool thread; 4 pinned threads stall the server's
+file I/O and websocket compression. A mount point counts as a disk only if it is a directory, so
+a container's file bind mounts (`/etc/resolv.conf`) never name the disk.
+
+`ResourceQueue.ts` sends clients a short `unavailableReason` only; resctl's stderr and the
+command path go to the server log, never to a client.
+
+The composer Vitals gauge no longer carries a Machine block; machine and disk usage live in
+this panel.
+
+Probe: `grep -c "useResourceQueues" apps/web/src/components/sidebar/SidebarResourceQueue.tsx`
+is `1` or more, and `grep -c "<MachineBlock" apps/web/src/components/chat/VitalsGauge.tsx`
+is `0`.
+
 ### 6. The workspace-repositories editor lives in upstream's project settings page
 
 **Consolidated 2026-09-06; this entry moved with it.** Upstream `#5768`/`#5923` replaced the

@@ -1,71 +1,35 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { type EnvironmentId, WS_METHODS } from "@t3tools/contracts";
+import { AsyncResult } from "effect/reactivity";
 
-import { useDocumentVisible } from "./useDocumentVisible";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { type QueueStatus, queryView } from "~/components/sidebar/sidebarResourceQueue.logic";
 import type { HostMetricsSample } from "~/lib/hostMetrics";
 import { hostMetricsEnvironment } from "~/state/hostMetrics";
-import { useEnvironmentQuery } from "~/state/query";
+import { useEnvironmentQuerySelector } from "~/state/query";
 
-const STORAGE_KEY = "t3code:host-metrics-enabled";
-
-let enabledListeners: Array<() => void> = [];
-
-function emitEnabledChange() {
-  for (const listener of enabledListeners) listener();
-}
-
-function hasStorage() {
-  return typeof window !== "undefined" && typeof localStorage !== "undefined";
-}
-
-/** Default on so the metrics are discoverable; the toggle is for opting out to save bandwidth. */
-function getStoredEnabled(): boolean {
-  if (!hasStorage()) return true;
-  return localStorage.getItem(STORAGE_KEY) !== "false";
-}
-
-function subscribeEnabled(listener: () => void): () => void {
-  if (typeof window === "undefined") return () => {};
-  enabledListeners.push(listener);
-  const handleStorage = (event: StorageEvent) => {
-    if (event.key === STORAGE_KEY) emitEnabledChange();
-  };
-  window.addEventListener("storage", handleStorage);
-  return () => {
-    enabledListeners = enabledListeners.filter((entry) => entry !== listener);
-    window.removeEventListener("storage", handleStorage);
-  };
-}
-
-/** Persisted (per-client, cross-tab) toggle for whether host metrics stream. */
-export function useHostMetricsEnabled(): readonly [boolean, (next: boolean) => void] {
-  const enabled = useSyncExternalStore(subscribeEnabled, getStoredEnabled, () => true);
-  const setEnabled = useCallback((next: boolean) => {
-    if (!hasStorage()) return;
-    localStorage.setItem(STORAGE_KEY, next ? "true" : "false");
-    emitEnabledChange();
-  }, []);
-  return [enabled, setEnabled] as const;
-}
+import { useDocumentVisible } from "./useDocumentVisible";
 
 export interface HostMetricsState {
   readonly sample: HostMetricsSample | null;
-  /** True while a live subscription is attached and pushing samples. */
-  readonly streaming: boolean;
+  readonly status: QueueStatus;
+  readonly message: string | null;
+  /** When `sample` arrived, or 0 before any sample. */
+  readonly receivedAt: number;
 }
 
+const hostMetricsView = (result: AsyncResult.AsyncResult<HostMetricsSample, unknown>) => {
+  const { data, ...rest } = queryView(result, WS_METHODS.subscribeHostMetrics);
+  return { sample: data, ...rest };
+};
+
 /**
- * Subscribe to the environment's host-metrics stream while `enabled` and the tab
- * is visible. Passing `null` to the query atom (when inactive) tears the
- * subscription down — which, with the family's `idleTtlMs: 0`, stops the
- * server-side sampling too. Returning to the tab resubscribes fresh.
+ * Subscribe to the environment's host-metrics stream while `active` and the tab is visible.
+ * Passing `null` to the query atom (when inactive) tears the subscription down - which, with the
+ * family's `idleTtlMs: 0`, stops the server-side sampling too. Returning resubscribes fresh.
  */
-export function useHostMetrics(environmentId: EnvironmentId, enabled: boolean): HostMetricsState {
+export function useHostMetrics(environmentId: EnvironmentId, active: boolean): HostMetricsState {
   const visible = useDocumentVisible();
-  const active = enabled && visible;
-  const view = useEnvironmentQuery(
-    active ? hostMetricsEnvironment.samples({ environmentId, input: {} }) : null,
+  return useEnvironmentQuerySelector(
+    active && visible ? hostMetricsEnvironment.samples({ environmentId, input: {} }) : null,
+    hostMetricsView,
   );
-  const sample = view.data;
-  return { sample, streaming: active && sample !== null };
 }
