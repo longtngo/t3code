@@ -27,6 +27,8 @@ export interface SourceControlMediaRequest {
   readonly headers: Readonly<Record<string, string>>;
   /** The project folder whose git credential account fetches the media. */
   readonly cwd: string;
+  /** `owner/name` of the change request the media is in, else of the checkout it was shown in. */
+  readonly repository?: string;
 }
 
 /** The server side of a definition's `credentials.appSignIn`. */

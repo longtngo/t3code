@@ -4,6 +4,7 @@ import { ClaudeSettings, type ServerProvider } from "@t3tools/contracts";
 import { vi } from "vite-plus/test";
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
 import { assert, it } from "@effect/vitest";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -78,7 +79,7 @@ it.effect("keeps the probe subprocess alive while gateway model discovery can fi
     // inherited CLAUDE_CONFIG_DIR, so passing it through the environment would read ~/.claude.
     const capabilities = yield* probeClaudeCapabilities(
       yield* decodeClaudeSettings({ binaryPath: "claude", configDirPath: configDir }),
-      { PATH: process.env.PATH },
+      { PATH: (yield* HostProcess.Environment).PATH },
     );
     assert.deepEqual(
       capabilities.models?.map((model) => model.value),

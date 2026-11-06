@@ -63,9 +63,7 @@ export class WorkspaceMemberHooks extends Context.Service<
  * provides `live` in `OrchestrationV2ProductionLayerLive`.
  */
 export const inert = Layer.succeed(WorkspaceMemberHooks, {
-  checkpointStates: Effect.fn("WorkspaceMemberHooks.checkpointStates")(() =>
-    Effect.sync(() => undefined),
-  ),
+  checkpointStates: Effect.fn("WorkspaceMemberHooks.checkpointStates")(() => Effect.undefined),
   sweep: Effect.fn("WorkspaceMemberHooks.sweep")(() => Effect.void),
   rollbackRefusal: Effect.fn("WorkspaceMemberHooks.rollbackRefusal")(() => Effect.succeed(null)),
 });

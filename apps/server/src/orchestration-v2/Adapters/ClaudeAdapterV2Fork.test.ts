@@ -351,6 +351,10 @@ const makeHarness = (options?: {
               interrupt: Deferred.succeed(interruptRequested, undefined),
               stopTask: () => Effect.void,
               backgroundTasks: () => Effect.succeed(false),
+              mcpServerStatus: Effect.succeed([]),
+              readMcpResource: () => Effect.die("unexpected MCP resource read"),
+              callMcpTool: () => Effect.die("unexpected MCP tool call"),
+              listPermissionRules: Effect.die("unexpected permission rules read"),
               close: Effect.void,
               ...(getContextUsage === undefined ? {} : { getContextUsage }),
             };

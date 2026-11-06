@@ -46,7 +46,7 @@ it.effect("sweeps workspace members between checkpoint capture and workspace ref
           refreshAfterTurn: () => Effect.void,
         }),
         Layer.succeed(WorkspaceMemberHooks.WorkspaceMemberHooks, {
-          checkpointStates: () => Effect.sync(() => undefined),
+          checkpointStates: () => Effect.undefined,
           sweep: (input) => Effect.sync(() => order.push(`sweep:${input.threadId}`)),
           rollbackRefusal: () => Effect.succeed(null),
         }),

@@ -73,7 +73,9 @@ const logins: ReadonlyArray<readonly [string, Grant, boolean]> = [
   [
     "offline with a cached grant",
     AsyncResult.failure(
-      Cause.fail(new RemoteEnvironmentAuthTimeoutError("https://env.test", 6_000)),
+      Cause.fail(
+        new RemoteEnvironmentAuthTimeoutError({ requestUrl: "https://env.test", timeoutMs: 6_000 }),
+      ),
       { previousSuccess: Option.some(answered(everything) as never) },
     ) as Grant,
     false,

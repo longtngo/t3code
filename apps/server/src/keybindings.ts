@@ -427,11 +427,10 @@ const make = Effect.gen(function* () {
   const writeConfigAtomically = (entries: ReadonlyArray<unknown>) => {
     return encodeRawKeybindingsEntriesPrettyJson(entries).pipe(
       Effect.map((encoded) => `${encoded}\n`),
-      Effect.flatMap((contents) =>
+      Effect.tap((contents) =>
         writeFileStringAtomically({ filePath: keybindingsConfigPath, contents }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
           Effect.provideService(Path.Path, path),
-          Effect.as(contents),
         ),
       ),
       Effect.mapError(

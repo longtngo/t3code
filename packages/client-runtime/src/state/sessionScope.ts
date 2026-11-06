@@ -13,6 +13,8 @@ import { ConnectionTransientError } from "../connection/model.ts";
 import { RemoteEnvironmentAuthFetchError, RemoteEnvironmentAuthTimeoutError } from "../rpc/http.ts";
 
 const isConnectionTransientError = Schema.is(ConnectionTransientError);
+const isAuthTimeoutError = Schema.is(RemoteEnvironmentAuthTimeoutError);
+const isAuthFetchError = Schema.is(RemoteEnvironmentAuthFetchError);
 
 /**
  * FORK: a session refresh that never reached the server says nothing about the grant, so
@@ -20,8 +22,8 @@ const isConnectionTransientError = Schema.is(ConnectionTransientError);
  * them. Without this, going offline greys out Send and the offline outbox never queues.
  */
 const isUnreachableSessionFailure = (error: unknown): boolean =>
-  error instanceof RemoteEnvironmentAuthTimeoutError ||
-  (error instanceof RemoteEnvironmentAuthFetchError &&
+  isAuthTimeoutError(error) ||
+  (isAuthFetchError(error) &&
     ((HttpClientError.isHttpClientError(error.cause) && error.cause.response === undefined) ||
       // A relay token renewal that could not reach the relay.
       isConnectionTransientError(error.cause)));

@@ -161,7 +161,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 88 entries, ids 1-88, unique and monotonic. Upstream's v2 schema
+Current: 89 entries, ids 1-89, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
@@ -170,7 +170,7 @@ Current: 88 entries, ids 1-88, unique and monotonic. Upstream's v2 schema
 `065_CodexUsageNativeTurnIndex` is **74**, `066_RepairClientSettlementTimestamps` is **75** and
 `067_WebhookDedupe` is **76**, `068_ShellStopRequestIndex` is **77**,
 `069_ThreadMessageSearch` is **78**, `070_PeerLinks` is **79**, `071_PeerLinkFence` is **80**,
-`072_WaitingLinkRequestIndex` is **81**, and upstream's `073`-`079` are **82**-**88** (a flat +9;
+`072_WaitingLinkRequestIndex` is **81**, and upstream's `073`-`080` are **82**-**89** (a flat +9;
 `076_ProjectionProjectsPinArchive` is **85**).
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
@@ -180,7 +180,7 @@ Filename numbers double up on `033`, `037`, `038`, `039`, `041` and `042`. Id `3
 registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
 report the database's history as divergent. Upstream's "registers every migration file" test
 (`Migrations.test.ts`) therefore compares distinct names here, not entries.
-Upstream's `scripts/build-npm-launcher.ts` reads the head migration from file names (79, not 88);
+Upstream's `scripts/build-npm-launcher.ts` reads the head migration from file names (80, not 89);
 the fork does not publish the npm launcher, so it is left alone.
 
 The manifest is a list of **positional tuples** (`[1, "OrchestrationEvents", Migration0001]`), not
@@ -193,7 +193,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `88 88 ok` and `1`.
+Expect `89 89 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -400,8 +400,14 @@ command path go to the server log, never to a client.
 The composer Vitals gauge no longer carries a Machine block; machine and disk usage live in
 this panel.
 
+The panel reads each environment's connection state through `useEnvironmentConnectionSummaries`
+(`apps/web/src/state/environments.ts`). Upstream deleted that hook with its Working-shelf revert
+(56th reconcile), and the merge took the deletion cleanly; only the web typecheck named it. The hook
+is a fork export now.
+
 Probe: `grep -c "useResourceQueues" apps/web/src/components/sidebar/SidebarResourceQueue.tsx`
-is `1` or more, and `grep -c "<MachineBlock" apps/web/src/components/chat/VitalsGauge.tsx`
+is `1` or more, `grep -c "export function useEnvironmentConnectionSummaries" apps/web/src/state/environments.ts`
+is `1`, and `grep -c "<MachineBlock" apps/web/src/components/chat/VitalsGauge.tsx`
 is `0`.
 
 ### 6. The workspace-repositories editor lives in upstream's project settings page
@@ -525,12 +531,18 @@ fork wraps each in `fileSystem.realPath`. Probe: `grep -c 'fileSystem.realPath('
 
 ### 10. `ContextWindowMeter.logic.ts` outlives its component, on purpose
 
-The meter component is deleted (invariant 4). Its `.logic.ts` sibling is **not**: upstream `#8144`
-put the Claude resume-compaction helpers there, and `ChatView`'s compaction banner uses them. The
-banner is independent of the meter, so rejecting the meter must not reject the compaction feature.
+The meter component is deleted (invariant 4). Its `.logic.ts` sibling is **not**. Upstream `#8144`
+put the Claude resume-compaction helpers there; the 56th reconcile's upstream #27935 moved them (and
+the snapshot derivation from `apps/web/src/lib/contextWindow.ts`) to
+`packages/client-runtime/src/state/contextWindow.ts`, which `ChatView`'s compaction banner now
+imports. The fork's carried compaction facts (invariant 12) and `autoCompactSource` moved with them.
+The `.logic.ts` file keeps `providerSupportsManualCompaction` and `hasAvailableCompactionProvider`;
+`apps/web/src/lib/contextWindow.ts` keeps the fork's display helpers and re-exports
+`ContextWindowSnapshot` for the Vitals gauge.
 
 The file is kept under upstream's name so upstream edits to those helpers keep merging instead of
-arriving as a modify/delete every reconcile. Two of its exports are deliberately absent:
+arriving as a modify/delete every reconcile. Four of upstream's exports are deliberately absent
+(`formatContextWindowCost` and `shouldReserveContextWindowMeter` with the two below):
 `resolveContextWindowModelDisplayName` (reimplemented inline in `ChatComposer.tsx`, which already
 carries a comment saying so) and `formatContextWindowCompactionMessage` (only ever served the
 deleted component). `ContextWindowMeter.logic.test.ts` is trimmed to match; upstream's new

@@ -115,6 +115,10 @@ export function useConnectedEnvironmentIds() {
   return useAtomValue(environmentSummaries.connectedEnvironmentIdsAtom);
 }
 
+/**
+ * FORK: the resource queue panel lists every environment with its connection state
+ * (registry invariant 5d). Upstream removed this hook when it reverted its Working-shelf rule.
+ */
 export function useEnvironmentConnectionSummaries() {
   return useAtomValue(environmentSummaries.environmentsAtom);
 }

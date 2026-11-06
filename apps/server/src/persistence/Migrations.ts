@@ -188,6 +188,9 @@ import Migration0085 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
 import Migration0086 from "./Migrations/077_RepairBooleanSettledOverride.ts";
 import Migration0087 from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
 import Migration0088 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
+// Upstream's 080 (scheduled task thread mode) arrives after the fork already deployed ids
+// 33-88, so it takes the next free id (89) rather than its filename number (registry section 1).
+import Migration0089 from "./Migrations/080_ScheduledTaskThreadMode.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -281,6 +284,7 @@ export const migrationEntries = [
   [86, "RepairBooleanSettledOverride", Migration0086],
   [87, "DropOrchestrationEventCorrelationIndex", Migration0087],
   [88, "DelegatedRecoveryIndexes", Migration0088],
+  [89, "ScheduledTaskThreadMode", Migration0089],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -59,7 +59,8 @@ const appendDpopChallengeOnUnauthorized =
     // Only requests carrying a DPoP-bound access token reach here. /oauth/token
     // is where one is obtained, so it has no authenticated middleware and never
     // runs this - it raises its own challenge inline when a proof fails.
-    if (request.headers.authorization?.startsWith("DPoP ") === true) {
+    // The scheme name is case-insensitive.
+    if (/^DPoP /i.test(request.headers.authorization ?? "")) {
       yield* appendDpopChallengeHeader;
     }
     return yield* error;

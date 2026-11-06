@@ -1,10 +1,8 @@
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
-import {
-  hasAvailableCompactionProvider,
-  hasDismissedResumeCompaction,
-} from "./ContextWindowMeter.logic";
+import { hasDismissedResumeCompaction } from "@t3tools/client-runtime/state/context-window";
+import { hasAvailableCompactionProvider } from "./ContextWindowMeter.logic";
 
 function claudeProvider(input: {
   instanceId: string;

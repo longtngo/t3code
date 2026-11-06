@@ -66,7 +66,9 @@ async function readAccess(error: unknown) {
 describe("useFilesystemReadAccess", () => {
   it("keeps file access when the session refresh never reached the server", async () => {
     expect(
-      await readAccess(new RemoteEnvironmentAuthTimeoutError("https://env.test", 6_000)),
+      await readAccess(
+        new RemoteEnvironmentAuthTimeoutError({ requestUrl: "https://env.test", timeoutMs: 6_000 }),
+      ),
     ).toEqual({ canReadFiles: true, isPending: false, error: null });
   });
 

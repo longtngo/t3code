@@ -4,11 +4,12 @@
  * never fails: any tool failure falls back, so the viewer always gets a document.
  */
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { ProcessRunner, layer as ProcessRunnerLive } from "../processRunner.ts";
 import { renderMarkdownDocument } from "./markdownHtml.ts";
@@ -26,9 +27,10 @@ const DEFAULT_COMMAND = "uni-md2html";
 const RENDER_TIMEOUT = "30 seconds";
 
 /** Internal sentinel signalling "the tool didn't produce usable output" → fall back. */
-class MarkdownToolUnavailable extends Data.TaggedError("MarkdownToolUnavailable")<{
-  readonly reason: string;
-}> {}
+class MarkdownToolUnavailable extends Schema.TaggedError<MarkdownToolUnavailable>()(
+  "MarkdownToolUnavailable",
+  { reason: Schema.String },
+) {}
 
 /**
  * Where the branded CLI was found, or null. The install is machine-local, so a fresh machine
@@ -80,11 +82,12 @@ export const make = Effect.fn("makeMarkdownHtmlRenderer")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const processRunner = yield* ProcessRunner;
-  const command = process.env[MD2HTML_COMMAND_ENV]?.trim() || DEFAULT_COMMAND;
+  const env = yield* HostProcess.Environment;
+  const command = env[MD2HTML_COMMAND_ENV]?.trim() || DEFAULT_COMMAND;
 
   const resolvedCommand = yield* resolveRendererCommand({
     command,
-    pathEnv: process.env.PATH,
+    pathEnv: env.PATH,
     fileSystem,
     path,
   });

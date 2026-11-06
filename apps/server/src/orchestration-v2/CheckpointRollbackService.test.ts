@@ -392,7 +392,7 @@ it.effect.each([
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(WorkspaceMemberHooks.WorkspaceMemberHooks, {
-          checkpointStates: () => Effect.sync(() => undefined),
+          checkpointStates: () => Effect.undefined,
           sweep: () => Effect.void,
           rollbackRefusal,
         }),

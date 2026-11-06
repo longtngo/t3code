@@ -1,5 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import { type AssetCreateUrlResult, EnvironmentId, ThreadId } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
@@ -23,7 +24,9 @@ vi.mock(import("../state/assets"), async (original) => {
   const actual = await original();
   const { Atom } = await import("effect/reactivity");
   const family = Atom.family((_key: string) =>
-    Atom.make(Effect.tryPromise(() => mint())).pipe(Atom.keepAlive),
+    Atom.make(
+      Effect.tryPromise({ try: () => mint(), catch: (cause) => new Cause.UnknownError(cause) }),
+    ).pipe(Atom.keepAlive),
   );
   return {
     ...actual,

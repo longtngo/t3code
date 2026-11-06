@@ -327,17 +327,25 @@ describe("resolveCommand", () => {
   });
 });
 
+/** Re-imports the module with `T3CODE_RESCTL_CMD` set, which it reads once at load. */
+async function importWithResctlCmd(value: string) {
+  const before = process.env.T3CODE_RESCTL_CMD;
+  process.env.T3CODE_RESCTL_CMD = value;
+  vi.resetModules();
+  try {
+    return await import("./ResourceQueue.ts");
+  } finally {
+    if (before === undefined) delete process.env.T3CODE_RESCTL_CMD;
+    else process.env.T3CODE_RESCTL_CMD = before;
+  }
+}
+
 describe("ResourceQueue command at module load", () => {
   it.effect("resolves a relative T3CODE_RESCTL_CMD against the startup cwd, once", () =>
     Effect.gen(function* () {
       const commandFor = (value: string) =>
         Effect.gen(function* () {
-          const before = process.env.T3CODE_RESCTL_CMD;
-          process.env.T3CODE_RESCTL_CMD = value;
-          vi.resetModules();
-          const fresh = yield* Effect.promise(() => import("./ResourceQueue.ts"));
-          if (before === undefined) delete process.env.T3CODE_RESCTL_CMD;
-          else process.env.T3CODE_RESCTL_CMD = before;
+          const fresh = yield* Effect.promise(() => importWithResctlCmd(value));
           const commands: unknown[] = [];
           yield* fresh.make.pipe(
             Effect.provideService(

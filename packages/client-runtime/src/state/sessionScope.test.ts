@@ -48,7 +48,7 @@ describe("sessionResultGrantsScope", () => {
     ).toBe(true);
     expect(
       sessionResultGrantsScope(
-        failedRefresh(new RemoteEnvironmentAuthTimeoutError(URL, 6_000)),
+        failedRefresh(new RemoteEnvironmentAuthTimeoutError({ requestUrl: URL, timeoutMs: 6_000 })),
         AuthOrchestrationOperateScope,
       ),
     ).toBe(true);
@@ -67,7 +67,7 @@ describe("sessionResultGrantsScope", () => {
     );
     for (const error of [
       answered,
-      new RemoteEnvironmentAuthUndeclaredStatusError(URL, 500),
+      new RemoteEnvironmentAuthUndeclaredStatusError({ requestUrl: URL, status: 500 }),
       new RemoteEnvironmentAuthFetchError({ message: "rejected renewal", cause: { ok: false } }),
       new Error("unknown"),
     ]) {
@@ -99,7 +99,10 @@ describe("sessionResultDeniesScope", () => {
 
   it("defers to the server while the grant is loading or its refresh failed", () => {
     expect(sessionResultDeniesScope(AsyncResult.initial(), AuthFilesystemReadScope)).toBe(false);
-    const answered = new RemoteEnvironmentAuthUndeclaredStatusError(URL, 502);
+    const answered = new RemoteEnvironmentAuthUndeclaredStatusError({
+      requestUrl: URL,
+      status: 502,
+    });
     for (const error of [answered, fetchError()]) {
       expect(sessionResultDeniesScope(failedRefresh(error), AuthFilesystemReadScope)).toBe(false);
     }

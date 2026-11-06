@@ -284,7 +284,7 @@ describe("resolvePublishRepositoryOwner", () => {
 
 describe("resolveChangesTotals", () => {
   it("does not let an empty branchChanges hide a dirty working tree", () => {
-    assert.deepEqual(
+    assert.deepInclude(
       resolveChangesTotals(
         status({
           hasWorkingTreeChanges: true,
@@ -304,7 +304,7 @@ describe("resolveChangesTotals", () => {
     assert.deepEqual(
       resolveChangesTotals(
         status({
-          branchChanges: { baseRef: "main", insertions: 20, deletions: 3 },
+          branchChanges: { baseRef: "origin/master", insertions: 20, deletions: 3 },
           workingTree: {
             files: [{ path: "a.ts", insertions: 1, deletions: 0 }],
             insertions: 1,
@@ -312,12 +312,12 @@ describe("resolveChangesTotals", () => {
           },
         }),
       ),
-      { insertions: 20, deletions: 3 },
+      { insertions: 20, deletions: 3, baseRef: "origin/master" },
     );
   });
 
   it("falls back to the working tree when branchChanges is omitted", () => {
-    assert.deepEqual(
+    assert.deepInclude(
       resolveChangesTotals(
         status({
           workingTree: {

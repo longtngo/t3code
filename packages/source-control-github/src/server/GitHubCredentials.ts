@@ -16,7 +16,10 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import { readSourceControlHostSettings } from "@t3tools/source-control-core/shared/definition";
-import { settingsSecretLiteral } from "@t3tools/contracts";
+import {
+  requireSettingsSecretLiteral,
+  type SettingsSecretUnresolvedError,
+} from "@t3tools/contracts";
 
 import * as GitHubClient from "../shared/definition.ts";
 import { parseGitHubAuthStatus } from "./gitHubAuthStatus.ts";
@@ -95,7 +98,8 @@ export type GitHubCredentialUnavailableError =
   | GitHubCliMissingError
   | GitHubNotSignedInError
   | GitHubHostDisabledError
-  | GitHubCliFailedError;
+  | GitHubCliFailedError
+  | SettingsSecretUnresolvedError;
 
 export class GitHubCredentials extends Context.Service<
   GitHubCredentials,
@@ -110,7 +114,7 @@ export class GitHubCredentials extends Context.Service<
       host: string,
     ) => Effect.Effect<
       Option.Option<GitHubCredential>,
-      GitHubHostDisabledError | GitHubNotSignedInError
+      GitHubHostDisabledError | GitHubNotSignedInError | SettingsSecretUnresolvedError
     >;
     readonly fingerprint: (host: string, token: string) => Effect.Effect<string>;
     /** Drops every held token for the host after GitHub refused one, so the next read asks again. */
@@ -246,10 +250,19 @@ export const make = Effect.gen(function* () {
         );
         return {
           choice: github.hosts[host],
-          saved: settingsSecretLiteral(github.tokens[host]).trim() || null,
+          token: github.tokens[host],
+          secretProviders: settings.secretProviders,
         };
       }),
-      Effect.orElseSucceed(() => ({ choice: undefined, saved: null })),
+      Effect.orElseSucceed(() => ({ choice: undefined, token: undefined, secretProviders: {} })),
+      Effect.map(({ choice, token, secretProviders }) => ({
+        choice,
+        // A reference still in place could not be read. It fails, after the caller's disabled
+        // check, rather than passing for "no saved token" and falling back to another account.
+        saved: requireSettingsSecretLiteral(token, secretProviders).pipe(
+          Effect.map((literal): string | null => literal.trim() || null),
+        ),
+      })),
     );
 
   /** Which login git's own config picks for `host` in `cwd`; null when it has no answer. */
@@ -407,15 +420,16 @@ export const make = Effect.gen(function* () {
     if (settings.choice?.enabled === false) {
       return yield* new GitHubHostDisabledError({ host });
     }
+    const savedToken = yield* settings.saved;
     const credential =
-      settings.saved === null
+      savedToken === null
         ? Option.none<GitHubCredential>()
         : Option.some<GitHubCredential>({
             host,
-            token: Redacted.make(settings.saved),
+            token: Redacted.make(savedToken),
             source: "settings",
             explicit: true,
-            fingerprint: yield* fingerprintOf(host, settings.saved),
+            fingerprint: yield* fingerprintOf(host, savedToken),
           });
     return { host, choice: settings.choice, credential };
   });
@@ -467,7 +481,9 @@ export const make = Effect.gen(function* () {
       // Only when T3 picked the account itself. Read from Settings rather than the credential's
       // `source`: a pin and a signed-out folder account both come back as `gh`.
       const { choice, saved } = yield* hostSettings(host);
-      if (choice?.enabled === false || saved !== null || choice?.account !== undefined) return [];
+      if (choice?.enabled === false) return [];
+      // An unreadable saved token fails here rather than offering the other logins.
+      if ((yield* saved) !== null || choice?.account !== undefined) return [];
       if (environmentToken(host, environment) !== null) return [];
       const tried = yield* get(host, cwd);
       const logins = yield* Cache.get(loginsCache, host).pipe(
