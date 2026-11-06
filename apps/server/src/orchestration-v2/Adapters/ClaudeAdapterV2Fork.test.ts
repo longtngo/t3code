@@ -45,9 +45,14 @@ import {
 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import {
+  BUNDLED_CLAUDE_MODEL_CATALOG,
+  type ClaudeModelCatalog,
+} from "../../provider/ClaudeModelCatalog.ts";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import {
   claudeContextUsageSnapshot,
+  claudeCliContextWindow,
   claudeModelContextWindow,
   claudeQueryAutoCompactWindow,
   claudeResultProse,
@@ -174,6 +179,37 @@ describe("Claude context windows (invariants 12, 22)", () => {
       ),
       200_000,
     );
+  });
+
+  it("reads the Context Window default from the catalog it is given", () => {
+    // A downloaded catalog can change opus-4-6's default without a release.
+    const twoHundredKDefault: ClaudeModelCatalog = {
+      models: BUNDLED_CLAUDE_MODEL_CATALOG.models.map((entry) =>
+        entry.model.slug !== "claude-opus-4-6" || entry.model.capabilities === null
+          ? entry
+          : {
+              ...entry,
+              model: {
+                ...entry.model,
+                capabilities: {
+                  ...entry.model.capabilities,
+                  optionDescriptors: (entry.model.capabilities.optionDescriptors ?? []).map(
+                    (descriptor) =>
+                      descriptor.id === "contextWindow" && descriptor.type === "select"
+                        ? { ...descriptor, currentValue: "200k" }
+                        : descriptor,
+                  ),
+                },
+              },
+            },
+      ),
+    };
+    const opus46 = selection("claude-opus-4-6");
+    assert.equal(claudeModelContextWindow(opus46), 1_000_000);
+    assert.equal(claudeModelContextWindow(opus46, twoHundredKDefault), 200_000);
+    assert.equal(claudeCliContextWindow(opus46, twoHundredKDefault), 200_000);
+    assert.equal(claudeQueryAutoCompactWindow("", opus46), 1_000_000);
+    assert.isUndefined(claudeQueryAutoCompactWindow("", opus46, twoHundredKDefault));
   });
 
   it("resolves the auto-compact window the CLI is handed", () => {

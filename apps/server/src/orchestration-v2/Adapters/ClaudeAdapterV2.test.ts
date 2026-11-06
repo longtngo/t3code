@@ -15625,6 +15625,74 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  // FORK (invariants 12, 22): the window the CLI is handed follows the downloaded catalog.
+  it.effect.each([
+    { source: "bundled", contextWindowDefault: undefined, autoCompactWindow: 1_000_000 },
+    { source: "downloaded", contextWindowDefault: "200k", autoCompactWindow: undefined },
+  ])(
+    "hands opus-4-6 the auto-compact window of the $source catalog",
+    ({ contextWindowDefault, autoCompactWindow }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWakeHarnessWithOptions(
+            contextWindowDefault === undefined
+              ? {}
+              : {
+                  modelCatalog: Effect.succeed({
+                    models: BUNDLED_CLAUDE_MODEL_CATALOG.models.map((entry) =>
+                      entry.model.slug !== "claude-opus-4-6" || entry.model.capabilities === null
+                        ? entry
+                        : {
+                            ...entry,
+                            model: {
+                              ...entry.model,
+                              capabilities: {
+                                ...entry.model.capabilities,
+                                optionDescriptors: (
+                                  entry.model.capabilities.optionDescriptors ?? []
+                                ).map((descriptor) =>
+                                  descriptor.id === "contextWindow" && descriptor.type === "select"
+                                    ? { ...descriptor, currentValue: contextWindowDefault }
+                                    : descriptor,
+                                ),
+                              },
+                            },
+                          },
+                    ),
+                  }),
+                },
+          );
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-catalog-compact-window"),
+              text: "Continue.",
+              attachments: [],
+              modelSelection: {
+                instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+                model: "claude-opus-4-6",
+              },
+            }),
+          );
+          const settings = harness.getOpenedOptions()!.settings as
+            | { autoCompactWindow?: number }
+            | undefined;
+          assert.equal(settings?.autoCompactWindow, autoCompactWindow);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              NodeServices.layer,
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+      ),
+  );
+
   it.effect("resolves a subagent's model and effort against the instance's custom models", () =>
     Effect.scoped(
       Effect.gen(function* () {

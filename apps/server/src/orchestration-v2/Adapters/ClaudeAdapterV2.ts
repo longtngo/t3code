@@ -1858,6 +1858,7 @@ export function makeClaudeQueryOptions(input: {
   const autoCompactWindow = claudeQueryAutoCompactWindow(
     input.settings?.autoCompactWindow,
     input.modelSelection,
+    input.modelCatalog,
   );
   const outputStyle = input.settings?.outputStyle;
   const compactQuerySettings =
@@ -4966,7 +4967,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
   // FORK (invariant 22): the window the CLI actually runs at (native_1m models included)
   // comes first; the catalog toggle alone reads claude-opus-4-8 as 200,000.
   const claudeContextWindow = (modelSelection: ModelSelection): number | null =>
-    claudeCliContextWindow(modelSelection) ??
+    claudeCliContextWindow(modelSelection, modelCatalog) ??
     resolveClaudeCatalogContextWindowTokens(modelCatalog, modelSelection) ??
     reportedContextWindows.get(
       compileClaudeModelSelection(modelSelection, modelCatalog).apiModelId,
@@ -10249,7 +10250,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? undefined
               : claudeContextUsageSnapshot(
                   contextUsageResponse.value,
-                  claudeModelContextWindow(context.input.modelSelection),
+                  claudeModelContextWindow(context.input.modelSelection, modelCatalog),
                 );
             yield* finalizeActiveTurn({
               context,

@@ -16,6 +16,7 @@ import {
 
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
+  type ClaudeModelCatalog,
   resolveClaudeCatalogContextWindow,
   resolveClaudeCatalogContextWindowTokens,
 } from "../../provider/ClaudeModelCatalog.ts";
@@ -128,13 +129,13 @@ export function claudeResultTerminalStatus(
 // Context windows and auto-compaction (invariants 12, 22)
 
 /**
- * The context window Claude Code ACTUALLY runs a model at. Several models are
- * `native_1m` in the CLI's registry and run at 1M whatever the catalog's
- * Context Window toggle says. Measured against Claude Code 2.1.247 by calling
- * `getContextUsage` per model; re-verify on a CLI upgrade.
+ * The window Claude Code ACTUALLY runs a model at: several models are `native_1m` whatever the
+ * catalog toggle says (measured on CLI 2.1.247 via `getContextUsage`; re-verify on upgrade).
+ * Pass the adapter's live catalog, which can carry a newer Context Window default.
  */
 export function claudeCliContextWindow(
   modelSelection: ModelSelection | undefined,
+  catalog: ClaudeModelCatalog = BUNDLED_CLAUDE_MODEL_CATALOG,
 ): number | undefined {
   switch (modelSelection?.model) {
     case "claude-opus-5":
@@ -148,8 +149,7 @@ export function claudeCliContextWindow(
     case "claude-opus-4-5":
       return 200_000;
     case "claude-opus-4-6":
-      return resolveClaudeCatalogContextWindow(BUNDLED_CLAUDE_MODEL_CATALOG, modelSelection) ===
-        "1m"
+      return resolveClaudeCatalogContextWindow(catalog, modelSelection) === "1m"
         ? 1_000_000
         : 200_000;
   }
@@ -157,10 +157,13 @@ export function claudeCliContextWindow(
 }
 
 /** The meter's denominator: the CLI's window, then the catalog's, then 200k. */
-export function claudeModelContextWindow(modelSelection: ModelSelection): number {
+export function claudeModelContextWindow(
+  modelSelection: ModelSelection,
+  catalog: ClaudeModelCatalog = BUNDLED_CLAUDE_MODEL_CATALOG,
+): number {
   return (
-    claudeCliContextWindow(modelSelection) ??
-    resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, modelSelection) ??
+    claudeCliContextWindow(modelSelection, catalog) ??
+    resolveClaudeCatalogContextWindowTokens(catalog, modelSelection) ??
     200_000
   );
 }
@@ -183,12 +186,10 @@ const CLAUDE_UNARMED_COMPACTION_MODELS: ReadonlySet<string> = new Set([
 export function claudeQueryAutoCompactWindow(
   setting: string | undefined,
   modelSelection: ModelSelection,
+  catalog: ClaudeModelCatalog = BUNDLED_CLAUDE_MODEL_CATALOG,
 ): number | undefined {
-  const catalogWindow = resolveClaudeCatalogContextWindowTokens(
-    BUNDLED_CLAUDE_MODEL_CATALOG,
-    modelSelection,
-  );
-  const cliWindow = claudeCliContextWindow(modelSelection) ?? catalogWindow;
+  const catalogWindow = resolveClaudeCatalogContextWindowTokens(catalog, modelSelection);
+  const cliWindow = claudeCliContextWindow(modelSelection, catalog) ?? catalogWindow;
   const configured = resolveClaudeAutoCompactWindow(setting, cliWindow);
   if (configured !== undefined) return configured;
   if (CLAUDE_UNARMED_COMPACTION_MODELS.has(modelSelection.model)) return cliWindow;

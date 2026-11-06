@@ -175,7 +175,7 @@ Current: 89 entries, ids 1-89, unique and monotonic. Upstream's v2 schema
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
 upstream's `reconcileV2PreviewMigration` stays out.
-Filename numbers double up on `033`, `037`, `038`, `039`, `041` and `042`. Id `34` is
+Filename numbers double up on `033`, `037`, `038`, `039`, `041`, `042`, `051` and `052`. Id `34` is
 `PushSubscriptions`, the fork's first Web Push migration: real databases record it, so the manifest
 registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
 report the database's history as divergent. Upstream's "registers every migration file" test
@@ -322,8 +322,9 @@ blocked (no provider, no project) is a hard stop. Both `ComposerPrimaryActions` 
 `ChatComposer.tsx`, and the footer wrapper upstream moved to `ComposerFooterControls.tsx` at the
 51st reconcile, pass `isEnvironmentUnavailable={environmentUnavailable !== null}` plus
 `isSendBlocked`, and the collapsed phone button (`collapsedComposerPrimaryActionDisabled`) leaves
-the disconnect out too: on a phone it is the only submit path. In `ChatView.onSend` the early
-guard is `shouldAbortSendBeforeOfflineQueue`, which must never abort on a disconnect alone; the
+the disconnect out too: on a phone it is the only submit path. In the composer send
+(`chat/useComposerSend.ts`) the early guard is `shouldAbortSendBeforeOfflineQueue` (defined in
+`ChatView.logic.ts`), which must never abort on a disconnect alone; the
 queue branch sits below it. A merge that takes upstream's combined prop, or re-adds
 `activeEnvironmentUnavailable` to that guard, makes the outbox unreachable while its own tests
 stay green. Mobile has upstream's own outbox (`apps/mobile/src/state/thread-outbox*`).
@@ -501,8 +502,7 @@ hold. It passes on upstream's Linux CI and fails on every macOS run. `makeTempDi
 temp root here; `isEntrypoint` itself is untouched, and production is unaffected (an
 npm-installed CLI symlink carries no such prefix indirection). Worth sending upstream.
 
-`CursorProvider.test.ts` skills discovery realpaths its roots for the same reason (a raw temp path
-compared against the resolved one its subject returns). Upstream's `AntigravityInstallation.test.ts`
+Upstream's `AntigravityInstallation.test.ts`
 now realpaths its own root, so the fork's copy of that fix is gone. Probe:
 `grep -c 'realpathSync(NodeFS.mkdtempSync' apps/server/src/entrypoint.test.ts` is `1` (upstream's
 copy gives 0).
@@ -604,6 +604,10 @@ fable-5, opus-4-8, opus-4-7 and sonnet-5 itself (`model-default`, 967,000), and 
 threshold there. Sending nothing for them was tried and reverted: the CLI on the user's PATH has
 no minimum version, and an older one would never compact. Upstream's
 `Number(autoCompactWindow)` sent `NaN` for a percentage, which the CLI drops silently.
+All three helpers take the adapter's live model catalog (upstream reloads the downloaded catalog
+each turn, #31717), so a downloaded Context Window default reaches opus-4-6's window; the bundled
+catalog is only their default argument. Probe: `grep -c 'input.modelCatalog,' apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts`
+is `1` or more.
 
 ### 13. The provider-settings re-seed is UPSTREAM's, deliberately
 
@@ -1160,10 +1164,11 @@ export as unused - the pressure is entirely one-way.
 ### 39. Two interrupts, and only one of them arms the Stop ladder
 
 In `ChatView.tsx`, `onInterrupt` is the ladder (the Stop button and `Escape`, which
-`ChatComposer` routes through `nextEscapeAction`). Upstream's `thread.stop` keybinding calls
+`chat/useChatEscapeKey.ts` routes through `createChatEscapeHandler` / `nextEscapeAction` in
+`ChatView.logic.ts`). Upstream's `thread.stop` keybinding calls
 `onInterruptRunningThread`, which sends a plain cooperative interrupt and neither reads nor arms
 the ladder, so a shortcut press can never make the next Stop click a force-stop. The background
-work strip's Stop (`handleStopBackgroundWork`) sends no `mode`, i.e. hard: ending background work
+work strip's Stop (`handleStopBackgroundWork`, in `chat/useThreadLifecycle.tsx`) sends no `mode`, i.e. hard: ending background work
 is what it is for. v2 has no Cancel-question button; the pending-question row shows the same
 ladder Stop.
 
@@ -1220,9 +1225,10 @@ prose-append helpers and `elementContexts` are gone from both send paths.
 is reachable from the UI in a normal test. A merge that updates one and not the other loses
 contexts on whichever path it missed, silently — nothing typechecks the pairing.
 
-What stayed fork-side: `composeTurnStart` still owns the title seed, now derived from the
-terminal/review/preview labels rather than the appended prose, and the trimmed prompt is still
-`assistantCitationsToPlainText(stripInlineContextReferences(trimmed)).trim()`.
+What stayed fork-side: `composeTurnStart` (`lib/threadSend/composeTurnStart.ts`) still owns the
+title seed, now derived from the terminal/review/preview labels rather than the appended prose;
+it seeds from `assistantCitationsToPlainText(input.trimmedPrompt)`, and the prompt is trimmed
+upstream of it as `stripInlineContextReferences(options.prompt).trim()` in `ChatView.logic.ts`.
 
 Legacy prose-appended messages are upgraded on read by upstream's
 `packages/shared/src/composerContextLegacy.ts`, which the fork does not touch.
@@ -1232,8 +1238,8 @@ renders as a reference chip naming the file and range (`contextWindow.test.ts L4
 `lucide-message-circle`), not as a card with the comment body and its diff; a `@terminal-…`
 mention is substituted in place, inside the prompt's own paragraph, instead of being appended
 after it with a spacing span. This is upstream's intended rendering, not a merge defect. The whole
-render path (`reviewCommentContext.ts`, `lib/composerContextRecords.ts`,
-`composerContextPresentation.tsx`, `packages/shared/src/composerContextLegacy.ts`) is
+render path (`apps/web/src/reviewCommentContext.ts`, `lib/composerContextRecords.ts`,
+`components/composerContextPresentation.tsx`, `packages/shared/src/composerContextLegacy.ts`) is
 byte-identical to upstream; keep it that way.
 
 Two fork DOM test files went with the components upstream deleted:
