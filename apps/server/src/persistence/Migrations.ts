@@ -285,6 +285,8 @@ export const migrationEntries = [
   [87, "DropOrchestrationEventCorrelationIndex", Migration0087],
   [88, "DelegatedRecoveryIndexes", Migration0088],
   [89, "ScheduledTaskThreadMode", Migration0089],
+  // Re-registered for databases whose history an upstream build started, which skipped ids 34/37.
+  [90, "PushSubscriptions", Migration0037],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

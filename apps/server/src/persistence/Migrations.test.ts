@@ -8,6 +8,11 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
+import UpstreamSettled from "./Migrations/033_ProjectionThreadsSettled.ts";
+import UpstreamSnoozed from "./Migrations/034_ProjectionThreadsSnoozed.ts";
+import UpstreamTitleRegeneration from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
+import UpstreamPinned from "./Migrations/036_ProjectionThreadsPinned.ts";
+import UpstreamKeysetIndex from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
 
 // Fork ids: upstream's V2 migrations 55+ apply as 64+ here (registry section 1).
 const v2Migrations = migrationManifest.filter(([id]) => id >= 64);
@@ -173,6 +178,57 @@ describe("runMigrations", () => {
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
+
+  // The live DB ran an upstream build first: it recorded upstream's names at 33-37, so the
+  // fork's PushSubscriptions (34, 37) were skipped when the fork build took over at 38.
+  it.effect("creates push_subscriptions on a history an upstream build started", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const pushTable = sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'push_subscriptions'
+      `;
+      yield* runMigrations({ toMigrationInclusive: 32 });
+      const upstream = [
+        [33, "ProjectionThreadsSettled", UpstreamSettled],
+        [34, "ProjectionThreadsSnoozed", UpstreamSnoozed],
+        [35, "ProjectionThreadTitleRegeneration", UpstreamTitleRegeneration],
+        [36, "ProjectionThreadsPinned", UpstreamPinned],
+        [37, "ProjectionTurnsKeysetIndex", UpstreamKeysetIndex],
+      ] as const;
+      for (const [id, name, body] of upstream) {
+        yield* body;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
+      }
+      // Control: the build before the repair (through 89) leaves the table missing.
+      yield* runMigrations({ toMigrationInclusive: 89 });
+      assert.lengthOf(yield* pushTable, 0);
+
+      yield* runMigrations();
+
+      assert.lengthOf(yield* pushTable, 1);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("keeps existing push subscriptions when the repair runs", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 89 });
+      yield* sql`
+        INSERT INTO push_subscriptions (endpoint, p256dh, auth, created_at)
+        VALUES ('https://push.example/1', 'k', 'a', '2026-11-07T00:00:00.000Z')
+      `;
+
+      assert.deepStrictEqual(
+        (yield* runMigrations()).map(([id]) => id),
+        [90],
+      );
+
+      const rows = yield* sql<{
+        readonly endpoint: string;
+      }>`SELECT endpoint FROM push_subscriptions`;
+      assert.deepStrictEqual(rows, [{ endpoint: "https://push.example/1" }]);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
 });
 
 // Fork: file numbers are not applied ids (fork registry invariant 1), so match by name.
@@ -185,7 +241,7 @@ it.effect("registers every migration file", () =>
       const match = /^(\d+)_(\w+)\.ts$/.exec(name);
       return match ? [match[2]] : [];
     });
-    // Id 34 re-registers PushSubscriptions on purpose, so compare distinct names.
+    // Ids 34, 37 and 90 re-register PushSubscriptions on purpose, so compare distinct names.
     assert.deepStrictEqual(
       files.toSorted(),
       [...new Set(migrationManifest.map(([, name]) => name))].toSorted(),

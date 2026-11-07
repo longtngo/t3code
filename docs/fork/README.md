@@ -161,7 +161,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 89 entries, ids 1-89, unique and monotonic. Upstream's v2 schema
+Current: 90 entries, ids 1-90, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
@@ -171,16 +171,19 @@ Current: 89 entries, ids 1-89, unique and monotonic. Upstream's v2 schema
 `067_WebhookDedupe` is **76**, `068_ShellStopRequestIndex` is **77**,
 `069_ThreadMessageSearch` is **78**, `070_PeerLinks` is **79**, `071_PeerLinkFence` is **80**,
 `072_WaitingLinkRequestIndex` is **81**, and upstream's `073`-`080` are **82**-**89** (a flat +9;
-`076_ProjectionProjectsPinArchive` is **85**).
+`076_ProjectionProjectsPinArchive` is **85**). Id **90** is the fork's own `PushSubscriptions`
+repair, so upstream's next migration (`081`) takes **91** (a flat +10).
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
 upstream's `reconcileV2PreviewMigration` stays out.
 Filename numbers double up on `033`, `037`, `038`, `039`, `041`, `042`, `051` and `052`. Id `34` is
 `PushSubscriptions`, the fork's first Web Push migration: real databases record it, so the manifest
 registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
-report the database's history as divergent. Upstream's "registers every migration file" test
+report the database's history as divergent. Id `90` registers it a third time, for databases
+whose history an upstream build started (it recorded upstream's names at 33-37, so the fork's two
+were skipped and the table never existed). Upstream's "registers every migration file" test
 (`Migrations.test.ts`) therefore compares distinct names here, not entries.
-Upstream's `scripts/build-npm-launcher.ts` reads the head migration from file names (80, not 89);
+Upstream's `scripts/build-npm-launcher.ts` reads the head migration from file names (80, not 90);
 the fork does not publish the npm launcher, so it is left alone.
 
 The manifest is a list of **positional tuples** (`[1, "OrchestrationEvents", Migration0001]`), not
@@ -190,10 +193,10 @@ object literals. A probe grepping for `id:` matches only the doc comment and rep
 F=apps/server/src/persistence/Migrations.ts
 grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
   | awk 'NR>1 && $1<=p {bad=1} {p=$1} END {print NR, p, bad ? "NOT-MONOTONIC" : "ok"}'
-grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
+grep -cE '^\s*\[(34|90), "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `89 89 ok` and `1`.
+Expect `90 90 ok` and `2`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
