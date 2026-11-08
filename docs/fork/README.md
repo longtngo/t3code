@@ -1576,6 +1576,20 @@ is `1`; `grep -c 'userEvent.fill(' apps/web/src/components/settings/AddEnvironme
 is `6`; `grep -c 'query === "night"' apps/web/src/components/settings/ThemeImportDialog.browser.test.tsx`
 is `1`. Report: `~/reports/t3code/2026-11/2026-11-04/mevq-run/flaky-browser-rca.md`.
 
+### 75. The fork's Notifications and Queue pages are in upstream's explicit settings nav
+
+Reconcile 54 replaced the nav built from every `SETTINGS_SECTION_LABELS` key with upstream's
+hand-written `SETTINGS_NAV_GROUPS`. The fork's `/settings/notifications` (Web Push switch,
+notification categories) and `/settings/queue` kept their routes but lost their menu entries, so
+the Web Push switch looked like a lost feature. Both are back in the groups, and
+`settingsSearch.test.ts` "lists every labelled settings page in the nav" fails when a labelled
+page is missing (Diagnostics and Secrets are the only deliberate exceptions). Notifications is also
+in `SETTINGS_DEVICE_ONLY_PATHS` (`SettingsScopeSentence.tsx`), like Queue: without it the page
+shows a scope picker, and an unavailable scope replaces the page, Web Push switch included. A fork page added
+later needs a label and a group entry. Probe:
+`awk '/export const SETTINGS_NAV_GROUPS/,/^];/' apps/web/src/components/settings/settingsSearch.ts | grep -cE '"/settings/(notifications|queue)"'`
+is `2`.
+
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 
 On orchestrator v2 the hubs are `EventSink`'s `liveEvents` plus one `PubSub.unbounded` per

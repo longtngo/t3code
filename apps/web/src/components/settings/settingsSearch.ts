@@ -132,6 +132,8 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     paths: [
       "/settings/general",
       "/settings/appearance",
+      // Fork page (per-device Web Push and notification categories).
+      "/settings/notifications",
       "/settings/chat",
       "/settings/diffs",
       "/settings/keybindings",
@@ -144,6 +146,8 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     paths: [
       "/settings/providers",
       "/settings/threads",
+      // Fork page (thread queue slots).
+      "/settings/queue",
       "/settings/browser",
       "/settings/devices",
       "/settings/scheduled-tasks",

@@ -26,6 +26,7 @@ import {
   sourceControlHostSettingsSearchId,
   type SettingsSearchItem,
 } from "./settingsSearch";
+import { SETTINGS_DEVICE_ONLY_PATHS } from "./SettingsScopeSentence";
 
 vi.mock("~/env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/env")>()),
@@ -77,6 +78,26 @@ describe("searchSettings", () => {
         scope: "environment-defaults",
       });
     }
+  });
+
+  // Fork: upstream's explicit nav groups replaced the label-derived nav and silently unlinked
+  // the fork's Notifications and Queue pages (reconcile 54). Every labelled page is in the nav
+  // unless it is deliberately hidden.
+  it("lists every labelled settings page in the nav except the deliberately hidden ones", () => {
+    // Secrets is listed only while its feature flag is on; this file mocks the flag off.
+    const hidden = new Set(["/settings/diagnostics", "/settings/secrets"]);
+    const navPaths = SETTINGS_NAV_GROUPS.flatMap((group) => group.paths);
+    const missing = Object.keys(SETTINGS_SECTION_LABELS).filter(
+      (path) => !hidden.has(path) && !navPaths.includes(path as (typeof navPaths)[number]),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  // Otherwise the page shows a scope picker, and an unavailable scope replaces it (and its Web
+  // Push switch) with a message.
+  it("keeps the Notifications page out of the scope picker, like Queue", () => {
+    expect(SETTINGS_DEVICE_ONLY_PATHS.has("/settings/notifications")).toBe(true);
+    expect(SETTINGS_DEVICE_ONLY_PATHS.has("/settings/queue")).toBe(true);
   });
 
   it("hides the Secrets page from nav and search while the secrets feature is disabled", () => {

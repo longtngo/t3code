@@ -43,12 +43,15 @@ import {
 } from "./settingsScopeAxis";
 
 /**
- * Pages that do not follow the scope picker: their rows are saved on this client, or (Queue)
- * always on the primary environment, so they show no picker and skip the scope boundary.
+ * Pages that do not follow the scope picker: their rows are saved on this client, or (Queue,
+ * Notifications) always on the primary environment, so they show no picker and skip the scope
+ * boundary.
  */
 export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/general",
   "/settings/appearance",
+  // Its categories and Web Push registration always go to the primary environment.
+  "/settings/notifications",
   "/settings/chat",
   "/settings/diffs",
   "/settings/snap-shot",
