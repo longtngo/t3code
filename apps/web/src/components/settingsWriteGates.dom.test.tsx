@@ -54,7 +54,6 @@ import { sourceControlClients } from "@t3tools/client-runtime/source-control-cli
 import { SourceControlHostSettings } from "./settings/SourceControlHostSettings";
 import { SourceControlAccountSettings } from "./settings/SourceControlAccountSettings";
 import { SourceControlTokenSettings } from "./settings/SourceControlTokenSettings";
-import { CursorEnableButton } from "./usage/UsagePage";
 
 const SENTENCE = "This connection does not have permission to change environment settings.";
 const env = EnvironmentId.make("env-1");
@@ -155,15 +154,6 @@ describe.each(logins)("settings write gates, %s login", (_name, grant, denied) =
     );
     expect(isDisabled(dom.find('[aria-label="Use GitHub on github.com"]'))).toBe(denied);
     expect(isDisabled(dom.find('[aria-label="GitHub account for github.com"]'))).toBe(denied);
-    expect(dom.text().includes(SENTENCE)).toBe(denied);
-  });
-
-  it("Cursor usage enable button", async () => {
-    fixture.grant = grant;
-    const dom = await renderDom(
-      <CursorEnableButton environmentId={env} label="L" onEnabled={() => {}} tooltip />,
-    );
-    expect(dom.find('[aria-label="Enable Cursor usage from L"]') === null).toBe(denied);
     expect(dom.text().includes(SENTENCE)).toBe(denied);
   });
 

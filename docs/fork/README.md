@@ -31,6 +31,17 @@ units rather than merged. The server core is `apps/server/src/orchestration-v2/`
 what a fork feature did, upstream's version was adopted and the entry below is marked RETIRED with
 what superseded it. Every probe below was re-run against the ported tree.
 
+The 57th reconcile (2026-11-09, 178 commits) brought upstream's Labs cleanup (#33131): plan mode is
+gone on both send paths (the fork's queued send included), the old Labs toggles are gone, and
+upstream deleted its context-window meter and `ContextWindowMeter.logic.ts` for
+`chat/compaction.logic.ts` (invariant 10). Upstream #31739 persists a model pick on the thread as
+soon as it is made (`useApplyThreadModelPick`, `releaseModelSelection`, mobile
+`selectThreadModel`); it is adopted beside the fork's `modelSelectionBasis`, and a release also
+drops the basis. Upstream #32448 removed the Cursor Keychain "Enable" feature and its setting, so
+the fork's settings-write gate on that button went with it. A server-rejected pick now loses the
+draft pick (the optimistic thread shows it, adopt supersedes the draft, the rollback restores the
+old model), where upstream keeps it in the draft; an error is still shown.
+
 The 55th reconcile (2026-11-04, 1,203 commits) brought Effect 4.1.2: `effect/Crypto` is gone
 (fork code uses `effect/crypto/SecureRandom`, tests provide `NodeCrypto.layer`) and `pipe` takes at
 most 20 arguments, so long fork test layer pipes are split in two. Upstream's managed policy and
@@ -267,7 +278,7 @@ ordinary upstream addition.
 
 The fork's largest deletion: upstream's
 `ContextWindowMeter.tsx` and its `ContextWindowMeter.test.tsx` are gone, replaced by the fork's
-composer vitals gauge. The `.logic.ts` sibling survives for a reason of its own — see invariant 10. They come back only if upstream _modifies_ one of them: git then raises a
+composer vitals gauge. Upstream deleted both meter files itself at the 57th reconcile, so the modify/delete below no longer arises; see invariant 10. They come back only if upstream _modifies_ one of them: git then raises a
 modify/delete conflict, and the resolution is a delete. `ChatComposer.tsx` carries a comment at
 the former call site recording why.
 
@@ -532,48 +543,18 @@ the source: `NodeFSP.realpath(await NodeFSP.mkdtemp(...))`.
 three tests make `home` with `makeTempDirectoryScoped` while discovery returns real paths. The
 fork wraps each in `fileSystem.realPath`. Probe: `grep -c 'fileSystem.realPath(' packages/provider-fx/src/server/skills.test.ts` is `3`.
 
-### 10. `ContextWindowMeter.logic.ts` outlives its component, on purpose
+### 10. RETIRED at the 57th reconcile: `ContextWindowMeter.logic.ts`
 
-The meter component is deleted (invariant 4). Its `.logic.ts` sibling is **not**. Upstream `#8144`
-put the Claude resume-compaction helpers there; the 56th reconcile's upstream #27935 moved them (and
-the snapshot derivation from `apps/web/src/lib/contextWindow.ts`) to
-`packages/client-runtime/src/state/contextWindow.ts`, which `ChatView`'s compaction banner now
-imports. The fork's carried compaction facts (invariant 12) and `autoCompactSource` moved with them.
-The `.logic.ts` file keeps `providerSupportsManualCompaction` and `hasAvailableCompactionProvider`;
-`apps/web/src/lib/contextWindow.ts` keeps the fork's display helpers and re-exports
-`ContextWindowSnapshot` for the Vitals gauge.
+Upstream deleted its meter and the `.logic.ts` sibling (#33131) and moved the compaction helpers to
+`apps/web/src/components/chat/compaction.logic.ts`, which is byte-identical to upstream here.
+`ChatView` imports `hasAvailableCompactionProvider` from it; `formatContextWindowCompactionMessage`
+is upstream's one-argument version, used by `ThreadDetailsUsage.tsx`. The fork's carried
+compaction facts (invariant 12) live in `packages/client-runtime/src/state/contextWindow.ts`, and
+`apps/web/src/lib/contextWindow.ts` keeps the fork's display helpers for the Vitals gauge.
+Probe: `git ls-files apps/web/src/components/chat/ContextWindowMeter.tsx apps/web/src/components/chat/ContextWindowMeter.logic.ts | wc -l` is `0`.
 
-The file is kept under upstream's name so upstream edits to those helpers keep merging instead of
-arriving as a modify/delete every reconcile. Four of upstream's exports are deliberately absent
-(`formatContextWindowCost` and `shouldReserveContextWindowMeter` with the two below):
-`resolveContextWindowModelDisplayName` (reimplemented inline in `ChatComposer.tsx`, which already
-carries a comment saying so) and `formatContextWindowCompactionMessage` (only ever served the
-deleted component). `ContextWindowMeter.logic.test.ts` is trimmed to match; upstream's new
-`ContextWindowMeter.test.tsx` is deleted with the component it tests.
-
-**The meter's whole load-time reservation path is rejected too (33rd reconcile).** Upstream #10768
-stops the footer shifting while thread detail loads by holding the meter's slot:
-`ContextWindowMeterPlaceholder`, `shouldReserveContextWindowMeter`, a `reserveContextWindowMeter`
-prop, and a new `reportsContextWindow` flag on `ServerProvider`. Every piece of it serves the
-component this fork deletes. The fork's footer does not have the bug it fixes: the Vitals gauge's
-slot is gated on `showSecondaryStatus={!isComposerResting}`, which is the composer's layout state
-and not the thread's load state, so nothing pops in when activities land.
-
-Two of the four pieces landed OUTSIDE any conflict marker - the render site and the `pr-28` width
-class in `ChatComposer.tsx`, plus the new tests in `ContextWindowMeter.logic.test.ts`, which
-auto-merged - so rejecting the marked declarations alone left the tree red. Only the repo-wide
-typecheck named them.
-
-**`reportsContextWindow` is kept on the server and in contracts, and is NOT the fork's
-`reportsContextUsage`.** They read alike and answer different questions, both live: upstream's is
-a layout hint ("reserve the meter's space", absent means do not) set by two providers; the fork's
-is a capability answer ("does this driver emit usage at all", absent means yes) set by five, and
-`describeMissingContextUsage` uses it to explain an empty gauge. Keeping upstream's field costs a
-schema line and keeps its edits merging; dropping the fork's would blank that explanation.
-
-Upstream's `activeContextWindow` prop on `ChatComposer` is adopted since the v2 port (v1's
-activities, which the fork derived it from, are gone), and feeds the Vitals gauge.
-`compactDisabled` / `compactDisabledReason` / `onCompactContext` are adopted too.
+`reportsContextWindow` (upstream, a layout hint) and the fork's `reportsContextUsage` (a capability
+answer, absent means yes) are still different fields; keep both.
 
 ### 12. The Claude adapter still calls `getContextUsage`; upstream deleted it
 
@@ -762,6 +743,11 @@ carries upstream's `false`. `settings.ts` is the single load-bearing site.
 
 **A reconcile that restores `Effect.succeed(false)` here turns the Vitals gauge's context ring
 off for everyone, and nothing fails.**
+
+**57th reconcile: upstream removed the setting (#33131) with its Labs → Legacy switch.** The fork
+keeps the setting, its patch mirror and the gate in `ChatComposer.tsx`; the switch moved to
+Settings → Chat (search id `context-window-indicator`). Dropping the setting instead would mean
+un-gating the ring in `ChatComposer.tsx`.
 
 ### 20. Two helpers upstream deleted as unused are still called here
 
@@ -1328,6 +1314,10 @@ protocols to `string | string[] | WebSocketClientOptions`; both wrappers now car
 guard (throw on client options, pass protocols through). A future effect bump that changes the
 signature again shows up as a typecheck error in exactly these two files.
 
+Since the 57th reconcile mobile prefers upstream's native iOS socket (`native/nativeWebSocket`,
+#32288) and falls back to the fork's arraybuffer constructor when that module resolves to effect's
+global one (Android, older dev clients): `layerSocket` in `apps/mobile/src/lib/runtime.ts`.
+
 ### 57. Every copied git index is re-stamped below its source, not only the checkpoint one
 
 A copy of `.git/index` is stamped "now", so an entry rewritten in the source index's own second
@@ -1529,7 +1519,10 @@ markers, so a later merge can bring it back with nothing failing.
   once the thread matches it; the fork's `adoptThreadModelSelection` overwrites the pick instead,
   because a cleared pick falls back to the session's previous instance for the whole switch.
   Probe: `grep -rc subscribeComposerDraftModelReconciliation apps/web/src apps/mobile/src | grep -v ':0'`
-  prints nothing.
+  prints nothing. Upstream #31739 (57th reconcile) is a different mechanism and is adopted: it
+  writes the pick to the thread at once and releases the draft on success. Only its edits to this
+  subscriber (`pendingThreadIdsAtom` checks, the mount's new argument, the subscriber's tests) are
+  rejected.
 - Claude's `monthly_spend` limit window (#19433). The fork's `spend` field carries the same percent
   plus the money amounts, and Vitals already draws it; both would show spend twice. Probe:
   `grep -c monthly_spend apps/server/src/provider/claudeUsageLimits.ts` is `0`.

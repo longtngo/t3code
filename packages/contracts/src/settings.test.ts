@@ -933,7 +933,7 @@ describe("allow spending credits setting", () => {
 
 describe("queueSlots", () => {
   const decodeQueue = (queueSlots: unknown) =>
-    decodeServerSettings({ cursorKeychainUsageEnabled: true, queueSlots });
+    decodeServerSettings({ defaultAutoPull: true, queueSlots });
 
   it("is absent when never set", () => {
     expect("queueSlots" in decodeServerSettings({})).toBe(false);
@@ -956,13 +956,13 @@ describe("queueSlots", () => {
   ])("clamps %j per field and keeps sibling settings", (input, expected) => {
     const settings = decodeQueue(input);
     expect(settings.queueSlots).toEqual(expected);
-    expect(settings.cursorKeychainUsageEnabled).toBe(true);
+    expect(settings.defaultAutoPull).toBe(true);
   });
 
   it.each([null, "garbage", [], 3])("reads %j as absent and keeps sibling settings", (input) => {
     const settings = decodeQueue(input);
     expect(settings.queueSlots).toBeUndefined();
-    expect(settings.cursorKeychainUsageEnabled).toBe(true);
+    expect(settings.defaultAutoPull).toBe(true);
   });
 
   it("round-trips through encode", () => {
@@ -982,7 +982,7 @@ describe("queueSlots", () => {
 describe("sidebarSections", () => {
   const at = "2026-10-07T00:00:00.000Z";
   const decodeSections = (sidebarSections: unknown) =>
-    decodeServerSettings({ cursorKeychainUsageEnabled: true, sidebarSections });
+    decodeServerSettings({ defaultAutoPull: true, sidebarSections });
 
   it("is empty when never set", () => {
     expect(decodeServerSettings({}).sidebarSections).toEqual({});
@@ -991,7 +991,7 @@ describe("sidebarSections", () => {
   it.each([null, "garbage", [], 3])("reads %j as empty and keeps sibling settings", (input) => {
     const settings = decodeSections(input);
     expect(settings.sidebarSections).toEqual({});
-    expect(settings.cursorKeychainUsageEnabled).toBe(true);
+    expect(settings.defaultAutoPull).toBe(true);
   });
 
   it("drops bad entries, trims names and caps them at 60 characters", () => {
@@ -1008,7 +1008,7 @@ describe("sidebarSections", () => {
       ok: { name: "Focus", createdAt: at },
       long: { name: "y".repeat(60), createdAt: at },
     });
-    expect(settings.cursorKeychainUsageEnabled).toBe(true);
+    expect(settings.defaultAutoPull).toBe(true);
   });
 
   it("drops a `__proto__` id and keeps `constructor` and `prototype` as plain entries", () => {

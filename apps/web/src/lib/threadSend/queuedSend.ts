@@ -28,16 +28,13 @@ import {
   deriveLockedProviderForThread,
   getAntigravitySendBlockReason,
   recallCheckoutIsRepo,
-  resolveComposerInteractionMode,
   resolveComposerProviderSelection,
   resolveSendEnvMode,
-  shouldShowPlanFollowUpPrompt,
 } from "../../components/ChatView.logic";
 import {
   getComposerPromptInjectionState,
   getComposerProviderState,
 } from "../../components/chat/composerProviderState";
-import { parseStandaloneComposerSlashCommand } from "../../composer-logic";
 import { getComposerSubmissionValidationMessage } from "../../components/chat/composerSubmission";
 import {
   deriveEffectiveComposerModelState,
@@ -46,7 +43,6 @@ import {
   type DraftId,
 } from "../../composerDraftStore";
 import { NO_PROVIDER_MODEL_SELECTION, providerInstanceEntriesFor } from "../../providerInstances";
-import { isLatestRunSettled } from "../../session-logic";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
 import { buildMessageContext, terminalContextReference } from "../composerContextRecords";
 import { removeInlineContextReference } from "../composerContextReferences";
@@ -251,39 +247,18 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
     models: selectedProviderEntry.models,
     promptInjectionState: getComposerPromptInjectionState(prompt),
     modelOptions: modelOptions?.[selectedInstanceId],
-    planModeEnabled: settings.planModeEnabled,
   });
   const modelSelection = createModelSelection(
     selectedInstanceId,
     selectedModel,
     providerState.modelOptionsForDispatch,
   );
-  const { enabled: interactionModeEnabled, interactionMode } = resolveComposerInteractionMode({
-    planModeEnabled: settings.planModeEnabled,
-    provider: selectedProviderEntry.snapshot,
-    interactionMode: draft?.interactionMode ?? thread.interactionMode ?? DEFAULT_INTERACTION_MODE,
-  });
+  const interactionMode = DEFAULT_INTERACTION_MODE;
   const runtimeMode = draft?.runtimeMode ?? thread.runtimeMode ?? DEFAULT_RUNTIME_MODE;
 
   const trimmed = sendState.trimmedPrompt;
   if (isUsageLimitsCommand(prompt) || parseCodexFeedbackCommand(trimmed) !== null) {
     return { kind: "refused", reason: `The message is a command. ${OPEN_TO_SEND}` };
-  }
-  if (interactionModeEnabled && parseStandaloneComposerSlashCommand(trimmed)) {
-    return { kind: "refused", reason: `The message is a command. ${OPEN_TO_SEND}` };
-  }
-  if (
-    shell !== null &&
-    interactionModeEnabled &&
-    shouldShowPlanFollowUpPrompt({
-      pendingUserInputCount: 0,
-      interactionMode,
-      latestTurnSettled: isLatestRunSettled(shell.latestRun, shell.runtime),
-      hasActionableProposedPlan: shell.hasActionableProposedPlan,
-      hasComposerAttachments: false,
-    })
-  ) {
-    return { kind: "refused", reason: `The thread has a plan to answer. ${OPEN_TO_SEND}` };
   }
 
   const sendEnvMode = isLocalDraftThread

@@ -12,6 +12,7 @@ vi.mock("~/state/server", async () => {
   return {
     serverEnvironment: { refreshProviders: null },
     primaryServerEnvironmentThemesAtom: Atom.make([]),
+    themeServerEnvironmentThemesAtom: Atom.make([]),
   };
 });
 const useHostMetrics = vi.fn();

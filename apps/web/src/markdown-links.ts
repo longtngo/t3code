@@ -1,3 +1,4 @@
+import { isLocalEditorFileUrl } from "@t3tools/contracts";
 import { fileBasename, isAbsolutePath, workspaceRelativeFilePath } from "@t3tools/shared/path";
 import {
   inlineCodeFilePathCandidate,
@@ -42,6 +43,13 @@ export function rewriteMarkdownFileUriHref(href: string | undefined): string | n
 // The chat prose linkifier and this module's link gate share one answer to
 // "is this a filesystem path"; the predicate lives in @t3tools/shared.
 export { isKnownFilesystemRootPath } from "@t3tools/shared/markdownLinks";
+export function isLocalEditorFileHref(href: string): boolean {
+  try {
+    return isLocalEditorFileUrl(new URL(href));
+  } catch {
+    return false;
+  }
+}
 
 export function resolveInlineCodeFileLinkMeta(
   codeText: string,

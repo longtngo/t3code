@@ -39,8 +39,6 @@ function renderPendingActions(isRunning: boolean, stopRung: StopRung = "idle") {
       },
       isRunning,
       canInterrupt: isRunning,
-      showPlanFollowUpPrompt: false,
-      promptHasText: false,
       isSendBusy: false,
       sendDisabledReason: null,
       isEnvironmentUnavailable: false,
@@ -50,7 +48,6 @@ function renderPendingActions(isRunning: boolean, stopRung: StopRung = "idle") {
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
       stopRung,
-      onImplementPlanInNewThread: () => {},
     }),
   );
 }
@@ -70,8 +67,6 @@ function renderRunning(options?: {
       pendingAction: null,
       isRunning: true,
       canInterrupt: true,
-      showPlanFollowUpPrompt: false,
-      promptHasText: false,
       isSendBusy: false,
       sendDisabledReason: null,
       isEnvironmentUnavailable: false,
@@ -81,7 +76,6 @@ function renderRunning(options?: {
       onPreviousPendingQuestion: () => {},
       onInterrupt: options?.onInterrupt ?? (() => {}),
       stopRung: options?.stopRung ?? "idle",
-      onImplementPlanInNewThread: () => {},
     }),
   );
 }
@@ -104,8 +98,6 @@ function renderSendButton(
       pendingAction: null,
       isRunning: false,
       canInterrupt: false,
-      showPlanFollowUpPrompt: false,
-      promptHasText: true,
       isSendBusy: false,
       sendDisabledReason,
       ...connection,
@@ -113,7 +105,6 @@ function renderSendButton(
       hasSendableContent: true,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
-      onImplementPlanInNewThread: () => {},
     }),
   );
 }
@@ -223,8 +214,6 @@ function renderIdleHidden(options: {
       pendingAction: null,
       isRunning: options.isRunning,
       canInterrupt: options.isRunning,
-      showPlanFollowUpPrompt: false,
-      promptHasText: options.hasSendableContent,
       isSendBusy: options.isSendBusy ?? false,
       sendDisabledReason: null,
       isEnvironmentUnavailable: false,
@@ -233,7 +222,6 @@ function renderIdleHidden(options: {
       hasSendableContent: options.hasSendableContent,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
-      onImplementPlanInNewThread: () => {},
     }),
   );
 }

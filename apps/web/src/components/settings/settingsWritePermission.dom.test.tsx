@@ -28,7 +28,6 @@ vi.mock("../ui/tooltip", () => {
   };
 });
 
-import { CursorEnableButton } from "../usage/UsagePage";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { SourceControlHostSettings } from "./SourceControlHostSettings";
 import { SourceControlAccountSettings } from "./SourceControlAccountSettings";
@@ -134,29 +133,5 @@ describe("settings saves under a login without settings:write", () => {
     const trigger = dom.find('[aria-label="GitHub account for github.com"]');
     expect(trigger).not.toBeNull();
     expect(trigger?.matches(":disabled") || trigger?.hasAttribute("data-disabled")).toBe(true);
-  });
-
-  it("Cursor usage offers no enable button, only the reason", async () => {
-    const dom = await renderDom(
-      <CursorEnableButton
-        environmentId={environmentId}
-        label="Laptop"
-        onEnabled={() => {}}
-        tooltip
-      />,
-    );
-    expect(dom.text()).toContain(SENTENCE);
-    expect(dom.find('[aria-label="Enable Cursor usage from Laptop"]')).toBeNull();
-
-    fixture.grant = session(["settings:write"]);
-    const granted = await renderDom(
-      <CursorEnableButton
-        environmentId={environmentId}
-        label="Laptop"
-        onEnabled={() => {}}
-        tooltip
-      />,
-    );
-    expect(granted.find('[aria-label="Enable Cursor usage from Laptop"]')).not.toBeNull();
   });
 });

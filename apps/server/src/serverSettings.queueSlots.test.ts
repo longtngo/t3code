@@ -132,7 +132,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
         const error = yield* Effect.flip(
           settings.updateSettings({
             queueSlots: { slots: 2 },
-            cursorKeychainUsageEnabled: true,
+            defaultAutoPull: true,
           }),
         );
         assert.equal(error.operation, "read-file");

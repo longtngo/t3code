@@ -88,7 +88,7 @@ import {
 } from "../../state/use-composer-drafts";
 import { useQuietThreadStructure } from "../../state/use-thread-detail";
 import { activeComposerDraftKey, useQueuedRunEdit } from "../../state/queued-run-edit";
-import { updateThreadDraftModelSelection } from "../../state/use-thread-composer-state";
+import { selectThreadModel } from "../../state/thread-model-selection";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { threadAllowsProviderSwitch } from "../../state/thread-provider-switching";
 import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
@@ -1219,7 +1219,7 @@ function ThreadSettingsModelsScreen() {
           session.hasLegacyModels,
         ]}
         confirm={{
-          label: session.pendingModel ? "Save thread settings" : "Done",
+          label: session.pendingModel ? "Save" : "Done",
           onPress: commitAndClose,
         }}
         hideBottomBorder
@@ -1337,13 +1337,12 @@ export function ExistingThreadSettingsRouteScreen({
         option.selection.instanceId === modelSelection.instanceId &&
         option.selection.model === modelSelection.model,
     ) ?? null;
-  const updateModelSelection = (selection: ModelSelection) =>
-    updateThreadDraftModelSelection(
-      threadKey,
-      selection,
-      serverConfig?.providers ?? [],
-      selectedThread.modelSelection,
-    );
+  const updateModelSelection = (selection: ModelSelection) => {
+    // FORK: the pick is made against the thread's current selection; a turn started elsewhere
+    // with a different one supersedes it (adoptThreadModelSelection).
+    updateComposerDraftSettings(threadKey, { modelSelectionBasis: selectedThread.modelSelection });
+    selectThreadModel(route.params, selection);
+  };
 
   return (
     <ThreadSettingsPickerScreen

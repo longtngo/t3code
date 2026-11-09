@@ -9,6 +9,7 @@ import * as Dpop from "../features/cloud/dpop";
 import * as ManagedRelayLayer from "../features/cloud/managedRelayLayer";
 import { resolveCloudPublicConfig } from "../features/cloud/publicConfig";
 import * as Tracing from "../features/observability/tracing";
+import * as NativeWebSocket from "../native/nativeWebSocket";
 import * as Persistence from "../persistence/layer";
 import { disposeOnFoundationReplace, type FoundationHotModule } from "./foundation-fast-refresh";
 import { whenProtectedDataAvailable } from "./protectedData";
@@ -38,18 +39,23 @@ const layerWebSocketConstructor = Layer.succeed(Socket.WebSocketConstructor, (ur
   return ws;
 });
 
+// The iOS native socket (T3WebSocket) delivers bytes synchronously, so it needs no override.
+// Android, and an iOS dev client without the module, get effect's global constructor here,
+// which is the one that needs the arraybuffer override above.
+const layerSocket =
+  NativeWebSocket.layer === Socket.layerWebSocketConstructorGlobal
+    ? layerWebSocketConstructor
+    : NativeWebSocket.layer;
+
 type RuntimeLayerSource =
   | ReturnType<typeof ManagedRelayLayer.layer>
-  | typeof layerWebSocketConstructor
+  | typeof layerSocket
   | typeof Dpop.layer
   | typeof layerHttpClient
   | typeof Persistence.layer
   | typeof Tracing.layer;
 
-const layerRuntime = Layer.merge(
-  ManagedRelayLayer.layer(configuredRelayUrl()),
-  layerWebSocketConstructor,
-).pipe(
+const layerRuntime = Layer.merge(ManagedRelayLayer.layer(configuredRelayUrl()), layerSocket).pipe(
   Layer.provideMerge(Dpop.layer),
   Layer.provideMerge(layerHttpClient),
   Layer.provideMerge(Tracing.layer.pipe(Layer.provide(layerHttpClient))),

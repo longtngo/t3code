@@ -1414,6 +1414,46 @@ describe("composerDraftStore modelSelection", () => {
     resetComposerDraftStore();
   });
 
+  it.each(["consecutive model", "consecutive options", "returning model"] as const)(
+    "releases only the latest accepted pick after %s picks",
+    (kind) => {
+      const store = useComposerDraftStore.getState();
+      store.setPrompt(threadRef, "keep this follow-up");
+      const select = () => {
+        if (kind === "consecutive options") {
+          store.setProviderModelOptions(
+            threadRef,
+            CODEX_DRIVER,
+            toSelections({ reasoningEffort: "high" }),
+            { instanceId: CODEX_INSTANCE, model: "gpt-5.5" },
+          );
+        } else {
+          store.setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.5"), {
+            explicit: true,
+          });
+        }
+      };
+      select();
+      const first = draftFor(threadId, TEST_ENVIRONMENT_ID)!.modelSelectionByProvider[
+        CODEX_INSTANCE
+      ]!;
+      if (kind === "returning model") {
+        store.setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.4"), {
+          explicit: true,
+        });
+      }
+      select();
+      const latest = draftFor(threadId, TEST_ENVIRONMENT_ID)!;
+
+      store.releaseModelSelection(threadRef, first);
+      expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBe(latest);
+      store.releaseModelSelection(threadRef, latest.modelSelectionByProvider[CODEX_INSTANCE]!);
+      expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionExplicit).toBeUndefined();
+      expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider).toEqual({});
+      expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("keep this follow-up");
+    },
+  );
+
   it("marks picker writes explicit and seeding writes non-explicit", () => {
     const store = useComposerDraftStore.getState();
     store.setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.4"));
@@ -2113,6 +2153,23 @@ describe("composerDraftStore adoptThreadModelSelection", () => {
       await useComposerDraftStore.persist.clearStorage();
       vi.useRealTimers();
     }
+  });
+
+  // Upstream's accepted-pick release must not leave the fork's basis behind on a cleared pick.
+  it("releasing an accepted pick also drops its basis", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "keep this follow-up");
+    store.setModelSelection(threadRef, personal, { explicit: true, basis: work });
+    const pick = draftFor(threadId, TEST_ENVIRONMENT_ID)!.modelSelectionByProvider[
+      personal.instanceId
+    ]!;
+
+    store.releaseModelSelection(threadRef, pick);
+
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.modelSelectionByProvider).toEqual({});
+    expect(draft?.modelSelectionBasis).toBeUndefined();
+    expect(draft?.prompt).toBe("keep this follow-up");
   });
 
   it("is a no-op when nothing changed, so the effect that calls it cannot loop", () => {
