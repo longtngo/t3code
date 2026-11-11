@@ -172,7 +172,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 90 entries, ids 1-90, unique and monotonic. Upstream's v2 schema
+Current: 91 entries, ids 1-91, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
@@ -183,7 +183,9 @@ Current: 90 entries, ids 1-90, unique and monotonic. Upstream's v2 schema
 `069_ThreadMessageSearch` is **78**, `070_PeerLinks` is **79**, `071_PeerLinkFence` is **80**,
 `072_WaitingLinkRequestIndex` is **81**, and upstream's `073`-`080` are **82**-**89** (a flat +9;
 `076_ProjectionProjectsPinArchive` is **85**). Id **90** is the fork's own `PushSubscriptions`
-repair, so upstream's next migration (`081`) takes **91** (a flat +10).
+repair, so upstream's `081_ProjectionMessageSearchText` is **91** (a flat +10) and its next
+migration (`082`) takes **92**. Upstream's `hasPendingMigrations` also counts V2-preview rows for
+its preview reconciliation; the fork drops that clause (it would report pending forever).
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
 upstream's `reconcileV2PreviewMigration` stays out.
@@ -194,7 +196,7 @@ report the database's history as divergent. Id `90` registers it a third time, f
 whose history an upstream build started (it recorded upstream's names at 33-37, so the fork's two
 were skipped and the table never existed). Upstream's "registers every migration file" test
 (`Migrations.test.ts`) therefore compares distinct names here, not entries.
-Upstream's `scripts/build-npm-launcher.ts` reads the head migration from file names (80, not 90);
+Upstream's `scripts/build-npm-launcher.ts` reads the head migration from file names (81, not 91);
 the fork does not publish the npm launcher, so it is left alone.
 
 The manifest is a list of **positional tuples** (`[1, "OrchestrationEvents", Migration0001]`), not
@@ -207,7 +209,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -cE '^\s*\[(34|90), "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `90 90 ok` and `2`.
+Expect `91 91 ok` and `2`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -230,14 +232,15 @@ Upstream's Expo 58 upgrade (#12045) deleted its own `expo-modules-core@57.0.14` 
 `apps/mobile/scripts/permissions-service.test.ts` and `notification-center-manager.test.ts`. Upstream
 CI does not run them on macOS, so they went red only here. Measured at the 43rd reconcile:
 
-The entries are keyed `expo-modules-core@58.0.22` and `expo-notifications@58.1.5`. Since the 51st
-reconcile upstream patches `expo-modules-core@58.0.22` itself (an Android `ExpoView.kt` fix, #22343),
+The entries are keyed `expo-modules-core@58.0.30` and `expo-notifications@58.1.8`. Since the 51st
+reconcile upstream patches `expo-modules-core` itself (an Android `ExpoView.kt` fix, #22343),
 and pnpm takes one patch per version, so the fork's iOS hunk is the second half of
-`patches/expo-modules-core@58.0.22.patch`. A bump that replaces that file with upstream's drops the
+`patches/expo-modules-core@58.0.30.patch` (the 58th reconcile followed upstream's rename from
+58.0.22; the 58.1.8 iOS sources of expo-notifications are byte-identical to 58.1.5). A bump that replaces that file with upstream's drops the
 fork half with nothing failing except `permissions-service.test.ts`. The notifications entry still
 points at `patches/expo-notifications@58.0.11.patch`.
 
-- `expo-modules-core@58.0.22` still has the unsynchronized permissions registry (ThreadSanitizer
+- `expo-modules-core@58.0.30` still has the unsynchronized permissions registry (ThreadSanitizer
   race) in `EXPermissionsService.m`.
 - `expo-notifications@58.0.11` added its own `Mutex` registry but still clears every pending
   response after a replay and records a response as pending only after no delegate handled it.

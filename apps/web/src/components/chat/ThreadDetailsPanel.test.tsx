@@ -62,6 +62,7 @@ function panelProps(overrides: Partial<ThreadDetailsPanelProps> = {}): ThreadDet
     availableEditors: [],
     showOpenInPicker: false,
     gitCwd: "/tmp/thread-details-project",
+    workspaceMutationId: null,
     isGitRepo: false,
     envLocked: false,
     availableEnvironments: [],

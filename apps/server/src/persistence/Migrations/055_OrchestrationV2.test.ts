@@ -13,8 +13,8 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        // Fork ids: upstream's 055-080 apply as 64-89, then 90 is the Web Push repair (registry section 1).
-        Array.from({ length: 90 }, (_, index) => index + 1),
+        // Fork ids: upstream's 055-080 apply as 64-89, then 90 is the Web Push repair and upstream's 081 is 91 (registry section 1).
+        Array.from({ length: 91 }, (_, index) => index + 1),
       );
     }),
   );
@@ -54,6 +54,7 @@ layer("055_OrchestrationV2", (it) => {
         [88, "DelegatedRecoveryIndexes"],
         [89, "ScheduledTaskThreadMode"],
         [90, "PushSubscriptions"],
+        [91, "ProjectionMessageSearchText"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -101,6 +102,7 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 88, name: "DelegatedRecoveryIndexes" },
         { migration_id: 89, name: "ScheduledTaskThreadMode" },
         { migration_id: 90, name: "PushSubscriptions" },
+        { migration_id: 91, name: "ProjectionMessageSearchText" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

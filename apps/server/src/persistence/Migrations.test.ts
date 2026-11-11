@@ -219,7 +219,7 @@ describe("runMigrations", () => {
       `;
 
       assert.deepStrictEqual(
-        (yield* runMigrations()).map(([id]) => id),
+        (yield* runMigrations({ toMigrationInclusive: 90 })).map(([id]) => id),
         [90],
       );
 

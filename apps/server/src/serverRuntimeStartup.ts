@@ -10,6 +10,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import { formatHostForUrl, isWildcardHost } from "@t3tools/shared/hostClassification";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
@@ -58,8 +59,6 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   formatHeadlessOpenAccessOutput,
   formatHeadlessServeOutput,
-  formatHostForUrl,
-  isWildcardHost,
   issueHeadlessServeAccessInfo,
   resolveHeadlessConnectionInfo,
 } from "./startupAccess.ts";

@@ -191,6 +191,9 @@ import Migration0088 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
 // Upstream's 080 (scheduled task thread mode) arrives after the fork already deployed ids
 // 33-88, so it takes the next free id (89) rather than its filename number (registry section 1).
 import Migration0089 from "./Migrations/080_ScheduledTaskThreadMode.ts";
+// Upstream's 081 (projection message search text) arrives after the fork already deployed ids
+// 33-90, so it takes the next free id (91) rather than its filename number (registry section 1).
+import Migration0091 from "./Migrations/081_ProjectionMessageSearchText.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -287,6 +290,7 @@ export const migrationEntries = [
   [89, "ScheduledTaskThreadMode", Migration0089],
   // Re-registered for databases whose history an upstream build started, which skipped ids 34/37.
   [90, "PushSubscriptions", Migration0037],
+  [91, "ProjectionMessageSearchText", Migration0091],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -334,6 +338,23 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
     kind: "BadState",
     message: `This database's migration history would skip required schema migrations: ${skipped.join(", ")}. The migrator skips every id up to the highest recorded id (${latestRecordedId}), regardless of name. It was probably written by a different build. Start the build that wrote it, or report this migration history so an upgrade path can be added.`,
   });
+});
+
+const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
+
+// Mirrors the Migrator, which runs only ids above the highest recorded. Upstream also counts
+// V2-preview rows (ids 53/54) for its reconcileV2PreviewMigration; the fork does not take that
+// reconciliation (registry section 1), so those rows would never be resolved.
+export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (tables.length === 0) return true;
+  const rows = yield* sql<{ readonly latestId: number | null }>`
+    SELECT MAX(migration_id) AS latestId FROM effect_sql_migrations
+  `;
+  return (rows[0]?.latestId ?? 0) < latestMigrationId;
 });
 
 const run = Migrator.make({});

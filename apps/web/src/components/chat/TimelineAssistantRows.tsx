@@ -37,7 +37,8 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
     row.projectedItem?.item.id,
   );
   const text = liveText ?? row.message.text;
-  const streamedText = text || (row.message.streaming ? "" : "(empty response)");
+  const streamedText =
+    text || (row.message.streaming || row.suppressEmptyResponse ? "" : "(empty response)");
   // FORK: ChatMarkdown is memoized on its props, so holding `text` steady between
   // commits is what actually skips the re-parse.
   const messageText = useStreamingMarkdownText(streamedText, Boolean(row.message.streaming));
@@ -56,6 +57,7 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
           >
             <ChatMarkdown
               text={messageText}
+              renderInsights
               cwd={ctx.markdownCwd}
               threadRef={ctx.threadRef ?? undefined}
               isStreaming={Boolean(row.message.streaming)}
