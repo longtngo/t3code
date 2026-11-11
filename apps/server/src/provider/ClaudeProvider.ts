@@ -687,8 +687,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const customApiEndpoint = customClaudeApiEndpointHost(baseUrl) !== undefined;
   if (!customApiEndpoint && claudeAuthStatus(capabilities) === "unauthenticated") {
     const path = yield* Path.Path;
-    const configDir = (yield* makeClaudeEnvironment(claudeSettings, resolvedEnvironment))
-      .CLAUDE_CONFIG_DIR;
+    const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, resolvedEnvironment);
+    const configDir = claudeEnvironment.CLAUDE_CONFIG_DIR;
+    // FORK (invariant 40): `homePath` sets HOME, so the login lives under that HOME.
+    const home = claudeSettings.homePath.trim() ? claudeEnvironment.HOME : undefined;
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
       enabled: claudeSettings.enabled,
@@ -703,9 +705,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         status: "error",
         auth: { status: "unauthenticated" },
         message:
-          configDir === undefined
+          configDir === undefined && home === undefined
             ? "Claude Code is not authenticated. Run `claude auth login` and try again."
-            : claudeSignedOutMessage({ configDir, cwd: path.resolve(cwd ?? ".") }),
+            : claudeSignedOutMessage({ configDir, home, cwd: path.resolve(cwd ?? ".") }),
       },
     });
   }

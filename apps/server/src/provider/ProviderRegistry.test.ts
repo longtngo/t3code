@@ -3369,28 +3369,39 @@ it.layer(
     it.effect.each([
       {
         name: "its own config dir",
+        homePath: "",
         configDirPath: "/srv/claude-personal",
         environment: { ANTHROPIC_BASE_URL: "" },
         configDir: "/srv/claude-personal",
       },
       {
+        name: "its own home path",
+        homePath: "/srv/claude-home",
+        configDirPath: "",
+        environment: { ANTHROPIC_BASE_URL: "" },
+        configDir: undefined,
+        home: "/srv/claude-home",
+      },
+      {
         name: "a scrubbed inherited CLAUDE_CONFIG_DIR",
+        homePath: "",
         configDirPath: "",
         environment: { ANTHROPIC_BASE_URL: "", CLAUDE_CONFIG_DIR: "/srv/claude-work" },
         configDir: undefined,
       },
       {
         name: "the default config dir",
+        homePath: "",
         configDirPath: "",
         environment: { ANTHROPIC_BASE_URL: "" },
         configDir: undefined,
       },
     ])(
       "tells a logged-out instance on $name where to sign in",
-      ({ configDirPath, environment, configDir }) =>
+      ({ homePath, configDirPath, environment, configDir, ...rest }) =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
-            { ...defaultClaudeSettings, configDirPath },
+            { ...defaultClaudeSettings, homePath, configDirPath },
             claudeCapabilities({
               tokenSource: "none",
               apiKeySource: "none",
@@ -3399,7 +3410,14 @@ it.layer(
             environment,
           );
           assert.strictEqual(status.auth.status, "unauthenticated");
-          if (configDir === undefined) {
+          const home = "home" in rest ? rest.home : undefined;
+          if (home !== undefined) {
+            // FORK: a `homePath` instance signs in under that HOME, not the server's.
+            assert.include(
+              status.message ?? "",
+              `HOME set to ${JSON.stringify((yield* Path.Path).resolve(home))}`,
+            );
+          } else if (configDir === undefined) {
             assert.strictEqual(
               status.message,
               "Claude Code is not authenticated. Run `claude auth login` and try again.",

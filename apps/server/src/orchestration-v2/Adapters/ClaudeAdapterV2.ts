@@ -9326,6 +9326,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               if (message.error === "authentication_failed") {
                 context.authenticationFailureMessage = claudeSignedOutMessage({
                   configDir: adapterOptions.environment.CLAUDE_CONFIG_DIR,
+                  home: adapterOptions.settings.homePath.trim()
+                    ? adapterOptions.environment.HOME
+                    : undefined,
                   cwd: path.resolve(context.input.runtimePolicy.cwd ?? "."),
                 });
               }

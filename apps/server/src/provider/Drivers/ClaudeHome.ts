@@ -182,11 +182,15 @@ export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesC
 /** Separate spawn env from login commands to preserve literal paths, including relative inherited values. */
 export const claudeSignedOutMessage = (input: {
   readonly configDir: string | undefined;
+  /** FORK: the HOME a `homePath` instance runs under; its login lives in `<home>/.claude`. */
+  readonly home?: string | undefined;
   readonly cwd: string;
 }): string => {
   const configuration =
     input.configDir !== undefined
       ? ` from ${quotePath(input.cwd)}, with CLAUDE_CONFIG_DIR set to ${quotePath(input.configDir)}`
-      : "";
+      : input.home !== undefined
+        ? ` from ${quotePath(input.cwd)}, with HOME set to ${quotePath(input.home)}`
+        : "";
   return `Claude could not authenticate. For subscription login, run \`claude auth login\` on this environment's machine${configuration}, then start a new thread. For API-key authentication, check this instance's configured credentials.`;
 };
