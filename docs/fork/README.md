@@ -505,6 +505,9 @@ unchanged.
   and presses in the next 10 s are no-ops (later ones re-send hard, never cooperative). The
   armed look comes from `stopRungAt`, the same clock as `nextStopAction`, so it appears at
   500 ms, not 0. Mobile shows the same rungs with an octagon icon.
+- The collapsed phone composer keeps the fork's Stop beside the vitals gauge and Send, because
+  it runs the ladder. Upstream's `CollapsedComposerStopAction` (#29959, 59th reconcile) has no
+  rungs, so it is left unmounted (only its own browser test renders it); do not mount it.
 
 ### 8. RETIRED with V1: the interrupt reactor's live-session gate
 
@@ -1462,10 +1465,11 @@ looks the handler up by tag. A new fork RPC goes in both the fork group and the 
 `git worktree prune` is repo-global: it drops every registration whose directory is absent right
 now (an unmounted volume, a worktree mid-move), and `repair` cannot restore them. The fork
 recreates a deleted thread worktree with `createWorktree({ ..., reuseRegisteredPath: true })`,
-which takes over that one stale entry. Three calls: two in `workspace/restoreMissingWorktree.ts` (upstream's #24156 moved turn start's
-recreation there, with a prune, in the 59th reconcile; turn start and terminals share it) and one
-in `CheckpointRollbackService.ts`. Upstream's #15208 (49th reconcile) added the rollback site with a
-prune in front, which merged without a conflict. Probe, expect `0` and `3`:
+which takes over that one stale entry. Four calls: three in `workspace/restoreMissingWorktree.ts` (local branch, pushed branch, base ref;
+upstream's #24156 moved turn start's recreation there, with a prune, in the 59th reconcile; turn
+start and terminals share it) and one in
+`CheckpointRollbackService.ts`. Upstream's #15208 (49th reconcile) added the rollback site with a
+prune in front, which merged without a conflict. Probe, expect `0` and `4`:
 
 ```sh
 git grep -n 'pruneWorktrees' -- apps/server/src/orchestration-v2 apps/server/src/workspace | grep -v -e '\.test\.' -e testkit | wc -l

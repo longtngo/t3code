@@ -92,6 +92,8 @@ function makeMissingWorktreeHarness(
     readonly worktreePath?: string;
     readonly realPaths?: Record<string, string> | undefined;
     readonly createWorktree?: Effect.Effect<unknown, GitCommandError>;
+    /** Local branches; leave out the thread branch to take the pushed-branch path. */
+    readonly localBranchNames?: ReadonlyArray<string>;
   } = {},
 ) {
   const worktreePath = input.worktreePath ?? `${managedWorktreesDir}/project/feature-restore`;
@@ -150,7 +152,13 @@ function makeMissingWorktreeHarness(
   const createWorktree = vi.fn(
     () => (input.createWorktree ?? Effect.succeed({})) as Effect.Effect<never, GitCommandError>,
   );
-  const listLocalBranchNames = vi.fn(() => Effect.succeed(["feature/restore"]));
+  const listLocalBranchNames = vi.fn(() =>
+    Effect.succeed([...(input.localBranchNames ?? ["feature/restore"])]),
+  );
+  const resolvePrimaryRemoteName = vi.fn(() => Effect.succeed("origin"));
+  const hasCommit = vi.fn((input: { readonly refName: string }) =>
+    Effect.succeed(input.refName === "refs/remotes/origin/feature/restore"),
+  );
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -177,6 +185,8 @@ function makeMissingWorktreeHarness(
           pruneWorktrees,
           createWorktree,
           listLocalBranchNames,
+          resolvePrimaryRemoteName,
+          hasCommit,
         }),
         Layer.mock(ProjectService.ProjectService)({
           getById: () =>
@@ -243,6 +253,26 @@ it("recreates a missing thread worktree in place without a repo-wide prune", asy
     expect(harness.createWorktree).toHaveBeenCalledWith({
       cwd: "/tmp/provider-turn-start-project",
       refName: "feature/restore",
+      path: `${managedWorktreesDir}/project/feature-restore`,
+      reuseRegisteredPath: true,
+    });
+  }).pipe(Effect.provide(harness.layer), Effect.runPromise);
+});
+
+it("recreates a missing worktree from its pushed branch over a stale registration", async () => {
+  const harness = makeMissingWorktreeHarness({ localBranchNames: [] });
+
+  await Effect.gen(function* () {
+    yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
+      .start({ threadId: harness.threadId, runId: harness.runId, willRetry: true })
+      .pipe(Effect.flip);
+
+    // Without a prune, only `reuseRegisteredPath` clears a stale registration at this path.
+    expect(harness.pruneWorktrees).not.toHaveBeenCalled();
+    expect(harness.createWorktree).toHaveBeenCalledWith({
+      cwd: "/tmp/provider-turn-start-project",
+      refName: "refs/remotes/origin/feature/restore",
+      newRefName: "feature/restore",
       path: `${managedWorktreesDir}/project/feature-restore`,
       reuseRegisteredPath: true,
     });

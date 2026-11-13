@@ -132,6 +132,7 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
         refName: pushedRef,
         newRefName: branch,
         path: worktreePath,
+        reuseRegisteredPath: true,
       });
       return;
     }
