@@ -1,6 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, EventId, TurnItemId } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -17,10 +16,8 @@ import {
   v2Projection,
   v2ShellSnapshot,
   v2ThreadId,
-  v2ThreadShell,
 } from "../state/orchestrationV2TestFixtures.ts";
 
-import { presentThreadShell } from "../state/models.ts";
 import { applyOrchestrationV2ProjectionEvent } from "../state/orchestrationV2Projection.ts";
 
 const environmentId = EnvironmentId.make("environment-cache-test");
@@ -97,33 +94,6 @@ describe("orchestration cache envelopes", () => {
       snapshot: v2ShellSnapshot,
     });
     expect(decodeStoredShellSnapshotSync(shell).schemaVersion).toBe(3);
-  });
-
-  // FORK: `titleRegenerationFailedAt` is a fork field on the thread shell; a cached shell
-  // that dropped it would hide a failed title regeneration after a cold start.
-  it("keeps a thread shell's title regeneration failure through the shell cache", () => {
-    const shell = decodeStoredShellSnapshotSync(
-      encodeStoredShellSnapshot({
-        schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
-        environmentId,
-        snapshot: {
-          ...v2ShellSnapshot,
-          threads: [{ ...v2ThreadShell, titleRegenerationFailedAt: v2Now }],
-        },
-      }),
-    );
-    const [threadShell] = shell.snapshot.threads;
-
-    expect(
-      threadShell?.titleRegenerationFailedAt == null
-        ? null
-        : DateTime.formatIso(threadShell.titleRegenerationFailedAt),
-    ).toBe("2026-06-20T00:00:00.000Z");
-    expect(
-      threadShell === undefined
-        ? null
-        : presentThreadShell(environmentId, threadShell).titleRegenerationFailedAt,
-    ).toBe("2026-06-20T00:00:00.000Z");
   });
 
   it.effect("discards V1-versioned cache envelopes after a decode failure", () =>

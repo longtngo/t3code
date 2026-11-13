@@ -88,7 +88,7 @@ describe("AddEnvironmentDialog", () => {
     await using _screen = await render(<Owner />);
 
     await openDialogOnSsh();
-    await userEvent.type(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
+    await userEvent.fill(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
     await userEvent.click(
       page.getByRole("dialog").getByRole("button", { name: "Add environment" }),
     );

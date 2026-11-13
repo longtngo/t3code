@@ -45,7 +45,6 @@ import { AnchoredToastProvider, ToastProvider } from "../components/ui/toast";
 import { isElectron } from "../env";
 import { useClientSettings } from "../hooks/useSettings";
 import { useThreadCompletionNotifications } from "../hooks/useThreadCompletionNotifications";
-import { useTitleRegenerationFailureToasts } from "../hooks/useTitleRegenerationFailureToasts";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKeyFromPath,
@@ -64,6 +63,7 @@ import { primaryServerConfigAtom, primaryServerWelcomeAtom } from "../state/serv
 import { readProject } from "../state/entities";
 
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
+import { isChunkLoadError } from "../lib/chunkReloadGuard";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 
 export const Route = createRootRoute({
@@ -204,7 +204,6 @@ function RootRouteBranch() {
       <UseInAnotherAppDialogHost />
       {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
       {primaryEnvironmentAuthenticated ? <ThreadCompletionNotifications /> : null}
-      {primaryEnvironmentAuthenticated ? <TitleRegenerationFailureToasts /> : null}
     </>
   );
   const appShell = (
@@ -257,7 +256,12 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
       <StandalonePageHeader title="Something went wrong." description={message} />
 
       <div className="mt-5 flex flex-wrap gap-2">
-        <Button size="sm" onClick={() => void router.invalidate()}>
+        <Button
+          size="sm"
+          onClick={() =>
+            isChunkLoadError(error) ? window.location.reload() : void router.invalidate()
+          }
+        >
           Try again
         </Button>
         <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
@@ -336,11 +340,6 @@ function errorReport(error: unknown, pathname: string): string {
 
 function ThreadCompletionNotifications() {
   useThreadCompletionNotifications();
-  return null;
-}
-
-function TitleRegenerationFailureToasts() {
-  useTitleRegenerationFailureToasts();
   return null;
 }
 

@@ -53,6 +53,10 @@ function panelProps(overrides: Partial<ThreadDetailsPanelProps> = {}): ThreadDet
     environmentId: "environment:thread-details" as EnvironmentId,
     threadId: "thread:thread-details" as ThreadId,
     projectId: "project:thread-details" as ProjectId,
+    composerDraftTarget: {
+      environmentId: "environment:thread-details" as EnvironmentId,
+      threadId: "thread:thread-details" as ThreadId,
+    },
     worktreePath: null,
     isServerThread: true,
     activeProjectName: undefined,

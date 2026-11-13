@@ -50,9 +50,13 @@ function renderPanel(
   );
 }
 
-/** The scrolling container the options live in, reached through a real option. */
+/**
+ * The scrolling container the options live in, reached through a real option.
+ * Each option button sits in its own wrapper with its preview (the preview can
+ * hold links, so it stays outside the button), so the list is two levels up.
+ */
 function optionsList(view: { find: (selector: string) => HTMLElement | null }) {
-  const list = view.find('[data-option-index="0"]')?.parentElement;
+  const list = view.find('[data-option-index="0"]')?.parentElement?.parentElement;
   expect(list).not.toBeNull();
   return list as HTMLElement;
 }

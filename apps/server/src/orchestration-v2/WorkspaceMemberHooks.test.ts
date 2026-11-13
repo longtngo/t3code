@@ -38,6 +38,7 @@ const TestLayer = WorkspaceMemberHooks.live.pipe(
           Effect.succeedSome({
             projectId,
             title: "Workspace",
+            hasCustomTitle: false,
             workspaceRoot: "/workspace",
             defaultModelSelection: null,
             defaultThreadEnvMode: null,

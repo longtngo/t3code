@@ -385,7 +385,9 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   const chipKind = documentChipKindForFileName(iconPath) ?? "mention";
 
   return (
-    <span className="inline-flex max-w-full items-center align-middle">
+    // Inline-level, not flex: triple-click selection stops at flex items, so a flex wrapper cut the
+    // line at the chip.
+    <span className="inline-block max-w-full whitespace-nowrap align-middle">
       <Tooltip>
         <TooltipTrigger
           render={
@@ -465,7 +467,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
                 render={
                   <button
                     type="button"
-                    className="ml-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent/70 hover:text-foreground"
+                    className="ml-0.5 inline-block size-4 shrink-0 rounded-sm p-0.5 align-middle leading-3 text-muted-foreground/70 hover:bg-accent/70 hover:text-foreground"
                     aria-label={`View options for ${basename}`}
                     onClick={(event) => event.stopPropagation()}
                   />
@@ -473,7 +475,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
               />
             }
           >
-            <ChevronDownIcon className="size-3" />
+            <ChevronDownIcon className="inline size-3 align-top" />
           </TooltipTrigger>
           <TooltipPopup side="top">{`View options for ${basename}`}</TooltipPopup>
         </Tooltip>

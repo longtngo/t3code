@@ -83,6 +83,7 @@ interface ComposerPrimaryActionsProps {
    */
   stopRung?: StopRung;
   compactBeforeSendTokens?: number | null;
+  hideCompactToggle?: boolean;
   keepFullHistory?: boolean;
   onToggleKeepFullHistory?: () => void;
 }
@@ -106,6 +107,8 @@ const formatPendingPrimaryActionLabel = (input: {
 };
 
 const STOP_PENDING_MAX_MS = 10_000;
+// The action that takes Stop's place ignores clicks this long, so repeat Stop clicks can't resume.
+const STOP_LANDED_CLICK_GUARD_MS = 500;
 
 const messageActionPillClassName =
   "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-message-action font-medium text-base text-message-action-foreground shadow-xs shadow-message-action/24 outline-none hover:bg-message-action-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 disabled:shadow-none sm:text-sm";
@@ -113,6 +116,163 @@ const messageActionPillClassName =
 const preventPointerFocus: PointerEventHandler<HTMLElement> = (event) => {
   event.preventDefault();
 };
+
+type StopPhase = "pending" | "timedOut" | "landed" | null;
+
+function useStopPhase(input: {
+  runId: string | null;
+  canInterrupt: boolean;
+  canOperateThread: boolean;
+}) {
+  const { runId, canInterrupt, canOperateThread } = input;
+  const [stopPhase, setStopPhase] = useState<StopPhase>(null);
+  const [stopRunId, setStopRunId] = useState(runId);
+  if (runId !== null && stopRunId !== runId) {
+    setStopRunId(runId);
+    setStopPhase(null);
+  } else if (canOperateThread) {
+    // Losing permission also clears canInterrupt; it does not acknowledge the stop.
+    if ((stopPhase === "pending" || stopPhase === "timedOut") && !canInterrupt)
+      setStopPhase("landed");
+    else if (stopPhase === "landed" && canInterrupt) setStopPhase(null);
+  }
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- timers that re-enable an unsettled Stop and end the landed click guard
+  useEffect(() => {
+    if (stopPhase === "pending") {
+      const timeout = setTimeout(() => setStopPhase("timedOut"), STOP_PENDING_MAX_MS);
+      return () => clearTimeout(timeout);
+    }
+    if (stopPhase === "landed") {
+      const timeout = setTimeout(() => setStopPhase(null), STOP_LANDED_CLICK_GUARD_MS);
+      return () => clearTimeout(timeout);
+    }
+  }, [stopPhase]);
+  return [stopPhase, setStopPhase] as const;
+}
+
+function StopGenerationButton({
+  stopPhase,
+  canOperateThread,
+  insidePendingAction,
+  preserveComposerFocusOnPointerDown,
+  onStopRequested,
+  onInterrupt,
+  stopRung = "idle",
+}: {
+  stopPhase: StopPhase;
+  canOperateThread: boolean;
+  insidePendingAction: boolean;
+  preserveComposerFocusOnPointerDown: boolean;
+  onStopRequested: () => void;
+  onInterrupt: () => void;
+  /** FORK Stop ladder (invariant 7); see `ComposerPrimaryActionsProps.stopRung`. */
+  stopRung?: StopRung;
+}) {
+  const isStopEscalated = stopRung !== "idle";
+  // FORK (invariant 7): upstream disables Stop from the first press until the turn settles,
+  // which makes the ladder's hard rung unreachable. Disable only until the ladder arms (the
+  // 500 ms band it ignores anyway); an armed or force-stopping rung keeps the button live.
+  const isStopDisabled = stopPhase === "pending" && !isStopEscalated;
+  // The armed rung is told apart by SHAPE (an octagon) and a ring, not colour: the button is
+  // already destructive red at rest. Static on purpose; a pulsing "armed" state is a
+  // continuously repainting animation.
+  const stopLabel =
+    stopRung === "armed"
+      ? "Force stop the provider session"
+      : stopRung === "forceStopping"
+        ? "Force-stopping the provider session"
+        : stopPhase === "pending"
+          ? "Stopping"
+          : "Stop generation";
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            className={cn(
+              "flex shrink-0 cursor-pointer items-center justify-center rounded-full text-white shadow-xs shadow-destructive/24 inset-shadow-control-highlight transition-colors duration-150 hover:bg-destructive active:inset-shadow-control-pressed active:shadow-none disabled:cursor-default disabled:opacity-64 disabled:hover:bg-destructive/90 [&_svg]:pointer-events-none",
+              insidePendingAction ? "size-8 sm:size-7" : "size-8 sm:h-8 sm:w-8",
+              isStopEscalated
+                ? "bg-destructive ring-2 ring-destructive/40 ring-offset-1 ring-offset-background"
+                : "bg-destructive/90",
+            )}
+            onPointerDown={preserveComposerFocusOnPointerDown ? preventPointerFocus : undefined}
+            disabled={!canOperateThread || isStopDisabled}
+            onClick={() => {
+              if (!canOperateThread || isStopDisabled) return;
+              onStopRequested();
+              onInterrupt();
+            }}
+            data-stop-rung={stopRung}
+            aria-label={stopLabel}
+          />
+        }
+      >
+        {isStopEscalated ? (
+          <OctagonXIcon className="size-4" aria-hidden="true" />
+        ) : (
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <rect x="2" y="2" width="8" height="8" rx="1.5" />
+          </svg>
+        )}
+      </TooltipTrigger>
+      <TooltipPopup>
+        {stopRung === "armed"
+          ? "The turn has not stopped yet. Press again to force-stop the provider session"
+          : stopRung === "forceStopping"
+            ? "Force-stopping the provider session"
+            : stopPhase === "pending"
+              ? "Stopping…"
+              : "Interrupt"}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/** The collapsed mobile composer's Stop, shown in place of `children` while a turn can be stopped. */
+export function CollapsedComposerStopAction({
+  children,
+  canOperateThread,
+  canInterrupt,
+  runId,
+  hasSendableContent,
+  isEditingQueuedMessage,
+  onInterrupt,
+}: {
+  children: ReactNode;
+  canOperateThread: boolean;
+  canInterrupt: boolean;
+  runId: string | null;
+  hasSendableContent: boolean;
+  isEditingQueuedMessage: boolean;
+  onInterrupt: () => void;
+}) {
+  const [stopPhase, setStopPhase] = useStopPhase({ runId, canInterrupt, canOperateThread });
+  if (
+    !(canInterrupt || stopPhase === "pending" || stopPhase === "timedOut") ||
+    hasSendableContent ||
+    isEditingQueuedMessage
+  ) {
+    return children;
+  }
+  return (
+    <span
+      data-chat-composer-transition-actions="true"
+      data-chat-composer-collapsed-controls="true"
+      className="flex shrink-0"
+    >
+      <StopGenerationButton
+        stopPhase={stopPhase}
+        canOperateThread={canOperateThread}
+        insidePendingAction={false}
+        preserveComposerFocusOnPointerDown
+        onStopRequested={() => setStopPhase("pending")}
+        onInterrupt={onInterrupt}
+      />
+    </span>
+  );
+}
 
 export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   children,
@@ -142,31 +302,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onInterrupt,
   stopRung = "idle",
   compactBeforeSendTokens = null,
+  hideCompactToggle = false,
   keepFullHistory = false,
   onToggleKeepFullHistory,
 }: ComposerPrimaryActionsProps) {
-  const [stopPhase, setStopPhase] = useState<"pending" | "timedOut" | "landed" | null>(null);
-  const [stopRunId, setStopRunId] = useState(runId);
-  if (runId !== null && stopRunId !== runId) {
-    setStopRunId(runId);
-    setStopPhase(null);
-  } else if (canOperateThread) {
-    // Losing permission also clears canInterrupt; it does not acknowledge the stop.
-    if ((stopPhase === "pending" || stopPhase === "timedOut") && !canInterrupt)
-      setStopPhase("landed");
-    else if (stopPhase === "landed" && canInterrupt) setStopPhase(null);
-  }
-  const isStopEscalated = stopRung !== "idle";
-  // FORK (invariant 7): upstream disables Stop from the first press until the turn settles,
-  // which makes the ladder's hard rung unreachable. Disable only until the ladder arms (the
-  // 500 ms band it ignores anyway); an armed or force-stopping rung keeps the button live.
-  const isStopDisabled = stopPhase === "landed" || (stopPhase === "pending" && !isStopEscalated);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- timer that re-enables Stop if the interrupt never settles
-  useEffect(() => {
-    if (stopPhase !== "pending") return;
-    const timeout = setTimeout(() => setStopPhase("timedOut"), STOP_PENDING_MAX_MS);
-    return () => clearTimeout(timeout);
-  }, [stopPhase]);
+  const [stopPhase, setStopPhase] = useStopPhase({ runId, canInterrupt, canOperateThread });
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
     : undefined;
@@ -184,72 +324,28 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const isSendDisabled = !canOperateThread || sendDisabledReason !== null;
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
 
-  // Both Stop sites render from here, so the armed rung cannot be styled on one
-  // and forgotten on the other. It is told apart by SHAPE (an octagon) and a
-  // ring, not colour: the button is already destructive red at rest. Static on
-  // purpose; a pulsing "armed" state is a continuously repainting animation.
-  const stopLabel =
-    stopRung === "armed"
-      ? "Force stop the provider session"
-      : stopRung === "forceStopping"
-        ? "Force-stopping the provider session"
-        : stopPhase === "landed"
-          ? "Stopped"
-          : stopPhase === "pending"
-            ? "Stopping"
-            : "Stop generation";
+  // Both Stop sites render through StopGenerationButton, so the armed rung cannot be styled on
+  // one and forgotten on the other.
   const renderStopGenerationButton = (insidePendingAction: boolean) => (
-    <Tooltip key="interrupt">
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            className={cn(
-              "flex shrink-0 cursor-pointer items-center justify-center rounded-full text-white shadow-xs shadow-destructive/24 inset-shadow-control-highlight transition-colors duration-150 hover:bg-destructive active:inset-shadow-control-pressed active:shadow-none disabled:cursor-default disabled:opacity-64 disabled:hover:bg-destructive/90 [&_svg]:pointer-events-none",
-              insidePendingAction ? "size-8 sm:size-7" : "size-8 sm:h-8 sm:w-8",
-              isStopEscalated
-                ? "bg-destructive ring-2 ring-destructive/40 ring-offset-1 ring-offset-background"
-                : "bg-destructive/90",
-            )}
-            {...pointerFocusProps}
-            disabled={!canOperateThread || isStopDisabled}
-            onClick={() => {
-              if (!canOperateThread || isStopDisabled) return;
-              setStopPhase("pending");
-              onInterrupt();
-            }}
-            data-stop-rung={stopRung}
-            aria-label={stopLabel}
-          />
-        }
-      >
-        {isStopEscalated ? (
-          <OctagonXIcon className="size-4" aria-hidden="true" />
-        ) : (
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-            <rect x="2" y="2" width="8" height="8" rx="1.5" />
-          </svg>
-        )}
-      </TooltipTrigger>
-      <TooltipPopup>
-        {stopRung === "armed"
-          ? "The turn has not stopped yet. Press again to force-stop the provider session"
-          : stopRung === "forceStopping"
-            ? "Force-stopping the provider session"
-            : stopPhase === "pending"
-              ? "Stopping…"
-              : stopPhase === "landed"
-                ? "Stopped"
-                : "Interrupt"}
-      </TooltipPopup>
-    </Tooltip>
+    <StopGenerationButton
+      key="interrupt"
+      stopPhase={stopPhase}
+      canOperateThread={canOperateThread}
+      insidePendingAction={insidePendingAction}
+      preserveComposerFocusOnPointerDown={preserveComposerFocusOnPointerDown}
+      onStopRequested={() => setStopPhase("pending")}
+      onInterrupt={onInterrupt}
+      stopRung={stopRung}
+    />
   );
 
   // Keep the clicked target at the right edge even if typing changes the primary action.
   const withStopButton = (action: ReactNode) => (
     <>
       {action}
-      {stopPhase === null ? null : renderStopGenerationButton(false)}
+      {stopPhase === "pending" || stopPhase === "timedOut"
+        ? renderStopGenerationButton(false)
+        : null}
     </>
   );
 
@@ -285,6 +381,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           type="submit"
           className={cn(messageActionPillClassName, "h-8 sm:h-7", compact ? "px-3" : "px-4")}
           {...pointerFocusProps}
+          onClick={(event) => {
+            if (stopPhase === "landed") event.preventDefault();
+          }}
           disabled={
             !canOperateThread ||
             isEnvironmentUnavailable ||
@@ -304,7 +403,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             questionIndex: pendingAction.questionIndex,
           })}
         </button>
-        {canInterrupt || stopPhase !== null ? renderStopGenerationButton(true) : null}
+        {canInterrupt || stopPhase === "pending" || stopPhase === "timedOut"
+          ? renderStopGenerationButton(true)
+          : null}
       </div>
     );
   }
@@ -371,7 +472,14 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           : "bg-message-action text-message-action-foreground enabled:shadow-message-action/24 hover:bg-message-action-hover disabled:bg-foreground/12 disabled:text-muted-foreground",
       )}
       {...pointerFocusProps}
-      onClick={showResume ? onResume : onSubmitMessage}
+      onClick={(event) => {
+        if (stopPhase === "landed") {
+          event.preventDefault();
+          return;
+        }
+        if (showResume) onResume?.();
+        else onSubmitMessage?.(event);
+      }}
       // FORK (inv 4b): checks `isSendBlocked`, not `isEnvironmentUnavailable`: a
       // disconnected environment leaves Send live so the message is queued for
       // reconnect instead of being swallowed by a dead button.
@@ -423,7 +531,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       <TooltipPopup>{submitTooltip}</TooltipPopup>
     </Tooltip>
   );
-  if (compactTokens === null) {
+  if (compactTokens === null || hideCompactToggle) {
     return withStopButton(
       <>
         {children}

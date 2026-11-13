@@ -13,8 +13,8 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        // Fork ids: upstream's 055-080 apply as 64-89, then 90 is the Web Push repair and upstream's 081 is 91 (registry section 1).
-        Array.from({ length: 91 }, (_, index) => index + 1),
+        // Fork ids: upstream's 055-080 apply as 64-89, then 90 is the Web Push repair and upstream's 081-089 are 91-99 (registry section 1).
+        Array.from({ length: 99 }, (_, index) => index + 1),
       );
     }),
   );
@@ -55,6 +55,14 @@ layer("055_OrchestrationV2", (it) => {
         [89, "ScheduledTaskThreadMode"],
         [90, "PushSubscriptions"],
         [91, "ProjectionMessageSearchText"],
+        [92, "TurnItemConversationIndex"],
+        [93, "CommandReadIndexes"],
+        [94, "LastExecutedRunIndex"],
+        [95, "TurnItemCounts"],
+        [96, "QueuedTurnInputIndex"],
+        [97, "ProjectionProjectsCustomTitle"],
+        [98, "TurnItemTypeStatusIndex"],
+        [99, "ShellThreadReadIndexes"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -103,6 +111,14 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 89, name: "ScheduledTaskThreadMode" },
         { migration_id: 90, name: "PushSubscriptions" },
         { migration_id: 91, name: "ProjectionMessageSearchText" },
+        { migration_id: 92, name: "TurnItemConversationIndex" },
+        { migration_id: 93, name: "CommandReadIndexes" },
+        { migration_id: 94, name: "LastExecutedRunIndex" },
+        { migration_id: 95, name: "TurnItemCounts" },
+        { migration_id: 96, name: "QueuedTurnInputIndex" },
+        { migration_id: 97, name: "ProjectionProjectsCustomTitle" },
+        { migration_id: 98, name: "TurnItemTypeStatusIndex" },
+        { migration_id: 99, name: "ShellThreadReadIndexes" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

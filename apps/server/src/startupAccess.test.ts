@@ -1,10 +1,12 @@
 import type * as NodeOS from "node:os";
 
 import { describe, expect, it } from "@effect/vitest";
+import * as NetAddress from "effect/net/NetAddress";
 
 import {
   acceptsPrivateNetworkConnection,
   formatHeadlessOpenAccessOutput,
+  loopbackUrlHostForAddress,
   resolveHeadlessConnectionString,
 } from "./startupAccess.ts";
 
@@ -63,6 +65,18 @@ it("formats open-access headless output without a token and with a warning", () 
   expect(output).toContain("Authentication is DISABLED");
   expect(output).not.toContain("Token:");
   expect(output).not.toContain("Pairing URL:");
+});
+
+it("targets the bound interface when the listener binds a specific address", () => {
+  const hostFor = (ip: string) =>
+    loopbackUrlHostForAddress(NetAddress.inetAddressFromIpStringUnsafe(ip, 3773));
+
+  expect(hostFor("0.0.0.0")).toBe("127.0.0.1");
+  expect(hostFor("::")).toBe("127.0.0.1");
+  expect(hostFor("::1")).toBe("[::1]");
+  expect(hostFor("127.0.0.1")).toBe("127.0.0.1");
+  expect(hostFor("127.0.0.2")).toBe("127.0.0.2");
+  expect(hostFor("100.101.102.103")).toBe("100.101.102.103");
 });
 
 describe("acceptsPrivateNetworkConnection", () => {

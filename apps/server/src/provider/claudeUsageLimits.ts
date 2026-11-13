@@ -37,8 +37,20 @@ export const makeClaudeScopedLimitNames = Ref.make<ClaudeScopedLimitNames>({
   overageIncluded: undefined,
 });
 
+const SCOPED_WINDOW_PREFIX = "seven_day_";
+const scopeToken = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+
 function scopedWindowId(displayName: string): string {
-  return `seven_day_${displayName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+  return `${SCOPED_WINDOW_PREFIX}${scopeToken(displayName)}`;
+}
+
+/** A model-scoped weekly allowance blocks only its own model; an unknown model is not blocked. */
+export function windowLimitsModel(
+  window: Pick<ServerProviderUsageWindow, "id">,
+  model: string | null,
+): boolean {
+  if (!window.id.startsWith(SCOPED_WINDOW_PREFIX)) return true;
+  return model !== null && scopeToken(model).includes(window.id.slice(SCOPED_WINDOW_PREFIX.length));
 }
 
 function scopedWindow(
@@ -181,8 +193,15 @@ export function claudeUsageResponseToLimits(input: {
     overageIncluded ??= entry.display_name;
   }
   const spend = readSpend(response.rate_limits);
+  // Upstream's flag for a $0 monthly cap; the fork's `spend` is absent for that case
+  // (no spend, no limit), so the two never describe the same thing twice.
+  const extra = response.rate_limits.extra_usage;
   return {
-    limits: { ...makeUsageLimits({ checkedAt, windows }), ...(spend ? { spend } : {}) },
+    limits: {
+      ...makeUsageLimits({ checkedAt, windows }),
+      ...(spend ? { spend } : {}),
+      ...(extra?.is_enabled && extra.monthly_limit === 0 ? { zeroSpendCap: true } : {}),
+    },
     names: { overageIncluded },
   };
 }

@@ -5,12 +5,30 @@ import { CommandAvailability, WindowsShellEnvironment } from "@t3tools/shared/sh
 import * as Effect from "effect/Effect";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Observe the existing synchronous shell probe without launching the user's login shell.
 import * as NodeChildProcess from "node:child_process";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the PATH cache under HOME is written synchronously by os-jank.
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
-import { assert, it, vi } from "vite-plus/test";
+import { afterEach, assert, beforeEach, it, vi } from "vite-plus/test";
 
 import { fixPath, hydratePosixHome } from "./os-jank.ts";
 
 vi.mock("node:child_process", { spy: true });
+
+// The fork caches the last good PATH at $HOME/.t3/last-good-path and falls back to it when every
+// login shell fails. Without a private HOME these mocks overwrite the real server's cache.
+let originalHome: string | undefined;
+let testHome: string;
+beforeEach(() => {
+  originalHome = process.env.HOME;
+  testHome = NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/os-jank-home-`);
+  NodeFS.mkdirSync(`${testHome}/.t3`);
+  process.env.HOME = testHome;
+});
+afterEach(() => {
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  NodeFS.rmSync(testHome, { recursive: true, force: true });
+});
 
 it("hydrates HOME independently of a blank process HOME", () => {
   const originalHome = process.env.HOME;
@@ -59,6 +77,65 @@ effectIt.effect("hydrates PATH when the desktop handoff is absent", () =>
 
         assert.equal(probe.mock.calls.length, 1);
         assert.equal(env.PATH, "/opt/tools/bin:/usr/bin");
+      }),
+    (probe) => Effect.sync(() => probe.mockRestore()),
+  ),
+);
+
+const timedOut = (file: string) =>
+  Object.assign(new Error(`spawnSync ${file} ETIMEDOUT`), { code: "ETIMEDOUT" });
+
+effectIt.effect("waits longer for a login shell that times out at startup", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() =>
+      vi.spyOn(NodeChildProcess, "execFileSync").mockImplementation((file, _args, options) => {
+        // This profile takes 8 seconds while the machine is under load.
+        if ((options?.timeout ?? 0) < 8_000) throw timedOut(String(file));
+        return "__T3CODE_ENV_PATH_START__\n/opt/tools/bin\n__T3CODE_ENV_PATH_END__\n";
+      }),
+    ),
+    () =>
+      Effect.gen(function* () {
+        const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+
+        yield* fixPath().pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, env),
+          Effect.provide(NodeServices.layer),
+        );
+
+        assert.equal(env.PATH, "/opt/tools/bin:/usr/bin");
+      }),
+    (probe) => Effect.sync(() => probe.mockRestore()),
+  ),
+);
+
+effectIt.effect("waits longer for only one hung login shell", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() =>
+      vi.spyOn(NodeChildProcess, "execFileSync").mockImplementation((file) => {
+        throw timedOut(String(file));
+      }),
+    ),
+    (probe) =>
+      Effect.gen(function* () {
+        const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+        NodeFS.writeFileSync(`${testHome}/.t3/last-good-path`, "/cached/bin:/usr/bin");
+
+        yield* fixPath().pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, env),
+          Effect.provide(NodeServices.layer),
+        );
+
+        const timeouts = probe.mock.calls.map(([, , options]) => options?.timeout);
+        assert.equal(timeouts.filter((timeout) => (timeout ?? 0) > 5_000).length, 1);
+        // Fork: with every shell failed, the last good PATH is used, and not rewritten.
+        assert.equal(env.PATH, "/cached/bin:/usr/bin");
+        assert.equal(
+          NodeFS.readFileSync(`${testHome}/.t3/last-good-path`, "utf8"),
+          "/cached/bin:/usr/bin",
+        );
       }),
     (probe) => Effect.sync(() => probe.mockRestore()),
   ),

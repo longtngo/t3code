@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Redacted from "effect/Redacted";
 import * as Tracer from "effect/Tracer";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -220,17 +221,15 @@ describe("GitHub folder account lookup against real git", () => {
       const other = yield* makeRepo("other", () => "echo username=bob; echo password=b");
       vi.stubEnv("GIT_DIR", NodePath.join(other.dir, ".git"));
       expect(yield* resolve(x.dir)).toMatchObject({ source: "folder", account: "alice" });
-      // Control: the same fill with GIT_DIR inherited is answered by the other repo.
-      const process = yield* VcsProcess.VcsProcess;
-      const inherited = yield* process.run({
-        operation: "control",
-        command: "git",
-        args: ["-C", x.dir, "credential", "fill"],
+      // Control: the same fill with GIT_DIR inherited is answered by the other repo. A raw spawn,
+      // because VcsProcess itself now unsets inherited repository selectors.
+      const inherited = NodeChildProcess.execFileSync("git", ["-C", x.dir, "credential", "fill"], {
         cwd: x.dir,
-        stdin: "protocol=https\nhost=github.com\n\n",
-        env: GIT_REMOTE_PROMPT_ENV,
+        input: "protocol=https\nhost=github.com\n\n",
+        env: { ...process.env, ...GIT_REMOTE_PROMPT_ENV },
+        encoding: "utf8",
       });
-      expect(inherited.stdout).toContain("username=bob");
+      expect(inherited).toContain("username=bob");
     }).pipe(Effect.provide(testLayer)),
   );
 });

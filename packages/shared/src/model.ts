@@ -116,6 +116,24 @@ export function modelSelectionsEqual(left: ModelSelection, right: ModelSelection
   );
 }
 
+/** Cursor ACP can default Fast to true; T3 requires a user selection. */
+export function withImplicitFastModeDefault(
+  caps: ModelCapabilities,
+  modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+): ReadonlyArray<ProviderOptionSelection> | undefined {
+  const hasExplicitFastMode = modelOptions?.some((selection) => selection.id === "fastMode");
+  if (hasExplicitFastMode) {
+    return modelOptions ?? undefined;
+  }
+  const hasFastModeDescriptor = caps.optionDescriptors?.some(
+    (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+  );
+  if (!hasFastModeDescriptor) {
+    return modelOptions ?? undefined;
+  }
+  return [...(modelOptions ?? []), { id: "fastMode", value: false }];
+}
+
 function resolveDescriptorChoiceValue(
   descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
   raw: string | null | undefined,

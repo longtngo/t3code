@@ -11,8 +11,8 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   RunId,
-  ThreadId,
   TextGenerationError,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -26,7 +26,6 @@ import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContex
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -85,6 +84,7 @@ function makeHarness(
               workspaceRoot: "/repo",
               defaultModelSelection: modelSelection,
               defaultThreadEnvMode: null,
+              hasCustomTitle: false,
               autoPull: false,
               faviconPath: null,
               projectIcon: null,
@@ -438,6 +438,10 @@ describe("ThreadTitleRegenerationService", () => {
           const projection = yield* threads.getThreadProjection(threadId);
           assert.equal(projection.thread.title, "Fresh title");
           assert.isNotOk(projection.thread.titleRegeneration);
+          assert.deepInclude(projection.thread.lastTitleRegeneration, {
+            requestId,
+            status: "renamed",
+          });
         }
       }).pipe(Effect.provide(harness.layer));
     }).pipe(Effect.provide(NodeServices.layer)),
@@ -524,7 +528,14 @@ describe("ThreadTitleRegenerationService", () => {
   it.effect("clears the marker and keeps the title when generation fails", () =>
     Effect.gen(function* () {
       const harness = makeHarness({
-        generateTitle: () => Effect.die(new Error("model unavailable")),
+        generateTitle: () =>
+          Effect.fail(
+            new TextGenerationError({
+              operation: "generateThreadTitle",
+              detail:
+                "Codex CLI command failed: OpenAI Codex\nuser\nConversation text\nmodel unavailable\n",
+            }),
+          ),
       });
       yield* Effect.gen(function* () {
         const threads = yield* ThreadManagement.ThreadManagementService;
@@ -546,64 +557,44 @@ describe("ThreadTitleRegenerationService", () => {
         const projection = yield* threads.getThreadProjection(threadId);
         assert.equal(projection.thread.title, "Seed title");
         assert.isNotOk(projection.thread.titleRegeneration);
+        assert.deepInclude(projection.thread.lastTitleRegeneration, {
+          requestId,
+          status: "failed",
+          message: "model unavailable",
+        });
       }).pipe(Effect.provide(harness.layer));
     }),
   );
 
-  // A failed regeneration and one where the model kept the title look the same
-  // (marker cleared, title unchanged), so the failure is recorded on the thread
-  // and its shell for clients to report.
-  it.effect("records a failed regeneration on the thread and clears it on the next success", () =>
+  it.effect("records an unchanged outcome when the model keeps the current title", () =>
     Effect.gen(function* () {
-      let attempts = 0;
       const harness = makeHarness({
-        generateTitle: () => {
-          attempts += 1;
-          return attempts === 1
-            ? Effect.die(new Error("model unavailable"))
-            : Effect.succeed({ title: "Fresh title" });
-        },
+        generateTitle: () => Effect.succeed({ title: "Seed title" }),
       });
       yield* Effect.gen(function* () {
         const threads = yield* ThreadManagement.ThreadManagementService;
         const titleRegeneration = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
         const threadId = yield* createThread({
-          command: "command:title:failed-at:create",
-          thread: "thread:title:failed-at",
+          command: "command:title:unchanged:create",
+          thread: "thread:title:unchanged",
         });
         yield* dispatchUserMessage({
-          command: "command:title:failed-at:message",
+          command: "command:title:unchanged:message",
           threadId,
           text: "Some conversation",
         });
+        const requestId = yield* armRegeneration({
+          command: "command:title:unchanged:1",
+          threadId,
+        });
 
-        const failedRequest = yield* armRegeneration({
-          command: "command:title:failed-at:1",
-          threadId,
-        });
-        yield* titleRegeneration.execute({
-          threadId,
-          requestId: failedRequest,
-          kind: { type: "regenerate" },
-        });
-        const failed = yield* threads.getThreadProjection(threadId);
-        assert.isOk(failed.thread.titleRegenerationFailedAt);
-        assert.isOk((yield* threads.getThreadShell(threadId))?.titleRegenerationFailedAt);
-        assert.isOk(ProjectionStore.threadShellFromProjection(failed).titleRegenerationFailedAt);
+        yield* titleRegeneration.execute({ threadId, requestId, kind: { type: "regenerate" } });
 
-        const retryRequest = yield* armRegeneration({
-          command: "command:title:failed-at:2",
-          threadId,
+        const projection = yield* threads.getThreadProjection(threadId);
+        assert.deepInclude(projection.thread.lastTitleRegeneration, {
+          requestId,
+          status: "unchanged",
         });
-        yield* titleRegeneration.execute({
-          threadId,
-          requestId: retryRequest,
-          kind: { type: "regenerate" },
-        });
-        const recovered = yield* threads.getThreadProjection(threadId);
-        assert.equal(recovered.thread.title, "Fresh title");
-        assert.isNotOk(recovered.thread.titleRegenerationFailedAt);
-        assert.isNotOk((yield* threads.getThreadShell(threadId))?.titleRegenerationFailedAt);
       }).pipe(Effect.provide(harness.layer));
     }),
   );
@@ -672,9 +663,6 @@ it.effect.each(["success", "exhausted", "stale", "interrupted"] as const)(
         if (outcome === "interrupted")
           assert.equal(projection.thread.titleRegeneration?.requestId, requestId);
         else assert.isNotOk(projection.thread.titleRegeneration);
-        // Automatic first-title generation is work the user never asked for,
-        // so even an exhausted retry stays silent.
-        assert.isNotOk(projection.thread.titleRegenerationFailedAt);
       }).pipe(Effect.provide(harness.layer));
     }),
 );

@@ -20,6 +20,7 @@ import { WorkspaceMember, WorkspaceMembers } from "./workspaceMember.ts";
 
 const PROJECT_SEARCH_ENTRIES_MAX_LIMIT = 200;
 const PROJECT_SEARCH_CONTENTS_MAX_LIMIT = 500;
+export const PROJECT_SEARCH_CONTENTS_QUERY_MAX_LENGTH = 256;
 // Linux's PATH_MAX, the largest of the three supported platforms. The former
 // 512 sat below all of them, so a file that exists could not be addressed.
 const PROJECT_WRITE_FILE_PATH_MAX_LENGTH = 4096;
@@ -270,7 +271,10 @@ export type ProjectSearchEntriesResult = typeof ProjectSearchEntriesResult.Type;
 export const ProjectSearchContentsInput = Schema.Struct({
   cwd: FilePathString,
   // Preserve whitespace because it is significant in content queries.
-  query: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
+  query: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(PROJECT_SEARCH_CONTENTS_QUERY_MAX_LENGTH),
+  ),
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_CONTENTS_MAX_LIMIT)),
   caseSensitive: Schema.Boolean,
   wholeWord: Schema.Boolean,
@@ -315,6 +319,8 @@ export type ProjectListEntriesResult = typeof ProjectListEntriesResult.Type;
 // are left out, so the list stays small enough to pick from.
 export const ProjectListIgnoredFilesInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
+  /** Case-insensitive path substring, applied before the listing cap. */
+  query: Schema.optionalKey(TrimmedString.check(Schema.isMaxLength(256))),
 });
 export type ProjectListIgnoredFilesInput = typeof ProjectListIgnoredFilesInput.Type;
 
@@ -522,12 +528,12 @@ export class ProjectReadFileError extends Schema.TaggedError<ProjectReadFileErro
   "ProjectReadFileError",
   {
     cwd: Schema.optional(TrimmedNonEmptyString),
-    relativePath: Schema.optional(TrimmedNonEmptyString),
+    relativePath: Schema.optional(Schema.NonEmptyString),
     failure: Schema.optional(ProjectFileFailure),
-    resolvedPath: Schema.optional(TrimmedNonEmptyString),
+    resolvedPath: Schema.optional(Schema.NonEmptyString),
     resolvedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
     operation: Schema.optional(ProjectFileOperation),
-    operationPath: Schema.optional(TrimmedNonEmptyString),
+    operationPath: Schema.optional(Schema.NonEmptyString),
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
@@ -587,12 +593,12 @@ export class ProjectWriteFileError extends Schema.TaggedError<ProjectWriteFileEr
   "ProjectWriteFileError",
   {
     cwd: Schema.optional(TrimmedNonEmptyString),
-    relativePath: Schema.optional(TrimmedNonEmptyString),
+    relativePath: Schema.optional(Schema.NonEmptyString),
     failure: Schema.optional(ProjectFileFailure),
-    resolvedPath: Schema.optional(TrimmedNonEmptyString),
+    resolvedPath: Schema.optional(Schema.NonEmptyString),
     resolvedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
     operation: Schema.optional(ProjectFileOperation),
-    operationPath: Schema.optional(TrimmedNonEmptyString),
+    operationPath: Schema.optional(Schema.NonEmptyString),
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },

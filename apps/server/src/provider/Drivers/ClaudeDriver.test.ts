@@ -30,6 +30,7 @@ import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEve
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import * as ProviderHostLive from "../ProviderHostLive.ts";
+import * as ProviderInstallationGate from "../ProviderInstallationGate.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -76,6 +77,7 @@ describe("ClaudeDriver idle compaction wiring", () => {
       ),
       Layer.provideMerge(ModelManifest.layerTest),
       Layer.provideMerge(ResetCreditCoordinator.layerTest),
+      Layer.provideMerge(ProviderInstallationGate.layer),
     );
 
   // The answer the driver-built adapter gives a resume question, or "asked".
@@ -113,6 +115,7 @@ describe("ClaudeDriver idle compaction wiring", () => {
           }),
         forkSession: () => Effect.die("unused forkSession"),
         subagentLaunchToolUseId: () => Effect.succeed(null),
+        subagentModel: () => Effect.succeed(null),
         assertComplete: Effect.void,
       }),
     );

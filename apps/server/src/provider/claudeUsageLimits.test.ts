@@ -231,6 +231,22 @@ describe("claudeUsageResponseToLimits spend source", () => {
     expect(spend).toMatchObject({ used: 7, limit: 100, currency: "JPY" });
     expect(spend?.usedPercent).toBeCloseTo(7);
   });
+
+  it("flags a $0 cap instead of reporting a monthly window", () => {
+    const response = {
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: null,
+        seven_day: null,
+        extra_usage: { is_enabled: true, used_credits: 0, monthly_limit: 0, utilization: null },
+      },
+    };
+    expect(claudeUsageResponseToLimits({ checkedAt, response }).limits).toEqual({
+      checkedAt,
+      windows: [],
+      zeroSpendCap: true,
+    });
+  });
 });
 
 describe("claudeRateLimitEventToUpdate", () => {

@@ -238,6 +238,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   /** FORK Stop ladder: what the Stop button shows. */
   stopRung: StopRung;
   compactBeforeSendTokens: number | null;
+  hideCompactToggle: boolean;
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
 }) {
@@ -281,6 +282,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         onInterrupt={props.onInterrupt}
         stopRung={props.stopRung}
         compactBeforeSendTokens={props.compactBeforeSendTokens}
+        hideCompactToggle={props.hideCompactToggle}
         keepFullHistory={props.keepFullHistory}
         onToggleKeepFullHistory={props.onToggleKeepFullHistory}
       >

@@ -1163,10 +1163,16 @@ export class AcpSessionRuntime extends Context.Service<
       providerId: string,
     ) => Effect.Effect<EffectAcpSchema.DisableProviderResponse, EffectAcpErrors.AcpError>;
     readonly logout: Effect.Effect<EffectAcpSchema.LogoutResponse, EffectAcpErrors.AcpError>;
-    /** options.dispatched settles when cancel can target this prompt. */
+    /**
+     * options.dispatched settles when cancel can target this prompt. options.released lets the
+     * next prompt go out while this one's response is still held; it still resolves this call.
+     */
     readonly prompt: (
       payload: Omit<EffectAcpSchema.PromptRequest, "sessionId">,
-      options?: { readonly dispatched?: Deferred.Deferred<void> },
+      options?: {
+        readonly dispatched?: Deferred.Deferred<void>;
+        readonly released?: Deferred.Deferred<void>;
+      },
     ) => Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
     readonly cancel: Effect.Effect<void, EffectAcpErrors.AcpError>;
     readonly terminateProcessGroup?: Effect.Effect<void, AcpProcessGroupTerminationError>;
@@ -1186,7 +1192,11 @@ export class AcpSessionRuntime extends Context.Service<
     readonly setConfigOption: (
       configId: string,
       value: string | boolean,
-      options?: { readonly allowUnlistedValue?: boolean },
+      options?: {
+        readonly allowUnlistedValue?: boolean;
+        /** Sends the write even when the cached value already matches it. */
+        readonly resendCurrentValue?: boolean;
+      },
     ) => Effect.Effect<EffectAcpSchema.SetSessionConfigOptionResponse, EffectAcpErrors.AcpError>;
     readonly setModel: (model: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
     readonly request: (
@@ -1799,8 +1809,9 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       ...options.clientCapabilities?.fs,
     },
     terminal: options.clientCapabilities?.terminal ?? false,
-    // ACP v1 agents send session notices only to clients that advertise them; v2 needs no capability.
-    session: { ...options.clientCapabilities?.session, notices: {} },
+    // ACP v1 agents send session notices and compaction updates only to clients that advertise
+    // them; v2 needs no capability.
+    session: { ...options.clientCapabilities?.session, notices: {}, compaction: {} },
     ...(options.clientCapabilities?.auth ? { auth: options.clientCapabilities.auth } : {}),
     ...(options.clientCapabilities?.elicitation
       ? { elicitation: options.clientCapabilities.elicitation }
@@ -2036,7 +2047,10 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
   const setConfigOption = (
     configId: string,
     value: string | boolean,
-    options?: { readonly allowUnlistedValue?: boolean },
+    options?: {
+      readonly allowUnlistedValue?: boolean;
+      readonly resendCurrentValue?: boolean;
+    },
   ): Effect.Effect<EffectAcpSchema.SetSessionConfigOptionResponse, EffectAcpErrors.AcpError> =>
     validateConfigOptionValue(configId, value, options?.allowUnlistedValue === true).pipe(
       Effect.andThen(getStartedState),
@@ -2044,7 +2058,11 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         SubscriptionRef.get(configOptionsRef).pipe(
           Effect.flatMap((configOptions) => {
             const existing = findSessionConfigOption(configOptions, configId);
-            if (existing && configOptionCurrentValueMatches(existing, value)) {
+            if (
+              existing &&
+              options?.resendCurrentValue !== true &&
+              configOptionCurrentValueMatches(existing, value)
+            ) {
               return Effect.succeed({
                 configOptions,
               } satisfies EffectAcpSchema.SetSessionConfigOptionResponse);
@@ -2369,6 +2387,17 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     yield* child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore);
   });
 
+  const joinPrompt = (
+    fiber: Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>,
+  ) =>
+    Fiber.join(fiber).pipe(
+      Effect.catchCauseIf(
+        (cause) => options.cancelBehavior !== "wait-for-prompt" && Cause.hasInterruptsOnly(cause),
+        (_cause) =>
+          Effect.succeed({ stopReason: "cancelled" } satisfies EffectAcpSchema.PromptResponse),
+      ),
+    );
+
   const cancel = Effect.gen(function* () {
     // Retire every prompt issued before this cancel, including any that are
     // still parked on the serialization permit and so invisible to the
@@ -2624,7 +2653,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         .withPermit(
           Effect.gen(function* () {
             if ((yield* Ref.get(promptCancelGenerationRef)) !== generationAtRequest) {
-              return cancelledResponse;
+              return { _tag: "Settled" as const, response: cancelledResponse };
             }
             return yield* Effect.acquireUseRelease(
               promptDispatchSemaphore.withPermit(
@@ -2653,32 +2682,40 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
                   return active;
                 }).pipe(notificationSemaphore.withPermit),
               ),
-              (activePrompt) =>
-                Effect.gen(function* () {
+              (activePrompt) => {
+                const settled = Effect.gen(function* () {
                   // A cancel between the check above and registration finds no fiber, so
                   // re-check now; `release` interrupts the fiber. Skipped under
-                  // `wait-for-prompt`: that cancel holds the dispatch permit and awaits
-                  // this very fiber, so abandoning here would defeat the mode.
+                  // `wait-for-prompt`: cancel holds the dispatch permit and awaits this
+                  // very fiber, so abandoning it here would defeat that mode.
                   if (
                     options.cancelBehavior !== "wait-for-prompt" &&
                     (yield* Ref.get(promptCancelGenerationRef)) !== generationAtRequest
                   ) {
                     return cancelledResponse;
                   }
-                  return yield* Fiber.join(activePrompt.fiber).pipe(
-                    Effect.catchCauseIf(
-                      (cause) =>
-                        options.cancelBehavior !== "wait-for-prompt" &&
-                        Cause.hasInterruptsOnly(cause),
-                      (_cause) => Effect.succeed(cancelledResponse),
-                    ),
+                  return yield* joinPrompt(activePrompt.fiber).pipe(
                     Effect.tap(() =>
                       closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef }),
                     ),
                   );
-                }),
+                }).pipe(Effect.map((response) => ({ _tag: "Settled" as const, response })));
+                return promptOptions?.released === undefined
+                  ? settled
+                  : Effect.raceFirst(
+                      settled,
+                      Deferred.await(promptOptions.released).pipe(
+                        Effect.as({ _tag: "Released" as const, fiber: activePrompt.fiber }),
+                      ),
+                    );
+              },
               (activePrompt, result) =>
                 Effect.gen(function* () {
+                  if (Exit.isSuccess(result) && result.value._tag === "Released") {
+                    yield* Ref.set(activePromptRef, Option.none());
+                    yield* Deferred.succeed(activePrompt.completed, undefined);
+                    return;
+                  }
                   if (
                     options.cancelBehavior === "wait-for-prompt" &&
                     Exit.isFailure(result) &&
@@ -2704,6 +2741,11 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             promptOptions?.dispatched
               ? Deferred.succeed(promptOptions.dispatched, undefined)
               : Effect.void,
+          ),
+          Effect.flatMap((outcome) =>
+            outcome._tag === "Settled"
+              ? Effect.succeed(outcome.response)
+              : joinPrompt(outcome.fiber),
           ),
         );
     }),

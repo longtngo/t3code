@@ -33,6 +33,29 @@ describe("applyUsageLimitsUpdate", () => {
       },
     });
     expect(next).toBe(published);
+    const scoped = { checkedAt, windows: [{ ...weekly, modelIds: ["opencode/a"] }] };
+    const providerScoped = { checkedAt, windows: [{ ...weekly, providerIds: ["opencode"] }] };
+    expect(
+      applyUsageLimitsUpdate({
+        previous: providerScoped,
+        checkedAt,
+        update: { windows: [{ ...weekly, providerIds: ["console-custom"] }] },
+      })?.windows[0]?.providerIds,
+    ).toEqual(["console-custom"]);
+    expect(
+      applyUsageLimitsUpdate({
+        previous: scoped,
+        checkedAt,
+        update: { windows: [{ ...weekly, modelIds: ["opencode/a"] }] },
+      }),
+    ).toBe(scoped);
+    expect(
+      applyUsageLimitsUpdate({
+        previous: scoped,
+        checkedAt,
+        update: { windows: [{ ...weekly, modelIds: ["opencode/b"] }] },
+      })?.windows[0]?.modelIds,
+    ).toEqual(["opencode/b"]);
   });
 
   it("re-stamps an unchanged reading the provider confirms once it is 30 s old", () => {
@@ -80,11 +103,11 @@ describe("applyUsageLimitsUpdate", () => {
     ).toEqual({ checkedAt, windows: [weekly], unavailable: { reason: "probeFailed" } });
   });
 
-  it("preserves reset credits and spend when a streamed window update changes usage", () => {
+  it("preserves reset credits, spend and a $0 cap when a streamed window update changes usage", () => {
     const resetCredits = { availableCount: 2, nextExpiresAt: "2026-10-01T00:00:00.000Z" };
     const spend = { used: 0, limit: 200, currency: "CAD", usedPercent: 0 };
     const next = applyUsageLimitsUpdate({
-      previous: { ...published, resetCredits, spend },
+      previous: { ...published, resetCredits, spend, zeroSpendCap: true },
       checkedAt: "2026-09-03T12:00:05.000Z",
       update: { windows: [{ ...session, usedPercent: 55 }] },
     });
@@ -94,6 +117,7 @@ describe("applyUsageLimitsUpdate", () => {
       windows: [{ ...session, usedPercent: 55 }, weekly],
       resetCredits,
       spend,
+      zeroSpendCap: true,
     });
   });
 });

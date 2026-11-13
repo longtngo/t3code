@@ -84,6 +84,7 @@ import {
   isTimelineMinimapRowVisible,
   resolveTimelineMinimapVisibleRange,
   resolveTimelineMinimapHitStripWidth,
+  TIMELINE_MINIMAP_TARGET_OFFSET,
   timelineTurnFoldRunIdsByEntryId,
   liveAnswerPreview,
   type MessagesTimelineRow,
@@ -228,9 +229,12 @@ interface MessagesTimelineProps {
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
+  onReplyToResponse?: TimelineRowSharedState["onReplyToResponse"];
   isWorking: boolean;
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
+  /** Replaces "Thinking" while the active run's provider has not started a turn. */
+  providerStartingLabel?: string | null;
   worktreeSetup?: WorktreeSetupSnapshot | null;
   onCancelWorktreeSetup?: () => void;
   retryableWorkspacePreparationRunIds?: ReadonlySet<RunId>;
@@ -259,7 +263,10 @@ interface MessagesTimelineProps {
   announceTurnStatus?: boolean;
   onOpenToolDiff?: (target: ToolCallDiffTarget) => void;
   onOpenTurnDiff?: (runId: RunId, filePath?: string) => void;
-  onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  onOpenThread: (
+    threadId: OrchestrationV2TurnItem["threadId"],
+    environmentId?: EnvironmentId,
+  ) => void;
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
   /**
@@ -280,7 +287,7 @@ interface MessagesTimelineProps {
     readonly runId: RunId;
   }) => Promise<void>;
   supportsConversationRollback: boolean;
-  threadStartCheckpointReady?: boolean;
+  threadStartCheckpointAvailable?: boolean;
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
@@ -343,9 +350,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationRequest = null,
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
+  onReplyToResponse,
   isWorking,
   runlessWorkActive = false,
   activeTurnStartedAt = null,
+  providerStartingLabel = null,
   worktreeSetup = null,
   footer = null,
   onCancelWorktreeSetup,
@@ -381,7 +390,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   workflowOpening = null,
   onForkFromRun,
   supportsConversationRollback,
-  threadStartCheckpointReady = false,
+  threadStartCheckpointAvailable = false,
   availableRevertTurnCounts,
   onRevertToTurnCount,
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
@@ -740,7 +749,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     activeTurnStartedAt,
     turnDiffSummaries,
     supportsConversationRollback,
-    threadStartCheckpointReady,
+    threadStartCheckpointAvailable,
     availableRevertTurnCounts,
     worktreeSetup,
     toolCallVisibility,
@@ -849,7 +858,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const onAppFullscreenChange = (rowId: string, fullscreen: boolean) => {
     setFullscreenAppRowId((current) => (fullscreen ? rowId : current === rowId ? null : current));
   };
-  const alwaysRenderIndices = restoringAlwaysRender?.indices ?? [];
+  const selectedRowIds = useSelectedTimelineRowIds(timelineViewportElement);
+  const alwaysRenderIndices = [
+    ...(restoringAlwaysRender?.indices ?? []),
+    ...timelineRowSpanIndices(rows, selectedRowIds),
+  ];
   // Screen readers can only reach headings in the DOM. Keeping the first and
   // last messages mounted lets heading navigation wrap to either end.
   const firstMessageRow = rows.find(isMessageRow);
@@ -935,9 +948,17 @@ const ConversationTimeline = memo(function ConversationTimeline({
         strip.dataset.inView = next;
       }
     }
+    // Ignore rows ending within the offset minimap navigation leaves above its target, or
+    // Next turn keeps retargeting the same row. 1px absorbs device-pixel scroll rounding.
+    const currentInset = TIMELINE_MINIMAP_TARGET_OFFSET + 1;
+    const currentRange = resolveTimelineMinimapVisibleRange({
+      ...state,
+      scroll: scroll + currentInset,
+      scrollLength: state.scrollLength - currentInset,
+    });
     const nextCurrentIndex = resolveTimelineMinimapCurrentIndex({
-      visibleStart: visibleRange.start,
-      visibleEnd: visibleRange.end,
+      visibleStart: currentRange.start,
+      visibleEnd: currentRange.end,
       rowIndices: minimapRowIndices,
     });
     setMinimapCurrentIndex((current) =>
@@ -1082,6 +1103,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     canOperateThread,
     onRespondToApproval,
     citationRequest: readyCitationRequest,
+    onReplyToResponse,
     listRef,
     timestampFormat,
     alwaysShowMessageTimestamps,
@@ -1156,6 +1178,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     backgroundWorktreeSetup,
     awaitingUser: awaitingUser !== null,
     isPreparingWorktree,
+    providerStartingLabel,
     latestRunId: latestRun?.runId ?? null,
     liveAnswerPreview:
       isWorking && toolCallVisibility === "zen" ? liveAnswerPreview(timelineEntries) : null,
@@ -1449,6 +1472,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
               onScroll={handleScroll}
               onItemSizeChanged={scheduleMinimapRefresh}
               onMetricsChange={scheduleMinimapRefresh}
+              // Keyboard scrolling only moves the focused element; F6 and clicks land here.
+              tabIndex={-1}
+              data-workspace-focus-default
               className={cn(
                 "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
                 topFadeEnabled && "topbar-scroll-fade",
@@ -1469,7 +1495,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
                 void listRef.current?.scrollToIndex({
                   index: item.rowIndex,
                   animated: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-                  viewOffset: 24,
+                  viewOffset: TIMELINE_MINIMAP_TARGET_OFFSET,
                 });
               }}
             />
@@ -1514,6 +1540,52 @@ function TimelineHistoryControl(props: MessagesTimelineHistoryControls) {
 
 function isMessageRow(row: MessagesTimelineRow) {
   return row.kind === "message" && row.message.role !== "system";
+}
+
+// LegendList recycles a row's container once it leaves the draw buffer, which
+// moves a native selection's ends onto other rows. Pin the selected rows.
+function useSelectedTimelineRowIds(viewport: HTMLElement | null) {
+  const [rowIds, setRowIds] = useState<ReadonlyArray<string>>([]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to document selectionchange to track which timeline rows a native selection covers
+  useEffect(() => {
+    if (!viewport) return;
+    const update = () => {
+      const selection = document.getSelection();
+      const range =
+        selection && !selection.isCollapsed && selection.rangeCount > 0
+          ? selection.getRangeAt(0)
+          : null;
+      const next: string[] = [];
+      if (range?.intersectsNode(viewport)) {
+        for (const row of viewport.querySelectorAll<HTMLElement>("[data-timeline-row-id]")) {
+          const rowId = row.dataset.timelineRowId;
+          if (rowId && range.intersectsNode(row)) next.push(rowId);
+        }
+      }
+      setRowIds((current) =>
+        current.length === next.length && current.every((id, i) => id === next[i]) ? current : next,
+      );
+    };
+    document.addEventListener("selectionchange", update);
+    return () => {
+      document.removeEventListener("selectionchange", update);
+      setRowIds([]);
+    };
+  }, [viewport]);
+  return rowIds;
+}
+
+// Rows between the selected ones are covered too, even if not mounted right now.
+function timelineRowSpanIndices(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  rowIds: ReadonlyArray<string>,
+): number[] {
+  if (rowIds.length === 0) return [];
+  const selected = new Set(rowIds);
+  const first = rows.findIndex((row) => selected.has(row.id));
+  const last = rows.findLastIndex((row) => selected.has(row.id));
+  if (first < 0) return [];
+  return Array.from({ length: last - first + 1 }, (_, i) => first + i);
 }
 
 function keyExtractor(item: MessagesTimelineRow) {

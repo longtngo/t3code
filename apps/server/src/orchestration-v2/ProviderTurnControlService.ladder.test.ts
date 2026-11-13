@@ -23,6 +23,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import {
   ProviderAdapterInterruptError,
@@ -168,7 +169,12 @@ const controlLayer = (units: ReadonlyArray<Unit>, now: DateTime.Utc) => {
   const runtimes = new Map(units.map((unit) => [unit.sessionId, makeRuntime(unit, now)]));
   return ProviderTurnControlService.layer.pipe(
     Layer.provide(
-      Layer.merge(
+      Layer.mergeAll(
+        // A hard stop of a running turn waits for it to settle; the projection already reads settled.
+        Layer.mock(EventSink.EventSinkV2)({
+          latestSequence: () => Effect.succeed(0),
+          stream: () => Stream.empty,
+        }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getProviderControlContext: (threadId) =>
             Effect.sync(() => {

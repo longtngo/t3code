@@ -150,7 +150,8 @@ Earlier: 2026-09-10 (34th reconcile, 17 commits). Concentrated in
 link work (#10839 + #10875 + #10870 + #11007 + #11045) touched 172 files in a single commit,
 added `projection_thread_pull_requests` (a table), `ThreadPullRequestLink` (a contract), three
 new `thread.pull-request-*` events, and derived the legacy `linkedPullRequest` from the new
-array. Everything the fork holds on a thread shell — `titleRegenerationFailedAt`,
+array. Everything the fork held on a thread shell at the time — `titleRegenerationFailedAt`
+(retired in the 59th reconcile for upstream's title regeneration outcome, #31418),
 `hasPendingBackgroundTask` — had to be re-grafted onto upstream's rewritten builders in
 `ProjectionSnapshotQuery.ts`, because upstream re-indented those blocks and git aligned the
 fork's un-indented version against them, cutting each conflict marker off mid-object.
@@ -172,7 +173,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 91 entries, ids 1-91, unique and monotonic. Upstream's v2 schema
+Current: 99 entries, ids 1-99, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
@@ -183,12 +184,13 @@ Current: 91 entries, ids 1-91, unique and monotonic. Upstream's v2 schema
 `069_ThreadMessageSearch` is **78**, `070_PeerLinks` is **79**, `071_PeerLinkFence` is **80**,
 `072_WaitingLinkRequestIndex` is **81**, and upstream's `073`-`080` are **82**-**89** (a flat +9;
 `076_ProjectionProjectsPinArchive` is **85**). Id **90** is the fork's own `PushSubscriptions`
-repair, so upstream's `081_ProjectionMessageSearchText` is **91** (a flat +10) and its next
-migration (`082`) takes **92**. Upstream's `hasPendingMigrations` also counts V2-preview rows for
+repair, so upstream's `081`-`089` are **91**-**99** (a flat +10; `081_ProjectionMessageSearchText`
+is **91**, `089_ShellThreadReadIndexes` is **99**) and its next migration (`090`) takes **100**. Upstream's `hasPendingMigrations` also counts V2-preview rows for
 its preview reconciliation; the fork drops that clause (it would report pending forever).
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
-upstream's `reconcileV2PreviewMigration` stays out.
+upstream's `reconcileV2PreviewMigration` stays out, and its preflight use (#34773,
+`cloud/servicePreflight.ts`) checks the recorded history directly with `skippedV2Migrations`.
 Filename numbers double up on `033`, `037`, `038`, `039`, `041`, `042`, `051` and `052`. Id `34` is
 `PushSubscriptions`, the fork's first Web Push migration: real databases record it, so the manifest
 registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
@@ -209,7 +211,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -cE '^\s*\[(34|90), "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `91 91 ok` and `2`.
+Expect `99 99 ok` and `2`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -1103,7 +1105,12 @@ After a merge that adds a hook call anywhere in a widely-rendered component, gre
 
 ### 37. `FORCE_KILL_AFTER` on the git spawn is fork-only, and every git timeout depends on it
 
-`apps/server/src/vcs/GitVcsDriverCore.ts` passes `forceKillAfter: input.forceKillAfterMs ?? FORCE_KILL_AFTER` (5s)
+Since the 59th reconcile upstream (#26601) always passes a fixed 1 s grace and removed the
+per-call `forceKillAfterMs`; that is not a superset of the 5 s default, so the fork keeps
+`FORCE_KILL_AFTER` with no per-call override (the background status fetch lost its own 1 s
+grace with upstream's plumbing).
+
+`apps/server/src/vcs/GitVcsDriverCore.ts` passes `forceKillAfter: FORCE_KILL_AFTER` (5s)
 as a spawn option on every git child. Upstream has only the per-call `forceKillAfterMs` (undefined
 by default), so its git children get no grace unless a caller asks; a resolution that takes
 upstream's `forceKillAfter: input.forceKillAfterMs` drops the fork's default. It is consumed by the Node spawner's release finalizer — SIGTERM, await
@@ -1455,13 +1462,14 @@ looks the handler up by tag. A new fork RPC goes in both the fork group and the 
 `git worktree prune` is repo-global: it drops every registration whose directory is absent right
 now (an unmounted volume, a worktree mid-move), and `repair` cannot restore them. The fork
 recreates a deleted thread worktree with `createWorktree({ ..., reuseRegisteredPath: true })`,
-which takes over that one stale entry. Three calls: two in `ProviderTurnStartService.ts` and one
+which takes over that one stale entry. Three calls: two in `workspace/restoreMissingWorktree.ts` (upstream's #24156 moved turn start's
+recreation there, with a prune, in the 59th reconcile; turn start and terminals share it) and one
 in `CheckpointRollbackService.ts`. Upstream's #15208 (49th reconcile) added the rollback site with a
 prune in front, which merged without a conflict. Probe, expect `0` and `3`:
 
 ```sh
-git grep -n 'pruneWorktrees' -- apps/server/src/orchestration-v2 | grep -v -e '\.test\.' -e testkit | wc -l
-git grep -n 'reuseRegisteredPath: true' -- apps/server/src/orchestration-v2 | grep -v '\.test\.' | wc -l
+git grep -n 'pruneWorktrees' -- apps/server/src/orchestration-v2 apps/server/src/workspace | grep -v -e '\.test\.' -e testkit | wc -l
+git grep -n 'reuseRegisteredPath: true' -- apps/server/src/orchestration-v2 apps/server/src/workspace | grep -v '\.test\.' | wc -l
 ```
 
 The recreation runs inside the turn start's (or rollback's) `withWorkspaceLease` on the same
@@ -1569,7 +1577,7 @@ reconcile brings upstream's lines back, re-apply. Probes:
 `grep -c 'await import("./PullRequestDetailActions")' apps/web/src/components/pullRequest/useInlineActionConfirm.browser.test.tsx`
 is `0` and `grep -c 'from "./PullRequestDetailActions"' apps/web/src/components/pullRequest/useInlineActionConfirm.browser.test.tsx`
 is `1`; `grep -c 'userEvent.fill(' apps/web/src/components/settings/AddEnvironmentDialog.browser.test.tsx`
-is `6`; `grep -c 'query === "night"' apps/web/src/components/settings/ThemeImportDialog.browser.test.tsx`
+is `7` (upstream moved one more field to `fill` in the 59th reconcile); `grep -c 'query === "night"' apps/web/src/components/settings/ThemeImportDialog.browser.test.tsx`
 is `1`. Report: `~/reports/t3code/2026-11/2026-11-04/mevq-run/flaky-browser-rca.md`.
 
 ### 75. The fork's Notifications and Queue pages are in upstream's explicit settings nav

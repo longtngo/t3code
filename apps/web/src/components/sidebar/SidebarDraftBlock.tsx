@@ -5,6 +5,7 @@ import { type QueueRowSortableBag } from "../SidebarQueueBlock";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useThreadQueueStore } from "../../threadQueueStore";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import { SquarePenIcon, XIcon } from "lucide-react";
 import {
@@ -58,7 +59,9 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
     sortable,
   } = props;
   const promptPreview =
-    replaceComposerContextReferences(composer.prompt, (occurrence) => occurrence.label)
+    assistantCitationsToPlainText(
+      replaceComposerContextReferences(composer.prompt, (occurrence) => occurrence.label),
+    )
       .trim()
       .split("\n", 1)[0] ?? "";
   // images mirrors persistedAttachments once rehydration finishes; before
