@@ -122,7 +122,7 @@ effectIt.effect("waits longer for only one hung login shell", () =>
         const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
         NodeFS.writeFileSync(`${testHome}/.t3/last-good-path`, "/cached/bin:/usr/bin");
 
-        yield* fixPath().pipe(
+        yield* fixPath({ pathCacheFile: `${testHome}/.t3/last-good-path` }).pipe(
           Effect.provideService(HostProcess.Platform, "linux"),
           Effect.provideService(HostProcess.Environment, env),
           Effect.provide(NodeServices.layer),
@@ -136,6 +136,61 @@ effectIt.effect("waits longer for only one hung login shell", () =>
           NodeFS.readFileSync(`${testHome}/.t3/last-good-path`, "utf8"),
           "/cached/bin:/usr/bin",
         );
+      }),
+    (probe) => Effect.sync(() => probe.mockRestore()),
+  ),
+);
+
+const successfulShellOutput = [
+  "__T3CODE_ENV_PATH_START__",
+  "/home/me/.local/bin:/usr/bin",
+  "__T3CODE_ENV_PATH_END__",
+].join("\n");
+
+effectIt.effect("caches the PATH only for a caller that names the cache file", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() =>
+      vi.spyOn(NodeChildProcess, "execFileSync").mockReturnValue(successfulShellOutput),
+    ),
+    () =>
+      Effect.gen(function* () {
+        const cacheFile = `${testHome}/.t3/last-good-path`;
+        const run = (options?: Parameters<typeof fixPath>[0]) =>
+          fixPath(options).pipe(
+            Effect.provideService(HostProcess.Platform, "linux"),
+            Effect.provideService(HostProcess.Environment, { SHELL: "/bin/bash", PATH: "/bin" }),
+            Effect.provide(NodeServices.layer),
+          );
+
+        // Fork: tests and incidental callers must never write the live server's cache.
+        yield* run();
+        assert.isFalse(NodeFS.existsSync(cacheFile));
+        yield* run({ pathCacheFile: cacheFile });
+        assert.equal(NodeFS.readFileSync(cacheFile, "utf8"), "/home/me/.local/bin:/usr/bin:/bin");
+      }),
+    (probe) => Effect.sync(() => probe.mockRestore()),
+  ),
+);
+
+effectIt.effect("ignores a cached PATH unless the caller names the cache file", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() =>
+      vi.spyOn(NodeChildProcess, "execFileSync").mockImplementation((file) => {
+        throw timedOut(String(file));
+      }),
+    ),
+    () =>
+      Effect.gen(function* () {
+        NodeFS.writeFileSync(`${testHome}/.t3/last-good-path`, "/cached/bin:/usr/bin");
+        const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+
+        yield* fixPath().pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, env),
+          Effect.provide(NodeServices.layer),
+        );
+
+        assert.notInclude(env.PATH ?? "", "/cached/bin");
       }),
     (probe) => Effect.sync(() => probe.mockRestore()),
   ),

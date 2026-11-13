@@ -68,10 +68,15 @@ function defaultWriteCachedPath(cachePath: string, value: string): void {
   }
 }
 
-/** Default file used to persist (and on failure reuse) the last good hydrated PATH. */
-function defaultPathCacheFile(homeDir: string): string {
-  return `${homeDir}/.t3/last-good-path`;
-}
+/**
+ * FORK: the file the server boot persists (and on failure reuses) the last good hydrated PATH in.
+ * Only the server's own boot passes it to `fixPath`: any other caller (tests, discovery's PATH
+ * refresh) leaves the cache alone, so nothing but a real boot can overwrite it.
+ */
+export const resolvePathCacheFile = Effect.fn("resolvePathCacheFile")(function* () {
+  const { join } = yield* Path.Path;
+  return join(yield* HostProcess.HomeDirectory, ".t3", "last-good-path");
+});
 
 // __MISE_DIFF is mise's record of the PATH entries it added. It must travel
 // with the shell's PATH, or `mise x` can rebuild PATH behind a same-named
@@ -94,16 +99,17 @@ function applyLoginShellEnvironment(
   platform: NodeJS.Platform,
   shellEnvironment: Partial<Record<string, string>>,
   fallbackPath?: string,
+  cachePath?: string,
 ): void {
   const shellPath = shellEnvironment.PATH;
   const homeDir = NodeOS.homedir();
-  const cachePath = defaultPathCacheFile(homeDir);
 
   // FORK: a fresh login-shell read is authoritative. When it and the fallback (launchctl)
   // fail (e.g. `zsh -ilc` times out under load), fall back to the last hydrated PATH, then
   // well-known bin dirs, never the minimal launchd PATH that hides CLIs like `claude`.
   const discoveredPath = shellPath ?? fallbackPath;
-  const cachedPath = !discoveredPath ? defaultReadCachedPath(cachePath) : undefined;
+  const cachedPath =
+    !discoveredPath && cachePath !== undefined ? defaultReadCachedPath(cachePath) : undefined;
   const fallbackDirs =
     !discoveredPath && !cachedPath
       ? existingUserBinDirs(platform, homeDir, (path) => NodeFS.existsSync(path))
@@ -126,12 +132,16 @@ function applyLoginShellEnvironment(
 
   // Persist only after an authoritative shell read, so a degraded boot (which
   // used the cache or a fallback) never overwrites a known-good cached PATH.
-  if (shellPath && mergedPath) {
+  if (shellPath && mergedPath && cachePath !== undefined) {
     defaultWriteCachedPath(cachePath, mergedPath);
   }
 }
 
-function hydratePosixPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): void {
+function hydratePosixPath(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  cachePath: string | undefined,
+): void {
   let shellEnvironment: Partial<Record<string, string>> = {};
   let waitedForSlowShell = false;
   for (const shell of listLoginShellCandidates(platform, env.SHELL)) {
@@ -160,7 +170,7 @@ function hydratePosixPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): vo
 
   const launchctlPath =
     platform === "darwin" && !shellEnvironment.PATH ? readPathFromLaunchctl() : undefined;
-  applyLoginShellEnvironment(env, platform, shellEnvironment, launchctlPath);
+  applyLoginShellEnvironment(env, platform, shellEnvironment, launchctlPath, cachePath);
 }
 
 export function hydratePosixHome(
@@ -177,6 +187,8 @@ export function hydratePosixHome(
 
 export const fixPath = Effect.fn("fixPath")(function* (options?: {
   readonly shellEnvironmentPrepared?: boolean | undefined;
+  /** FORK: the last-good PATH cache; only the server boot passes it (`resolvePathCacheFile`). */
+  readonly pathCacheFile?: string | undefined;
 }): Effect.fn.Return<void, never, FileSystem.FileSystem | Path.Path> {
   const platform = yield* HostProcess.Platform;
   const env = yield* HostProcess.Environment;
@@ -213,7 +225,7 @@ export const fixPath = Effect.fn("fixPath")(function* (options?: {
     ),
   );
   if (options?.shellEnvironmentPrepared === true) return;
-  yield* Effect.sync(() => hydratePosixPath(env, platform)).pipe(
+  yield* Effect.sync(() => hydratePosixPath(env, platform, options?.pathCacheFile)).pipe(
     Effect.catchDefect((defect) =>
       Effect.sync(() => {
         logPathHydrationWarning("Failed to hydrate PATH from the user environment.", defect);
