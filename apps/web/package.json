@@ -10,7 +10,7 @@
     "build": "vp build",
     "i18n:generate": "gt generate",
     "preview": "vp preview",
-    "test": "vp test run --passWithNoTests --project unit --project dom --project browser",
+    "test": "vp test run --passWithNoTests --project unit --project dom && vp test run --passWithNoTests --project browser",
     "i18n:translate": "gt translate"
   },
   "dependencies": {

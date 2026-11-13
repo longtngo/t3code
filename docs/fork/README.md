@@ -1074,7 +1074,11 @@ here. They typecheck either way and only fail at run time, so check arriving tes
 ### 36. Web tests run three projects; `--project dom` is fork-only
 
 `apps/web/package.json`'s `test` script is
-`vp test run --passWithNoTests --project unit --project dom --project browser`. Upstream ships
+`vp test run --passWithNoTests --project unit --project dom && vp test run --passWithNoTests --project browser`.
+The browser project runs after the other two, never beside them: measured on the 59th reconcile,
+browser alone failed 0 of 2 full runs and beside unit + dom failed 2 of 2 (4 tests each, a
+different set each time, all timing out at the 15 s budget because the jsdom/happy-dom workers
+starve Chromium). Upstream ships
 `unit` and `browser` (headless Chromium, `*.browser.test.{ts,tsx}`, since the 50th reconcile);
 `unit` excludes both other patterns. The fork's `*.dom.test.tsx` files - real-DOM tests via
 `src/testing/renderDom` - are invisible to a merge that takes upstream's script, and they fail
