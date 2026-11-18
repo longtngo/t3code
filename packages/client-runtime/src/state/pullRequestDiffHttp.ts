@@ -1,3 +1,5 @@
+import { msg } from "gt-i18n";
+import { type MarkedText, markedTextEnglish } from "../errors/translatable.ts";
 import {
   EnvironmentAuthInvalidError,
   type PullRequestDiffInput,
@@ -28,7 +30,16 @@ export class PullRequestDiffCredentialRejectedError extends Schema.TaggedError<P
   },
 ) {
   override get message(): string {
-    return `This environment session is no longer valid (${this.cause.reason}). Refresh the page or quit and reopen T3 Code.`;
+    return markedTextEnglish(this.i18nMessage);
+  }
+
+  get i18nMessage(): MarkedText {
+    return [
+      msg(
+        "This environment session is no longer valid ({reason}). Refresh the page or quit and reopen T3 Code.",
+        { reason: this.cause.reason },
+      ),
+    ];
   }
 }
 

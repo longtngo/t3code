@@ -3,6 +3,7 @@
  * Each level is one `filesystem.browse` with `includeFiles`, fetched on expand: the recursive
  * `projects.listEntries` is a ranked index that drops dotfiles and pins a watcher for 15 min.
  */
+import { T, Var } from "gt-react";
 import { ChevronDown, ChevronRight, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
@@ -60,7 +61,7 @@ function DirectoryLevel({
         {listing.error === null ? (
           <>
             <LoaderCircle className="size-3.5 animate-spin" aria-hidden />
-            Loading…
+            <T>Loading…</T>
           </>
         ) : (
           <span className="text-destructive">{listing.error}</span>
@@ -73,7 +74,7 @@ function DirectoryLevel({
   if (entries.length === 0) {
     return (
       <div className="px-3 py-1.5 text-sm text-muted-foreground" style={indent}>
-        This folder is empty.
+        <T>This folder is empty.</T>
       </div>
     );
   }
@@ -140,7 +141,10 @@ function DirectoryLevel({
       })}
       {listing.data.truncated === true ? (
         <div className="px-3 py-1.5 text-xs text-muted-foreground" style={indent}>
-          Showing {entries.length} of {listing.data.totalCount ?? entries.length} entries.
+          <T>
+            Showing <Var>{entries.length}</Var> of{" "}
+            <Var>{listing.data.totalCount ?? entries.length}</Var> entries.
+          </T>
         </div>
       ) : null}
     </>

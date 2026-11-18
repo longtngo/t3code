@@ -222,6 +222,8 @@ export class Keybindings extends Context.Service<
 
     readonly streamChanges: Stream.Stream<KeybindingsChangeEvent>;
 
+    readonly revalidate: Effect.Effect<void, KeybindingsConfigError>;
+
     /** Acquire before reading a snapshot to buffer changes until the stream starts. */
     readonly subscribeChanges: Effect.Effect<
       Stream.Stream<KeybindingsChangeEvent>,
@@ -256,12 +258,17 @@ const make = Effect.gen(function* () {
   const upsertSemaphore = yield* Semaphore.make(1);
   const resolvedConfigCacheKey = "resolved" as const;
   const changesPubSub = yield* PubSub.unbounded<KeybindingsChangeEvent>();
+  const lastEmittedStateRef = yield* Ref.make<KeybindingsConfigState | null>(null);
   const startedRef = yield* Ref.make(false);
   const startedDeferred = yield* Deferred.make<void, KeybindingsConfigError>();
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
-  const emitChange = (configState: KeybindingsConfigState) =>
-    PubSub.publish(changesPubSub, configState).pipe(Effect.asVoid);
+  const emitChange = Effect.fn("keybindings.emitChange")(function* (
+    configState: KeybindingsConfigState,
+  ) {
+    yield* Ref.set(lastEmittedStateRef, configState);
+    yield* PubSub.publish(changesPubSub, configState);
+  });
 
   const readConfigExists = fs.exists(keybindingsConfigPath).pipe(
     Effect.mapError(
@@ -599,7 +606,11 @@ const make = Effect.gen(function* () {
       for (const { alongside, rule } of pendingLateDefaults) {
         if (
           customConfig.some((entry) => isSameKeybindingRule(entry, alongside)) &&
-          !customConfig.some((entry) => hasSameShortcutContext(entry, rule))
+          !customConfig.some(
+            (entry) =>
+              hasSameShortcutContext(entry, rule) ||
+              isSameKeybindingRule(entry, { ...rule, when: "false" }),
+          )
         ) {
           missingDefaults.push(rule);
         }
@@ -703,7 +714,8 @@ const make = Effect.gen(function* () {
       yield* startWatcher;
       yield* syncDefaultKeybindingsOnStartup;
       yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
-      yield* loadConfigStateFromCacheOrDisk;
+      const initialState = yield* loadConfigStateFromCacheOrDisk;
+      yield* Ref.set(lastEmittedStateRef, initialState);
     });
 
     const startupExit = yield* Effect.exit(startup);
@@ -721,6 +733,8 @@ const make = Effect.gen(function* () {
     syncDefaultKeybindingsOnStartup,
     loadConfigState: loadConfigStateFromCacheOrDisk,
     getSnapshot: loadConfigStateFromCacheOrDisk,
+    // The fork's refresh already publishes only when the decoded state changed.
+    revalidate: refresh(false),
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub);
     },
@@ -734,29 +748,35 @@ const make = Effect.gen(function* () {
           const customConfig = yield* loadWritableCustomKeybindingsConfig();
           const rule = keybindingRuleFromInput(input);
           const replaceTarget = replaceTargetFromUpsertInput(input);
+          const siblingDefaults =
+            rule.when === "false" &&
+            replaceTarget &&
+            !customConfig.some(({ rule: entry }) => entry?.command === rule.command)
+              ? DEFAULT_KEYBINDINGS.filter(
+                  (entry) =>
+                    entry.command === rule.command && !isSameKeybindingRule(entry, replaceTarget),
+                ).map((entry) => ({ value: entry, rule: entry }))
+              : [];
+          const retainedConfig = customConfig.filter(({ rule: entry }) => {
+            if (!entry) return true;
+            return (
+              (!replaceTarget || !isSameKeybindingRule(entry, replaceTarget)) &&
+              !isSameKeybindingRule(entry, rule)
+            );
+          });
+          const availableSlots = MAX_KEYBINDINGS_COUNT - siblingDefaults.length - 1;
           const nextConfig = [
-            ...customConfig.filter(({ rule: entry }) => {
-              if (!entry) return true;
-              if (replaceTarget) {
-                return (
-                  !isSameKeybindingRule(entry, replaceTarget) && !isSameKeybindingRule(entry, rule)
-                );
-              }
-              return !isSameKeybindingRule(entry, rule);
-            }),
+            ...siblingDefaults,
+            ...retainedConfig.slice(-availableSlots),
             { value: rule, rule },
           ];
-          const cappedConfig =
-            nextConfig.length > MAX_KEYBINDINGS_COUNT
-              ? nextConfig.slice(-MAX_KEYBINDINGS_COUNT)
-              : nextConfig;
-          if (nextConfig.length > MAX_KEYBINDINGS_COUNT) {
+          if (retainedConfig.length > availableSlots) {
             yield* Effect.logWarning("truncating keybindings config to max entries", {
               path: keybindingsConfigPath,
               maxEntries: MAX_KEYBINDINGS_COUNT,
             });
           }
-          return yield* writeAndEmit(cappedConfig.map(({ value }) => value));
+          return yield* writeAndEmit(nextConfig.map(({ value }) => value));
         }),
       ),
     removeKeybindingRule: (input) =>

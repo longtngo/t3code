@@ -2,11 +2,13 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import { msg } from "gt-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { readEnvironmentSettings } from "../hooks/useSettings";
+import { m } from "../i18n/messages";
 import { executeQueuedSend } from "../lib/threadSend/executeQueuedSend";
 import {
   planQueuedSend,
@@ -207,7 +209,7 @@ export function ThreadQueueCoordinator() {
 
   const openEntry = useCallback(
     (entry: ThreadQueueEntry) => ({
-      children: "Open",
+      children: m(msg("Open", { $context: "verb, opens the queued thread" })),
       onClick: () => {
         if (
           entry.draftId !== null &&
@@ -232,8 +234,8 @@ export function ThreadQueueCoordinator() {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: `Queued send failed: ${title}`,
-          description: `${message} The queue is paused.`,
+          title: m(msg("Queued send failed: {title}", { title })),
+          description: m(msg("{message} The queue is paused.", { message })),
           actionProps: openEntry(entry),
         }),
       );
@@ -245,7 +247,7 @@ export function ThreadQueueCoordinator() {
       toastManager.add(
         stackedThreadToast({
           type: "info",
-          title: `Nothing to send: ${title}`,
+          title: m(msg("Nothing to send: {title}", { title })),
           description: QUEUE_EMPTY_DRAFT_MESSAGE,
           actionProps: openEntry(entry),
         }),

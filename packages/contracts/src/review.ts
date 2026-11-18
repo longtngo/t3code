@@ -16,6 +16,15 @@ const GitRevision = TrimmedNonEmptyString.pipe(
   ),
 );
 
+/** A repository path: kept untrimmed, since surrounding whitespace is part of a file's name. */
+const GitPath = Schema.NonEmptyString.pipe(
+  Schema.check(
+    Schema.makeFilter(
+      (value: string) => !value.startsWith("-") || "a git path cannot begin with '-'",
+    ),
+  ),
+);
+
 export const ReviewDiffPreviewInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   baseRef: Schema.optional(GitRevision),
@@ -59,9 +68,20 @@ export const ReviewDiffPreviewSourceKind = Schema.Literals([
 ]);
 export type ReviewDiffPreviewSourceKind = typeof ReviewDiffPreviewSourceKind.Type;
 
+export const ReviewDiffChangeType = Schema.Literals([
+  "change",
+  "rename-pure",
+  "rename-changed",
+  "new",
+  "deleted",
+]);
+export type ReviewDiffChangeType = typeof ReviewDiffChangeType.Type;
+
 export const ReviewDiffFileStat = Schema.Struct({
   path: Schema.String,
   previousPath: Schema.NullOr(Schema.String),
+  // Older servers omit it.
+  changeType: Schema.optionalKey(ReviewDiffChangeType),
   additions: Schema.Number,
   deletions: Schema.Number,
 });
@@ -85,12 +105,12 @@ export type ReviewDiffPreviewSource = typeof ReviewDiffPreviewSource.Type;
 export const ReviewDiffFileContentsInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   sourceKind: ReviewDiffPreviewSourceKind,
-  changeType: Schema.Literals(["change", "rename-pure", "rename-changed", "new", "deleted"]),
+  changeType: ReviewDiffChangeType,
   baseRef: Schema.NullOr(GitRevision),
   headRef: Schema.NullOr(GitRevision),
   // Paths are interpolated as `<revision>:<path>`, so a leading `-` is option-shaped there too.
-  oldPath: GitRevision,
-  newPath: GitRevision,
+  oldPath: GitPath,
+  newPath: GitPath,
 });
 export type ReviewDiffFileContentsInput = typeof ReviewDiffFileContentsInput.Type;
 

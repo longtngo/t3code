@@ -25,6 +25,7 @@ vi.mock("../../state/environments", () => ({
     environments: [{ serverConfig: { environment: { capabilities: { pullRequests: true } } } }],
   }),
   usePullRequestsSupported: () => true,
+  useIssuesSupported: () => true,
 }));
 vi.mock("./SidebarResourceQueue", () => ({
   SidebarResourceQueue: () => createElement("li", { "data-panel": "queue" }),

@@ -7,6 +7,7 @@ import {
   type EnvironmentId,
   type WorkspaceMember,
 } from "@t3tools/contracts";
+import { T, useGT } from "gt-react";
 import { CornerLeftUpIcon, FolderIcon, GitBranchIcon } from "lucide-react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useEffect, useId, useMemo, useState } from "react";
@@ -77,6 +78,7 @@ export default function WorkspaceMemberEditor({
   onSubmit,
   onCancel,
 }: WorkspaceMemberEditorProps) {
+  const gt = useGT();
   const [path, setPath] = useState(editing?.path ?? "");
   const [branch, setBranch] = useState(editing?.integrationBranch ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -207,7 +209,9 @@ export default function WorkspaceMemberEditor({
           is how paths and refs are set everywhere else in this editor. */}
       <p className="mb-3 flex items-baseline gap-1.5 text-muted-foreground text-xs">
         <span className="font-medium uppercase tracking-wide">
-          {editing === null ? "Attach a repository" : "Edit"}
+          {editing === null
+            ? gt("Attach a repository")
+            : gt("Edit", { $context: "heading, editing a repository" })}
         </span>
         {editing !== null ? (
           <span className="min-w-0 truncate font-mono text-foreground">{editing.title}</span>
@@ -215,7 +219,9 @@ export default function WorkspaceMemberEditor({
       </p>
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor={pathInputId}>Repository path</Label>
+        <Label htmlFor={pathInputId}>
+          <T>Repository path</T>
+        </Label>
         <Autocomplete
           filter={null}
           items={pathItems}
@@ -241,14 +247,14 @@ export default function WorkspaceMemberEditor({
           <AutocompletePopup className="w-(--anchor-width)">
             <AutocompleteEmpty>
               {!browsePath.isBrowsing
-                ? "Start with ~/ or / to browse folders."
+                ? gt("Start with ~/ or / to browse folders.")
                 : browseDenied
-                  ? "This connection cannot browse host folders."
+                  ? gt("This connection cannot browse host folders.")
                   : browseQuery.isPending
-                    ? "Reading folder…"
+                    ? gt("Reading folder…")
                     : browseQuery.error !== null
-                      ? "Could not list this folder."
-                      : "No folders here."}
+                      ? gt("Could not list this folder.")
+                      : gt("No folders here.")}
             </AutocompleteEmpty>
             <AutocompleteList>
               {pathItems.map((itemPath) => {
@@ -261,7 +267,9 @@ export default function WorkspaceMemberEditor({
                     ) : (
                       <FolderIcon className="size-3.5 shrink-0" />
                     )}
-                    <span className="truncate font-mono text-xs">{isParent ? "Go up" : name}</span>
+                    <span className="truncate font-mono text-xs">
+                      {isParent ? gt("Go up") : name}
+                    </span>
                   </AutocompleteItem>
                 );
               })}
@@ -271,7 +279,9 @@ export default function WorkspaceMemberEditor({
       </div>
 
       <div className="mt-3 flex flex-col gap-1.5">
-        <Label htmlFor={branchInputId}>Integration branch</Label>
+        <Label htmlFor={branchInputId}>
+          <T>Integration branch</T>
+        </Label>
         <Autocomplete
           filter={null}
           items={branchItems}
@@ -291,14 +301,16 @@ export default function WorkspaceMemberEditor({
           />
           <AutocompletePopup className="w-(--anchor-width)">
             <AutocompleteEmpty>
-              {refsQuery.isPending ? "Reading branches…" : "No branches match."}
+              {refsQuery.isPending ? gt("Reading branches…") : gt("No branches match.")}
             </AutocompleteEmpty>
             <AutocompleteList>
               {branchItems.map((branchName) => (
                 <AutocompleteItem className="justify-between" key={branchName} value={branchName}>
                   <span className="truncate font-mono text-xs">{branchName}</span>
                   {branchName === currentBranch ? (
-                    <span className="shrink-0 text-2xs text-muted-foreground">checked out</span>
+                    <span className="shrink-0 text-2xs text-muted-foreground">
+                      <T>checked out</T>
+                    </span>
                   ) : null}
                 </AutocompleteItem>
               ))}
@@ -316,7 +328,7 @@ export default function WorkspaceMemberEditor({
       <div className="mt-3 flex justify-end gap-2">
         {editing !== null ? (
           <Button onClick={onCancel} size="sm" variant="outline">
-            Cancel
+            <T>Cancel</T>
           </Button>
         ) : null}
         <Button
@@ -326,7 +338,7 @@ export default function WorkspaceMemberEditor({
           }}
           size="sm"
         >
-          {editing === null ? "Attach repository" : "Save changes"}
+          {editing === null ? gt("Attach repository") : gt("Save changes")}
         </Button>
       </div>
     </div>

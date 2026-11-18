@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { T, useGT } from "gt-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { DEFAULT_UNIFIED_SETTINGS, NOTIFICATION_CATEGORIES } from "@t3tools/contracts";
@@ -22,7 +23,7 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 
 /**
  * Settings → Notifications: the two delivery switches and the per-category switches. Category
@@ -30,6 +31,8 @@ import { searchableSetting } from "./settingsSearch";
  * desktop path), so hiding them without Web Push would leave desktop with no control.
  */
 export function NotificationsSettingsPanel() {
+  const searchableSetting = useSearchableSetting();
+  const gt = useGT();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
 
@@ -121,15 +124,17 @@ export function NotificationsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection title="Delivery">
+      <SettingsSection title={gt("Delivery")}>
         <SettingsRow
           {...searchableSetting("task-completion-notifications")}
-          description="Show a system notification when a task finishes and you're not viewing it."
+          description={gt(
+            "Show a system notification when a task finishes and you're not viewing it.",
+          )}
           resetAction={
             settings.notifyOnThreadCompletion !==
             DEFAULT_UNIFIED_SETTINGS.notifyOnThreadCompletion ? (
               <SettingResetButton
-                label="task completion notifications"
+                ariaLabel={gt("Reset task completion notifications to default")}
                 onClick={() =>
                   updateSettings({
                     notifyOnThreadCompletion: DEFAULT_UNIFIED_SETTINGS.notifyOnThreadCompletion,
@@ -144,7 +149,7 @@ export function NotificationsSettingsPanel() {
               onCheckedChange={(checked) => {
                 void handleNotifyOnThreadCompletionChange(Boolean(checked));
               }}
-              aria-label="Notify when a task finishes"
+              aria-label={gt("Notify when a task finishes")}
             />
           }
         />
@@ -152,7 +157,9 @@ export function NotificationsSettingsPanel() {
         {pushAvailable ? (
           <SettingsRow
             {...searchableSetting("background-notifications")}
-            description="Get a notification when a task finishes or needs your input, even with the app closed or the screen off. Works on this device only."
+            description={gt(
+              "Get a notification when a task finishes or needs your input, even with the app closed or the screen off. Works on this device only.",
+            )}
             control={
               <Switch
                 checked={pushEnabled}
@@ -160,17 +167,19 @@ export function NotificationsSettingsPanel() {
                 onCheckedChange={(checked) => {
                   void handlePushEnabledChange(Boolean(checked));
                 }}
-                aria-label="Enable background notifications on this device"
+                aria-label={gt("Enable background notifications on this device")}
               />
             }
           />
         ) : null}
       </SettingsSection>
 
-      <SettingsSection title="What to notify me about">
+      <SettingsSection title={gt("What to notify me about")}>
         <p className="px-3 text-xs leading-normal text-muted-foreground/80 sm:px-4">
-          These apply to every device connected to this environment. The switches above are
-          per-device: they control whether this browser receives anything at all.
+          <T>
+            These apply to every device connected to this environment. The switches above are
+            per-device: they control whether this browser receives anything at all.
+          </T>
         </p>
         {NOTIFICATION_CATEGORIES.map((category) => (
           <SettingsRow

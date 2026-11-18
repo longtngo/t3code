@@ -7,6 +7,8 @@ import {
 import { AsyncResult } from "effect/reactivity";
 import { beforeEach, expect, it, vi } from "vite-plus/test";
 
+import { m } from "~/i18n/messages";
+
 const state = vi.hoisted(() => ({
   session: null as Pick<AuthSessionState, "authenticated" | "scopes"> | null,
   phase: "connected" as "connected" | "offline",
@@ -16,6 +18,12 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("react", () => ({ useCallback: <A>(callback: A) => callback }));
+// Upstream's hook now takes `useMessages()`; outside a render, resolve with the plain `m`.
+// Read at call time: `~/i18n/messages` itself imports gt-react, so the factory cannot import it.
+vi.mock("gt-react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("gt-react")>()),
+  useMessages: () => m,
+}));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) =>
     atom === state.assetAtom

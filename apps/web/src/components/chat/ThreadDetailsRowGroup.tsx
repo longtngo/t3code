@@ -1,3 +1,4 @@
+import { T, Var } from "gt-react";
 import { PlusIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -46,7 +47,9 @@ export function ThreadDetailsRowGroup<Row>(props: {
               className={`flex h-8 w-full cursor-pointer items-center rounded-lg ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-sm font-medium text-muted-foreground/70 hover:bg-black/[0.055] hover:text-foreground/80 dark:hover:bg-white/[0.075]`}
             >
               <PlusIcon aria-hidden className="size-4 shrink-0" />
-              Show {Math.min(hiddenCount, THREAD_DETAILS_SHOW_MORE_PAGE)} more
+              <T>
+                Show <Var>{Math.min(hiddenCount, THREAD_DETAILS_SHOW_MORE_PAGE)}</Var> more
+              </T>
             </button>
           ) : null}
         </>

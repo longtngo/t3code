@@ -1,3 +1,6 @@
+import { msg } from "gt-react";
+
+import { m } from "~/i18n/messages";
 import type { WorkspaceMemberBranchReport, WorkspaceMemberPrBaseSource } from "@t3tools/contracts";
 
 /**
@@ -40,15 +43,20 @@ export function gateMemberAction(
  * something the user or T3 Code established, and the other two are inferences
  * that the user is being given the chance to correct.
  */
-export function describePrBaseSource(source: WorkspaceMemberPrBaseSource): string {
+export function prBaseSourceMessage(source: WorkspaceMemberPrBaseSource): string {
   switch (source) {
     case "configured":
-      return "Recorded for this branch";
+      return msg("Recorded for this branch");
     case "reflog":
-      return "Where this branch was cut from";
+      return msg("Where this branch was cut from");
     case "integration":
-      return "This repository's integration branch";
+      return msg("This repository's integration branch");
   }
+}
+
+/** {@link prBaseSourceMessage} resolved now; components resolve it with `useMessages()`. */
+export function describePrBaseSource(source: WorkspaceMemberPrBaseSource): string {
+  return m(prBaseSourceMessage(source));
 }
 
 /**

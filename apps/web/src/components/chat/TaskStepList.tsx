@@ -1,7 +1,8 @@
+import { formatDuration } from "@t3tools/shared/orchestrationTimingCopy";
+import { useMessages } from "gt-react";
 import { CheckIcon, CircleDotIcon, CircleIcon } from "lucide-react";
 import { memo } from "react";
 
-import { formatDuration } from "../../session-logic";
 import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
 
@@ -62,6 +63,7 @@ export const TaskStepList = memo(function TaskStepList({
 }: {
   readonly steps: readonly ComposerTaskStep[];
 }) {
+  const m = useMessages();
   return (
     <>
       {keyedTaskSteps(steps).map(({ key, step }) => (
@@ -103,7 +105,7 @@ export const TaskStepList = memo(function TaskStepList({
               data-composer-task-duration="true"
             >
               {step.durationMs !== undefined
-                ? formatDuration(step.durationMs)
+                ? formatDuration(step.durationMs, m)
                 : step.status === "inProgress"
                   ? "now"
                   : null}

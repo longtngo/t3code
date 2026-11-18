@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useState } from "react";
 import { ChevronRightIcon } from "lucide-react";
 
@@ -106,54 +107,70 @@ export function MachineDetails(props: { sample: HostMetricsSample }) {
 /** Split out from the disclosure so its contents are renderable in a test. */
 export function MachineDetailList(props: { sample: HostMetricsSample }) {
   const { sample } = props;
+  const gt = useGT();
   const loadAvg = sample.cpu.loadAvg.filter((value) => Number.isFinite(value));
   return (
     <dl className="mt-1 space-y-1 text-2xs">
       {sample.cpu.perCore.length > 0 ? (
         <div>
           <dt className="text-muted-foreground">
-            Cores{sample.host ? ` (${String(sample.host.cores)})` : ""}
+            {sample.host
+              ? gt("Cores ({count})", { count: String(sample.host.cores) })
+              : gt("Cores")}
           </dt>
-          <dd className="mt-0.5 flex items-end gap-px" aria-label="Per-core utilization">
-            {sample.cpu.perCore.map((corePct, index) => (
-              <Tooltip
-                // oxlint-disable-next-line react/no-array-index-key -- Cores have no identity beyond their position, and the list is fixed for the life of the host.
-                key={index}
-              >
-                <TooltipTrigger
-                  render={
-                    <span
-                      role="img"
-                      aria-label={`Core ${String(index)}: ${String(Math.round(corePct))}%`}
-                      className={cn(
-                        "w-1 rounded-t-xs",
-                        SEVERITY_BG[vitalsLevel(clampPct(corePct))],
-                      )}
-                      style={{ height: `${String(Math.max(2, clampPct(corePct) * 0.16))}px` }}
-                    />
-                  }
-                />
-                <TooltipPopup>
-                  Core {String(index)}: {String(Math.round(corePct))}%
-                </TooltipPopup>
-              </Tooltip>
-            ))}
+          <dd className="mt-0.5 flex items-end gap-px" aria-label={gt("Per-core utilization")}>
+            {sample.cpu.perCore.map((corePct, index) => {
+              const coreLabel = gt("Core {index}: {pct}%", {
+                index: String(index),
+                pct: String(Math.round(corePct)),
+              });
+              return (
+                <Tooltip
+                  // oxlint-disable-next-line react/no-array-index-key -- Cores have no identity beyond their position, and the list is fixed for the life of the host.
+                  key={index}
+                >
+                  <TooltipTrigger
+                    render={
+                      <span
+                        role="img"
+                        aria-label={coreLabel}
+                        className={cn(
+                          "w-1 rounded-t-xs",
+                          SEVERITY_BG[vitalsLevel(clampPct(corePct))],
+                        )}
+                        style={{ height: `${String(Math.max(2, clampPct(corePct) * 0.16))}px` }}
+                      />
+                    }
+                  />
+                  <TooltipPopup>{coreLabel}</TooltipPopup>
+                </Tooltip>
+              );
+            })}
           </dd>
         </div>
       ) : null}
       {loadAvg.length > 0 ? (
-        <DetailRow label="Load" value={loadAvg.map((value) => value.toFixed(2)).join("  ")} />
+        <DetailRow
+          label={gt("Load", { $context: "CPU load average" })}
+          value={loadAvg.map((value) => value.toFixed(2)).join("  ")}
+        />
       ) : null}
       <DetailRow
-        label="Memory"
-        value={`${formatBytes(sample.mem.usedBytes)} of ${formatBytes(sample.mem.totalBytes)}`}
+        label={gt("Memory")}
+        value={gt("{used} of {total}", {
+          used: formatBytes(sample.mem.usedBytes),
+          total: formatBytes(sample.mem.totalBytes),
+        })}
       />
       {sample.gpu?.name ? <DetailRow label="GPU" value={sample.gpu.name} /> : null}
       {sample.gpu?.vramUsedBytes !== undefined ? (
         <DetailRow label="VRAM" value={formatBytes(sample.gpu.vramUsedBytes)} />
       ) : null}
       {sample.host ? (
-        <DetailRow label="Host" value={`${sample.host.platform} ${sample.host.arch}`} />
+        <DetailRow
+          label={gt("Host", { $context: "the machine" })}
+          value={`${sample.host.platform} ${sample.host.arch}`}
+        />
       ) : null}
     </dl>
   );

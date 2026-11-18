@@ -1,3 +1,5 @@
+import { useGT } from "gt-react";
+
 import {
   ACTIVE_SLOTS_HINT,
   ActiveSlotsField,
@@ -21,10 +23,11 @@ const ACTIVE_SLOTS_ANCHOR = searchableSetting("queue-slots").id;
 export function QueueSettingsView(props: ReturnType<typeof useQueueSlots>) {
   const { slots, perProvider, providerSlots, instances, writable, notice } = props;
   const setQueueSlots = useSetQueueSlots();
+  const gt = useGT();
 
   return (
     <SettingsPageContainer>
-      <SettingsSection title="Queue">
+      <SettingsSection title={gt("Queue")}>
         {perProvider ? null : (
           <SettingsRow
             {...searchableSetting("queue-slots")}
@@ -38,13 +41,13 @@ export function QueueSettingsView(props: ReturnType<typeof useQueueSlots>) {
           description={
             perProvider
               ? PER_PROVIDER_HINT
-              : "Give each provider its own number. 0 holds that provider's queued threads."
+              : gt("Give each provider its own number. 0 holds that provider's queued threads.")
           }
           control={
             <Switch
               checked={perProvider}
               onCheckedChange={(value) => void setQueueSlots({ perProvider: value })}
-              aria-label="Per provider"
+              aria-label={gt("Per provider")}
               disabled={!writable}
             />
           }

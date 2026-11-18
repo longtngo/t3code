@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { T, useGT } from "gt-react";
 import { SettingsIcon } from "lucide-react";
 import { MAX_QUEUE_SLOTS, type QueueSlotSettings } from "@t3tools/contracts";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -62,6 +63,7 @@ function SlotField(props: {
   pick: (settings: QueueSlotSettings) => number;
   disabled: boolean;
 }) {
+  const gt = useGT();
   const [draft, setDraft] = useState(props.value);
   const sending = useRef(false);
   const pending = useRef<{ value: number; seq: number } | null>(null);
@@ -120,9 +122,15 @@ function SlotField(props: {
       value={draft}
     >
       <NumberFieldGroup>
-        <NumberFieldDecrement aria-label={`Decrease ${props.label}`} className="[&_svg]:size-3.5" />
+        <NumberFieldDecrement
+          aria-label={gt("Decrease {label}", { label: props.label })}
+          className="[&_svg]:size-3.5"
+        />
         <NumberFieldInput aria-label={props.label} inputMode="numeric" />
-        <NumberFieldIncrement aria-label={`Increase ${props.label}`} className="[&_svg]:size-3.5" />
+        <NumberFieldIncrement
+          aria-label={gt("Increase {label}", { label: props.label })}
+          className="[&_svg]:size-3.5"
+        />
       </NumberFieldGroup>
     </NumberField>
   );
@@ -130,11 +138,12 @@ function SlotField(props: {
 
 /** The overall slot count, shown when the queue is not per provider. */
 export function ActiveSlotsField(props: { value: number; disabled: boolean }) {
+  const gt = useGT();
   const setQueueSlots = useSetQueueSlots();
   return (
     <SlotField
       setting="slots"
-      label="active slots"
+      label={gt("active slots")}
       disabled={props.disabled}
       value={props.value}
       onCommit={(value) => setQueueSlots({ slots: value })}
@@ -150,11 +159,12 @@ export function ProviderSlotsField(props: {
   providerSlots: QueueSlotSettings["providerSlots"];
   disabled: boolean;
 }) {
+  const gt = useGT();
   const setQueueSlots = useSetQueueSlots();
   return (
     <SlotField
       setting={`providerSlots.${props.instanceId}`}
-      label={`${props.label} slots`}
+      label={gt("{provider} slots", { provider: props.label })}
       disabled={props.disabled}
       value={providerSlotCap(props.providerSlots, props.instanceId)}
       onCommit={(value) => setQueueSlots({ providerSlots: { [props.instanceId]: value } })}
@@ -174,6 +184,7 @@ export const PER_PROVIDER_HINT =
 /** The queue header's slot count and the gear popover that edits it. */
 export function QueueSlotsControl(props: ReturnType<typeof useQueueSlots>) {
   const { slots, perProvider, providerSlots, instances, total, writable, notice } = props;
+  const gt = useGT();
   const setQueueSlots = useSetQueueSlots();
   const setPerProvider = (value: boolean) => void setQueueSlots({ perProvider: value });
 
@@ -219,7 +230,7 @@ export function QueueSlotsControl(props: ReturnType<typeof useQueueSlots>) {
             <span
               role="img"
               data-testid="sidebar-queue-slots"
-              aria-label={`Queue slots: ${total}`}
+              aria-label={gt("Queue slots: {total}", { total })}
               className="shrink-0 tabular-nums"
             >
               {total}
@@ -233,7 +244,7 @@ export function QueueSlotsControl(props: ReturnType<typeof useQueueSlots>) {
           render={
             <button
               type="button"
-              aria-label="Queue slots"
+              aria-label={gt("Queue slots")}
               className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
             >
               <SettingsIcon className="size-3" />
@@ -244,12 +255,16 @@ export function QueueSlotsControl(props: ReturnType<typeof useQueueSlots>) {
           <div className="flex flex-col gap-3 text-sm">
             {perProvider ? null : (
               <div className="flex items-center justify-between gap-3">
-                <span>Active slots</span>
+                <span>
+                  <T>Active slots</T>
+                </span>
                 <ActiveSlotsField value={slots} disabled={!writable} />
               </div>
             )}
             <label className="flex items-center justify-between gap-3">
-              <span>Per provider</span>
+              <span>
+                <T>Per provider</T>
+              </span>
               <Switch
                 size="sm"
                 checked={perProvider}

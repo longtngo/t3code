@@ -384,6 +384,7 @@ const makeHarness = (options?: {
               setModel: () => Effect.void,
               setPermissionMode: () => Effect.void,
               applyFlagSettings: () => Effect.void,
+              renameSession: () => Effect.void,
               interrupt: Deferred.succeed(interruptRequested, undefined),
               stopTask: () => Effect.void,
               backgroundTasks: () => Effect.succeed(false),

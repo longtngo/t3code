@@ -72,9 +72,10 @@ const favicon = (dataUrl: string, pageUrl: string): DesktopPreviewFavicon => ({
   capturedAt: 1,
 });
 
-function overlay(icon: DesktopPreviewFavicon | null) {
+function overlay(tabId: string, icon: DesktopPreviewFavicon | null) {
   return {
     hasWebContents: true,
+    navStatus: sessions[tabId]!.navStatus,
     canGoBack: false,
     canGoForward: false,
     loading: false,
@@ -112,7 +113,7 @@ function renderTabs(
       activeSurfaceId={previewSurface.id}
       pendingSurfaceIds={new Set()}
       previewSessions={sessions}
-      desktopByTabId={{ "tab-1": overlay(null), "tab-2": overlay(second) }}
+      desktopByTabId={{ "tab-1": overlay("tab-1", null), "tab-2": overlay("tab-2", second) }}
       previewRuntimeTabId={(tabId) => `runtime:${tabId}`}
       terminalLabelsById={new Map()}
       onActivate={(surface) => handlers.onActivate?.(surface.id)}

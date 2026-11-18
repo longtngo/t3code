@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -14,6 +15,7 @@ import {
   useCommandOutbox,
 } from "~/rpc/commandOutbox";
 import type { StartThreadTurnInput } from "@t3tools/client-runtime/operations";
+import { m } from "~/i18n/messages";
 import { readThreadShell } from "~/state/entities";
 import { useEnvironments } from "~/state/environments";
 import { threadEnvironment } from "~/state/threads";
@@ -52,8 +54,12 @@ export function OutboxFlushCoordinator() {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: "Queued message expired",
-          description: `${describeQueuedText(turn.input)} waited too long to send and was discarded.`,
+          title: m(msg("Queued message expired")),
+          description: m(
+            msg("{message} waited too long to send and was discarded.", {
+              message: describeQueuedText(turn.input),
+            }),
+          ),
         }),
       );
     }
@@ -128,7 +134,7 @@ export function OutboxFlushCoordinator() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Queued message failed",
+              title: m(msg("Queued message failed")),
               description: `${describeQueuedText(turn.input)}: ${
                 error instanceof Error ? error.message : "could not be sent."
               }`,
@@ -166,7 +172,7 @@ export function OutboxFlushCoordinator() {
 /** A short quote of the dropped message so the toast names what was lost. */
 function describeQueuedText(input: StartThreadTurnInput): string {
   const text = input.message.text;
-  if (text.length === 0) return "A queued message";
+  if (text.length === 0) return m(msg("A queued message"));
   // Split by code point so a surrogate pair cannot become a replacement glyph.
   const points = [...text];
   return `"${points.length > 60 ? `${points.slice(0, 60).join("")}…` : text}"`;

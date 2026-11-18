@@ -6,7 +6,10 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
+import { msg, useGT } from "gt-react";
 import { useEffect, useRef } from "react";
+
+import { m } from "~/i18n/messages";
 
 import { readThreadShell } from "../state/entities";
 import { usePrimaryEnvironment } from "../state/environments";
@@ -21,6 +24,7 @@ import { toastManager } from "./ui/toast";
  * document, and the compare-and-set writer. Mounted once at the app root.
  */
 export function ThreadQueueServerSync() {
+  const gt = useGT();
   const primary = usePrimaryEnvironment();
   const primaryId = primary?.environmentId ?? null;
   const connected = primary?.connection.phase === "connected";
@@ -39,10 +43,12 @@ export function ThreadQueueServerSync() {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- shows an imperative toast for local entries left behind, then clears the counter
   useEffect(() => {
     if (localEntriesLeftBehind === 0) return;
-    const title =
-      localEntriesLeftBehind === 1
-        ? "1 item queued before the queue was shared was not moved into it. Add it again."
-        : `${localEntriesLeftBehind} items queued before the queue was shared were not moved into it. Add them again.`;
+    const title = m(
+      msg(
+        "{count, plural, one {{count} item queued before the queue was shared was not moved into it. Add it again.} other {{count} items queued before the queue was shared were not moved into it. Add them again.}}",
+        { count: localEntriesLeftBehind },
+      ),
+    );
     toastManager.add({ type: "info", title });
     useThreadQueueStore.setState({ localEntriesLeftBehind: 0 });
   }, [localEntriesLeftBehind]);
@@ -54,7 +60,7 @@ export function ThreadQueueServerSync() {
     <ThreadQueueSubscription
       key={primaryId}
       environmentId={primaryId}
-      serverLabel={primary?.label ?? "the server"}
+      serverLabel={primary?.label ?? gt("the server")}
     />
   ) : null;
 }
@@ -109,12 +115,20 @@ function ThreadQueueSubscription(props: { environmentId: EnvironmentId; serverLa
           // it cannot decode is a SchemaError too, so "rejected" can follow a change the server
           // saved; the subscription's next document corrects what this tab shows.
           title: unsaved
-            ? `${queuedThreadTitle(unsaved)} can't be queued: it is too large to save.`
+            ? m(
+                msg("{title} can't be queued: it is too large to save.", {
+                  title: queuedThreadTitle(unsaved),
+                }),
+              )
             : Schema.isSchemaError(error)
-              ? "Queue change was rejected"
+              ? m(msg("Queue change was rejected"))
               : Predicate.isTagged(error, "ThreadQueueWriteError")
-                ? `Queue change couldn't be saved on ${serverLabelRef.current}`
-                : `Queue change didn't reach ${serverLabelRef.current}`,
+                ? m(
+                    msg("Queue change couldn't be saved on {server}", {
+                      server: serverLabelRef.current,
+                    }),
+                  )
+                : m(msg("Queue change didn't reach {server}", { server: serverLabelRef.current })),
         }),
     });
     return () => {
@@ -130,6 +144,6 @@ function queuedThreadTitle(entry: ThreadQueueEntry): string {
   return (
     readThreadShell(scopeThreadRef(entry.environmentId, entry.threadId))?.title ??
     entry.label ??
-    "A queued thread"
+    m(msg("A queued thread"))
   );
 }

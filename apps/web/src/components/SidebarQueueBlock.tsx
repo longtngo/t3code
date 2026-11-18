@@ -1,5 +1,6 @@
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useGT } from "gt-react";
 import { ChevronDownIcon, PauseIcon, PlayIcon, XIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -77,6 +78,7 @@ export function SidebarQueueBlock(props: {
     note: string | null,
   ) => ReactNode;
 }) {
+  const gt = useGT();
   const paused = useThreadQueueStore((state) => state.paused);
   const lastFailure = useThreadQueueStore((state) => state.lastFailure);
   const setPaused = useThreadQueueStore((state) => state.setPaused);
@@ -146,7 +148,9 @@ export function SidebarQueueBlock(props: {
             <span className="shrink-0">{label}</span>
             {paused || queueSlots.total === 0 ? (
               <span className="min-w-0 truncate text-warning-foreground">
-                {lastFailure ? `Paused: ${lastFailure.title} failed` : "Paused"}
+                {lastFailure
+                  ? gt("Paused: {title} failed", { title: lastFailure.title })
+                  : gt("Paused", { $context: "queue state" })}
               </span>
             ) : null}
             <span aria-hidden className="h-px min-w-2 flex-1 bg-sidebar-border/60" />
@@ -161,7 +165,7 @@ export function SidebarQueueBlock(props: {
               render={
                 <button
                   type="button"
-                  aria-label={paused ? "Resume queue" : "Pause queue"}
+                  aria-label={paused ? gt("Resume queue") : gt("Pause queue")}
                   data-testid="sidebar-queue-pause"
                   disabled={readOnly}
                   onClick={() => setPaused(!paused)}
@@ -175,8 +179,8 @@ export function SidebarQueueBlock(props: {
               {paused && lastFailure
                 ? lastFailure.message
                 : paused
-                  ? "Resume queue"
-                  : "Pause queue"}
+                  ? gt("Resume queue")
+                  : gt("Pause queue")}
             </TooltipPopup>
           </Tooltip>
         </div>
@@ -206,6 +210,7 @@ export function ForeignQueueRow(props: {
   sortable: QueueRowSortableBag;
   isOverlayCopy?: boolean | undefined;
 }) {
+  const gt = useGT();
   const readOnly = useThreadQueueStore((state) => state.readOnly);
   const remove = useThreadQueueStore((state) => state.remove);
   const { sortable } = props;
@@ -230,15 +235,15 @@ export function ForeignQueueRow(props: {
         )}
       >
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm">{props.entry.label ?? "Untitled"}</div>
+          <div className="truncate text-sm">{props.entry.label ?? gt("Untitled")}</div>
           <div className="truncate text-xs text-sidebar-muted-foreground/60">
-            {queuedOnAnotherDevice(props.entry) ?? "Not available on this device"}
+            {queuedOnAnotherDevice(props.entry) ?? gt("Not available on this device")}
           </div>
         </div>
         <Button
           size="icon-xs"
           variant="ghost-muted"
-          aria-label="Remove from queue"
+          aria-label={gt("Remove from queue")}
           disabled={readOnly}
           onClick={() => remove(threadQueueEntryKey(props.entry))}
         >

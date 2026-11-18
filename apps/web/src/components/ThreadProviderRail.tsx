@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { useGT } from "gt-react";
 
 import { useEnvironmentProviders } from "../state/environments";
 import { cn } from "../lib/utils";
@@ -39,6 +40,7 @@ export function ThreadProviderRail({
   thread: RowThread;
   className?: string;
 }) {
+  const gt = useGT();
   const presentation = useThreadProvider(thread);
   if (!presentation) return null;
 
@@ -52,7 +54,7 @@ export function ThreadProviderRail({
       )}
       style={{ backgroundColor: presentation.accentColor }}
       role="img"
-      aria-label={`Provider: ${presentation.displayName}`}
+      aria-label={gt("Provider: {name}", { name: presentation.displayName })}
       data-provider-instance={resolveThreadProviderInstanceId(thread)}
     />
   );

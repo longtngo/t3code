@@ -6,6 +6,9 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { SidebarSectionDefinition } from "@t3tools/contracts";
 import * as Hex from "effect/encoding/Hex";
+import { msg } from "gt-react";
+
+import { m, type MessageResolver } from "./i18n/messages";
 
 export interface SidebarSectionView {
   readonly id: string;
@@ -119,17 +122,20 @@ export async function runSidebarSectionMove(
 export function sidebarSectionMoveFailureTitle(
   step: SidebarSectionMoveStep,
   sectionName: string | null,
+  resolve: MessageResolver = m,
 ): string {
-  const targetName = sectionName ?? "Active";
+  const targetName = sectionName ?? resolve(msg("Active", { $context: "sidebar section" }));
   switch (step) {
     case "section":
-      return sectionName === null ? "Failed to move thread to Active" : "Failed to move thread";
+      return sectionName === null
+        ? resolve(msg("Failed to move thread to Active"))
+        : resolve(msg("Failed to move thread"));
     case "unpin":
-      return `Moved to ${targetName}, but couldn't unpin`;
+      return resolve(msg("Moved to {targetName}, but couldn't unpin", { targetName }));
     case "unsettle":
-      return `Moved to ${targetName}, but couldn't un-settle`;
+      return resolve(msg("Moved to {targetName}, but couldn't un-settle", { targetName }));
     case "unsnooze":
-      return `Moved to ${targetName}, but couldn't wake it`;
+      return resolve(msg("Moved to {targetName}, but couldn't wake it", { targetName }));
   }
 }
 
@@ -169,14 +175,17 @@ export function sidebarSectionMoveState(input: {
   return { sections: input.sections, currentSectionId: input.thread.sidebarSectionId };
 }
 
-export function sidebarSectionDeleteMessage(name: string, count: number): string {
-  const detail =
-    count === 0
-      ? "It has no threads."
-      : count === 1
-        ? "Its 1 thread returns to Active."
-        : `Its ${count} threads return to Active.`;
-  return `Delete section "${name}"?\n${detail}`;
+export function sidebarSectionDeleteMessage(
+  name: string,
+  count: number,
+  resolve: MessageResolver = m,
+): string {
+  return resolve(
+    msg(
+      'Delete section "{name}"?\n{count, plural, =0 {It has no threads.} one {Its {count} thread returns to Active.} other {Its {count} threads return to Active.}}',
+      { name, count },
+    ),
+  );
 }
 
 /** Colon-free, so its marker id never parses as a scoped thread key. `getRandomValues`, unlike

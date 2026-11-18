@@ -26,7 +26,8 @@ vi.mock(import("@tanstack/react-router"), async (original) => ({
 }));
 vi.mock(import("../../state/entities"), async (original) => ({
   ...(await original()),
-  useThreadProjection: (() => ({ projection: state.projection })) as never,
+  useQuietThreadProjection: ((ref: unknown) =>
+    ref === null ? null : { projection: state.projection }) as never,
   useThreadRelationshipShells: ((ref: { readonly environmentId: string }) =>
     (state.shells as ReadonlyArray<{ readonly environmentId: string; readonly source: unknown }>)
       .filter((shell) => shell.environmentId === ref.environmentId)

@@ -1,3 +1,6 @@
+import { msg } from "gt-react";
+
+import { m } from "~/i18n/messages";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/models";
 import type { PendingBackgroundWorkTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
@@ -28,15 +31,20 @@ export function backgroundPanelTasks(input: {
 }
 
 /** The row's kind label. Work the adapter cannot name reads as a plain task. */
-export function backgroundTaskKindLabel(kind: PendingBackgroundWorkTask["kind"]): string {
+export function backgroundTaskKindMessage(kind: PendingBackgroundWorkTask["kind"]): string {
   switch (kind) {
     case "subagent":
-      return "Subagent";
+      return msg("Subagent", { $context: "kind of background work" });
     case "command":
-      return "Shell";
+      return msg("Shell", { $context: "kind of background work" });
     case "monitor":
-      return "Monitor";
+      return msg("Monitor", { $context: "kind of background work" });
     case "background_task":
-      return "Task";
+      return msg("Task", { $context: "kind of background work" });
   }
+}
+
+/** {@link backgroundTaskKindMessage} resolved now; components resolve it with `useMessages()`. */
+export function backgroundTaskKindLabel(kind: PendingBackgroundWorkTask["kind"]): string {
+  return m(backgroundTaskKindMessage(kind));
 }

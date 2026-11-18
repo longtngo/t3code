@@ -151,24 +151,6 @@ function inferOs(userAgent: string | undefined): string | undefined {
   return undefined;
 }
 
-const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "0000:0000:0000:0000:0000:0000:0000:0001"]);
-
-/**
- * The client address to record, honouring a co-located proxy. `x-forwarded-for` is trusted
- * only from a loopback peer: the value is shown on the Connections audit screen, so a remote
- * client must not be able to plant an address. Left-most entry is the original client.
- */
-export function resolveClientIpAddress(input: {
-  readonly socketAddress: string | undefined;
-  readonly forwardedFor: string | undefined;
-}): string | undefined {
-  if (input.socketAddress === undefined || !LOOPBACK_ADDRESSES.has(input.socketAddress)) {
-    return input.socketAddress;
-  }
-  const forwarded = normalizeIpAddress(input.forwardedFor?.split(",")[0]);
-  return forwarded ?? input.socketAddress;
-}
-
 function readRemoteAddressFromSource(source: unknown): string | undefined {
   if (!source || typeof source !== "object") {
     return undefined;
@@ -182,6 +164,26 @@ function readRemoteAddressFromSource(source: unknown): string | undefined {
   };
 
   return normalizeIpAddress(candidate.socket?.remoteAddress ?? candidate.remoteAddress);
+}
+
+const isLoopbackIpAddress = (address: string): boolean =>
+  (NodeNet.isIPv4(address) && address.startsWith("127.")) || address === "::1";
+
+/**
+ * The client address shown on the Connections screen. `x-forwarded-for` is trusted only from a
+ * loopback peer (a local proxy such as Tailscale Serve), and only its right-most entry, the one
+ * that proxy appended; anything to its left came from the client.
+ */
+export function resolveClientIpAddress(input: {
+  readonly socketAddress: string | undefined;
+  readonly forwardedFor: string | undefined;
+}): string | undefined {
+  const peer = input.socketAddress;
+  if (!peer || !isLoopbackIpAddress(peer)) {
+    return peer;
+  }
+  const forwarded = normalizeIpAddress(input.forwardedFor?.split(",").at(-1));
+  return forwarded && NodeNet.isIP(forwarded) !== 0 ? forwarded : peer;
 }
 
 export function deriveAuthClientMetadata(input: {

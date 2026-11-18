@@ -1,4 +1,5 @@
 import type { EnvironmentId, WorkspaceMember } from "@t3tools/contracts";
+import { T, useGT } from "gt-react";
 import { GitBranchIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -30,6 +31,7 @@ export default function WorkspaceMembersControl({
   members,
   onMembersChange,
 }: WorkspaceMembersControlProps) {
+  const gt = useGT();
   // Only the id is held. The members array is re-rendered from the server on
   // every write, so a held member object would go stale after the first save.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -96,8 +98,10 @@ export default function WorkspaceMembersControl({
     <div className="flex flex-col gap-4">
       {current.length === 0 ? (
         <p className="rounded-lg border border-border/70 border-dashed px-3 py-6 text-center text-muted-foreground text-sm">
-          No repositories attached yet. Attach one below to let this project's threads read and
-          write it.
+          <T>
+            No repositories attached yet. Attach one below to let this project's threads read and
+            write it.
+          </T>
         </p>
       ) : (
         <ul className="divide-y divide-border/70 overflow-hidden rounded-lg border border-border/70">
@@ -121,15 +125,15 @@ export default function WorkspaceMembersControl({
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                   <Button
-                    aria-label={`Edit ${workspaceMember.title}`}
+                    aria-label={gt("Edit {title}", { title: workspaceMember.title })}
                     onClick={() => setEditingId(isEditing ? null : workspaceMember.id)}
                     size="sm"
                     variant="ghost"
                   >
-                    Edit
+                    <T>Edit</T>
                   </Button>
                   <Button
-                    aria-label={`Detach ${workspaceMember.title}`}
+                    aria-label={gt("Detach {title}", { title: workspaceMember.title })}
                     onClick={() => {
                       if (isEditing) setEditingId(null);
                       void writeMembers(removeMember(current, workspaceMember.id));
@@ -137,7 +141,7 @@ export default function WorkspaceMembersControl({
                     size="sm"
                     variant="ghost"
                   >
-                    Detach
+                    <T>Detach</T>
                   </Button>
                 </div>
               </li>

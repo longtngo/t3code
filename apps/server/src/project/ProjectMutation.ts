@@ -58,14 +58,16 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
 
 /**
  * What the client is told when a project mutation fails. Only errors written
- * for the user pass through: a non-empty project on delete and a refused
- * workspace member; anything else is generic.
+ * for the user pass through: a non-empty project on delete, a refused
+ * workspace member, and a refused project path; anything else is generic.
  */
 export const projectMutationErrorMessage = (cause: {
   readonly _tag: string;
   readonly message: string;
 }) =>
-  cause._tag === "ProjectNotEmptyError" || cause._tag === "ProjectMemberInvalidError"
+  cause._tag === "ProjectNotEmptyError" ||
+  cause._tag === "ProjectMemberInvalidError" ||
+  cause._tag === "ProjectInvalidError"
     ? cause.message
     : "Failed to mutate project.";
 // A disconnect after deletion commits must not leave the in-memory clone record behind.

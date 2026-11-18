@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useGT } from "gt-react";
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, LoaderIcon, XIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import type { SidebarItemStatus } from "../sidebarSections";
@@ -102,6 +103,7 @@ export function SidebarItemRow({
   onSelect: () => void;
   onRemove?: (() => void) | undefined;
 }) {
+  const gt = useGT();
   return (
     <div
       className={cn("group/row relative flex items-center rounded-lg", selected && "bg-accent/60")}
@@ -132,7 +134,7 @@ export function SidebarItemRow({
         <button
           type="button"
           onClick={onRemove}
-          aria-label="Remove"
+          aria-label={gt("Remove", { $context: "verb, removes a finished item from the list" })}
           className="absolute right-1.5 hidden size-5 items-center justify-center rounded text-muted-foreground/50 hover:bg-muted/60 hover:text-foreground/80 group-hover/row:flex"
         >
           <XIcon className="size-3" />

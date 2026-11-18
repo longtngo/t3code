@@ -1,7 +1,9 @@
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { EnvironmentId, ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { useClientSettings } from "~/hooks/useSettings";
+import type { MessageResolver } from "~/i18n/messages";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import {
@@ -131,12 +133,13 @@ function ContextBlock(props: {
   modelDisplayName?: string | null | undefined;
 }) {
   const { usage, modelDisplayName } = props;
+  const messages = useMessages();
   const pct = readingPct(usage.usedPercentage ?? 0);
   const level: Severity = vitalsLevel(pct);
   const hasMax = usage.maxTokens !== null;
   // The denominator is the model's window, so the reading no longer climbs to
   // 100% as compaction approaches. This marker is what carries that signal now.
-  const compaction = deriveCompactionMarker(usage);
+  const compaction = deriveCompactionMarker(usage, messages);
   // Gated on EITHER half, not on hasMax: a provider that reports no window size
   // is exactly the case where naming the model matters most, and hanging the
   // name off the size's gate would drop it there.
@@ -149,7 +152,9 @@ function ContextBlock(props: {
   return (
     <div className={BLOCK_CLASS}>
       <div className="flex items-baseline justify-between gap-2">
-        <span className={CAP_CLASS}>Context</span>
+        <span className={CAP_CLASS}>
+          <T>Context</T>
+        </span>
         {caption ? (
           <span className="truncate font-mono text-2xs text-muted-foreground/60">{caption}</span>
         ) : null}
@@ -203,7 +208,13 @@ function ContextBlock(props: {
       */}
       {usage.compactsAutomatically && usage.autoCompactSource !== "auto" ? (
         <div className="mt-2 text-pretty text-2xs font-medium text-muted-foreground/70">
-          {props.providerDisplayName ?? "It"} automatically compacts its context when needed.
+          {props.providerDisplayName ? (
+            <T>
+              <Var>{props.providerDisplayName}</Var> automatically compacts its context when needed.
+            </T>
+          ) : (
+            <T>It automatically compacts its context when needed.</T>
+          )}
         </div>
       ) : null}
     </div>
@@ -221,6 +232,7 @@ export function WindowRow(props: {
   /** Trailing figure for rows whose headline is money rather than a percentage. */
   detail?: string | undefined;
 }) {
+  const gt = useGT();
   const paceTolerance = useClientSettings((s) => s.usagePaceTolerance);
   const pace: WindowPace = computeWindowPace(props.window, props.windowMs, props.now);
   const level = windowSeverity(pace, paceTolerance);
@@ -270,8 +282,14 @@ export function WindowRow(props: {
       */}
       <div className="flex flex-wrap items-baseline justify-between gap-x-2 font-mono text-2xs text-muted-foreground/70">
         <span className="whitespace-nowrap">
-          <span className="font-semibold text-muted-foreground">{pace.usage}% used</span>
-          {pace.projection !== null ? ` · pace ${pace.projection}%` : null}
+          <span className="font-semibold text-muted-foreground">
+            <T>
+              <Var>{pace.usage}</Var>% used
+            </T>
+          </span>
+          {pace.projection !== null
+            ? gt(" · pace {projection}%", { projection: pace.projection })
+            : null}
         </span>
         {/*
           `detail` before the reset time: a spend row's headline is its money
@@ -294,12 +312,15 @@ function LimitsBlock(props: {
   refresh?: { run: () => void; pending: boolean } | undefined;
 }) {
   const { usage, now, timestampFormat, refresh } = props;
+  const gt = useGT();
   const age = formatSnapshotAge(usage.fetchedAt, now);
   const extraUsage = extraUsageWindow(usage.spend, now);
   return (
     <div className={BLOCK_CLASS}>
       <div className="flex items-baseline justify-between gap-2">
-        <span className={CAP_CLASS}>Usage limits</span>
+        <span className={CAP_CLASS}>
+          <T>Usage limits</T>
+        </span>
         {/*
           No `pace` legend: every row's footer already labels its pace. The space
           gives the refresh control a text label (a bare icon read as decoration),
@@ -322,7 +343,7 @@ function LimitsBlock(props: {
                       ? "cursor-default"
                       : "cursor-pointer hover:bg-muted hover:text-foreground",
                   )}
-                  aria-label="Refresh usage from the provider"
+                  aria-label={gt("Refresh usage from the provider")}
                 />
               }
             >
@@ -333,7 +354,7 @@ function LimitsBlock(props: {
               />
             </TooltipTrigger>
             <TooltipPopup>
-              {refresh.pending ? "Refreshing…" : "Refresh usage from the provider"}
+              {refresh.pending ? gt("Refreshing…") : gt("Refresh usage from the provider")}
             </TooltipPopup>
           </Tooltip>
         ) : null}
@@ -388,7 +409,7 @@ function LimitsBlock(props: {
 
 // Assembled gauge (presentational) + connected wrapper
 
-function describeInputs(inputs: VitalsGaugeInputs): string {
+function describeInputs(inputs: VitalsGaugeInputs, resolve: MessageResolver): string {
   const parts: string[] = [];
   const push = (label: string, arc: VitalsGaugeArc) => {
     if (arc.pct !== null) parts.push(`${label} ${Math.round(arc.pct)}%`);
@@ -396,7 +417,9 @@ function describeInputs(inputs: VitalsGaugeInputs): string {
   push("context", inputs.context);
   push("5-hour", inputs.fiveHour);
   push("7-day", inputs.sevenDay);
-  return parts.length ? `Vitals: ${parts.join(", ")}` : "Vitals";
+  return parts.length
+    ? resolve(msg("Vitals: {parts}", { parts: parts.join(", ") }))
+    : resolve(msg("Vitals"));
 }
 
 /** The popover body: context / usage-limits blocks. */
@@ -451,7 +474,9 @@ export function VitalsDetail(props: {
         // how this popover got reported as broken. Three of the five drivers
         // are in this state permanently, so the sentence is worth its line.
         <div className={BLOCK_CLASS}>
-          <span className={CAP_CLASS}>Context</span>
+          <span className={CAP_CLASS}>
+            <T>Context</T>
+          </span>
           <div className="mt-1.5 text-pretty text-2xs text-muted-foreground/70">
             {missingContextReason}
           </div>
@@ -479,6 +504,7 @@ export function VitalsGauge(props: {
   reportsContextUsage?: boolean | undefined;
 }) {
   const { context, accountUsage } = props;
+  const messages = useMessages();
   const [open, setOpen] = useState(false);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const paceTolerance = useClientSettings((s) => s.usagePaceTolerance);
@@ -510,7 +536,7 @@ export function VitalsGauge(props: {
               "hover:bg-accent data-[pressed]:bg-accent",
               "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
             )}
-            aria-label={describeInputs(inputs)}
+            aria-label={describeInputs(inputs, messages)}
           >
             <VitalsGaugeIcon inputs={inputs} size={VITALS_GAUGE_TRIGGER_SIZE} />
           </button>

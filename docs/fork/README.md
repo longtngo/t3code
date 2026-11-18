@@ -173,7 +173,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 99 entries, ids 1-99, unique and monotonic. Upstream's v2 schema
+Current: 108 entries, ids 1-108, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
@@ -185,7 +185,8 @@ Current: 99 entries, ids 1-99, unique and monotonic. Upstream's v2 schema
 `072_WaitingLinkRequestIndex` is **81**, and upstream's `073`-`080` are **82**-**89** (a flat +9;
 `076_ProjectionProjectsPinArchive` is **85**). Id **90** is the fork's own `PushSubscriptions`
 repair, so upstream's `081`-`089` are **91**-**99** (a flat +10; `081_ProjectionMessageSearchText`
-is **91**, `089_ShellThreadReadIndexes` is **99**) and its next migration (`090`) takes **100**. Upstream's `hasPendingMigrations` also counts V2-preview rows for
+is **91**, `089_ShellThreadReadIndexes` is **99**), and since the 60th reconcile its `090`-`098` are
+**100**-**108** (the same +10; `098_ActiveShellIndexIndexes` is **108**), so its next (`099`) takes **109**. Upstream's `hasPendingMigrations` also counts V2-preview rows for
 its preview reconciliation; the fork drops that clause (it would report pending forever).
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
@@ -211,7 +212,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -cE '^\s*\[(34|90), "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `99 99 ok` and `2`.
+Expect `108 108 ok` and `2`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -439,8 +440,9 @@ had been mounted in that dialog, so the 8th reconcile restored the deleted dialo
 ellipsis button rather than porting the editor. That arrangement is over: the editor is now a
 `SettingsSection` titled **Workspace repositories** in
 `apps/web/src/components/settings/ProjectSettingsPanel.tsx`, and `Sidebar.tsx` carries only
-upstream's gear. Probe: `grep -c 'SettingsSection title="Workspace repositories"'` on that file is
-`1` (upstream's copy gives 0).
+upstream's gear. Probe: `grep -c 'SettingsSection title={gt("Workspace repositories")}'` on that
+file is `1` (upstream's copy gives 0). Since the 60th reconcile upstream wraps settings copy in
+`gt()`, so the plain-string title no longer matches.
 
 **What a reconcile must protect.** `ProjectSettingsPanel.tsx` is upstream-owned and churns — 27
 commits on `origin/main` since it was created — and it now holds the fork's only multi-repo mount on the
@@ -637,16 +639,23 @@ lines, and a package to hold it would be more machinery than the thing it holds.
 Both guards were verified by planting a raw NUL and watching them go red before being trusted
 green — an absence assertion that has never been seen to fail is not evidence.
 
-### 15. `defaultTheme` / `defaultThemeSetAt` are deliberately unpatchable
+### 15. Server-owned settings stay out of client patches
 
-Upstream #8569 added both to `ServerSettings` and not to `ServerSettingsPatch`, which trips the
-fork's patch-parity guard in `packages/contracts/src/settings.test.ts` (the guard exists because
-a field missing from the mirror silently drops edits — that is how a since-removed fork setting was found). It
-is deliberate here: `t3 theme set` (`apps/server/src/cli/theme.ts`) rewrites `settings.json`
-directly and removes both keys when cleared, and clients only ever read them. They are listed in
-`deliberatelyUnpatchable` rather than mirrored, so there is one writer, not two.
+The fork's patch-parity guard in `packages/contracts/src/settings.test.ts` fails when a
+`ServerSettings` field has no `ServerSettingsPatch` counterpart (it exists because a field missing
+from the mirror silently drops edits; that is how a since-removed fork setting was found). Each
+such field must either be mirrored or listed in `deliberatelyUnpatchable`. Today that list is
+`disableAuthentication`, `projectSettingsFolded`, `previousWorktreesDirectories` and
+`usageModelFilter`.
 
-The 36th reconcile added a third: upstream's `projectSettingsFolded`, the one-time marker for the
+The theme keys left the list at the 60th reconcile. Upstream #35247/#36724 made `defaultTheme`,
+`defaultThemeSetAt`, `defaultAppearance` and `defaultAppearanceSetAt` patchable server-side, and
+`ClientServerSettingsPatch` (`packages/contracts/src/settings.ts`) strips all four from client
+patches. The theme service (`apps/server/src/environmentTheme.ts`) and `t3 theme set`
+(`apps/server/src/cli/theme.ts`) validate and write them; clients only read them. One writer, not
+two, now enforced by the client schema instead of the list.
+
+The 36th reconcile added `projectSettingsFolded`, the one-time marker for the
 legacy per-project settings fold in `apps/server/src/serverSettings.ts`. The server writes it once
 and reads it on every load; a client patch would re-run or skip the migration. **The guard is
 fork-only — upstream has no patch-parity test — so every `ServerSettings` field upstream adds
@@ -766,7 +775,7 @@ provider label reads through the other. Both carry a `FORK-ONLY` comment now. Th
 loud (typecheck), which is the good case; the point of the note is that upstream will keep
 deleting them.
 
-### 16. The socket TOS guard is load-bearing until Node >= 26.5.1
+### 16. The socket TOS guard was load-bearing until Node >= 26.5.1; it is now removable
 
 `apps/server/src/processGuards.ts` makes `net.Socket#setTypeOfService` non-fatal, and `bin.ts`
 installs it inside the entrypoint guard so importing `cli` from a test patches nothing.
@@ -781,8 +790,10 @@ application frames** and nothing in the Effect error channel can catch it. It ki
 five times, taking every in-flight turn with it. HTTPS is immune: `TLSWrap` has no such method.
 
 Upstream fixed it: nodejs/undici#5544 -> #5547, undici 8.8.0, first shipped in **Node v26.5.1**.
-This box runs 26.3.1. **Delete the guard once the minimum Node is >= 26.5.1** - the removal
-condition is in the file.
+The removal condition is in the file. Since the 60th reconcile the root `engines.node` pin is
+`26.13.1`, past that threshold, so **the guard is now removable**; it has not been deleted yet.
+(`apps/server/package.json` still declares `^22.16 || ^23.11 || >=24.10`; check that range before
+deleting.)
 
 Two things this deliberately is NOT:
 
@@ -833,7 +844,7 @@ The fork's window and auto-compaction rules (`claudeCliContextWindow`,
 what the v2 adapter uses in production. Their tests in `ClaudeAdapterV2Fork.test.ts` use those
 slugs; a made-up model resolves no window and tests nothing. Probe:
 `grep -cE '"claude-(opus-4-8|opus-4-6|haiku-4-5)"' apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2Fork.test.ts`
-is non-zero (9 today).
+is non-zero (11 at the 60th reconcile).
 
 The native-1M switch is the CLI's number, not the catalog's: `claude-opus-4-8` has no
 `contextWindow` option in the catalog, so upstream's `claudeContextWindow` read it as 200,000 while
@@ -877,6 +888,15 @@ registration, and bumped in `cancel` before `getStartedState`. The post-registra
 gated on `cancelBehavior !== "wait-for-prompt"` — ungated it would fire on every Antigravity cancel
 of a running prompt and turn its wait-for-confirmation into a failed cancel. Mutation-checked:
 dropping the bump in `cancel` turns `AcpJsonRpcConnection.test.ts`'s parked-prompt case red.
+
+Since the 60th reconcile upstream #30846 also holds the dispatch permit when
+`interruptPromptOnCancel === false`, and such a cancel waits up to `cancelTimeout` for its prompt
+to be queued (`awaitPromptQueued`). Neither covers a prompt parked on
+`promptSerializationSemaphore`, so the generation guard stays. Its placement now follows who holds
+the permit (`cancelHoldsDispatchPermit`: `wait-for-prompt` or `interruptPromptOnCancel === false`):
+there the check runs inside the dispatch permit before the prompt is sent, and the
+post-registration re-check is skipped, because a cancel after dispatch targets that very prompt and
+must reach the agent behind it. Elsewhere the post-registration re-check stays.
 
 ### 26. `isKnownFilesystemRootPath` is a FORK-ONLY export of `@t3tools/shared/markdownLinks`
 
@@ -1071,6 +1091,10 @@ reads them. `claudeAccountConfigPath` is unused as a result. Upstream's two rese
 `ProviderInstanceRegistryLive.test.ts` wrote the login into `homePath`; they drive `configDirPath`
 here. They typecheck either way and only fail at run time, so check arriving tests for this field too.
 
+Since the 60th reconcile `ClaudeAdapterV2`'s default Claude store (`claudeConfigDirOf`,
+`readSubagentTranscriptEffort`, `claudeTranscriptState`) falls back to the instance env's `HOME`
+before the host home dir, so a `homePath`-only instance reads `<homePath>/.claude`.
+
 ### 36. Web tests run three projects; `--project dom` is fork-only
 
 `apps/web/package.json`'s `test` script is
@@ -1109,6 +1133,14 @@ file lost no line — it needed a line it never had.
 
 After a merge that adds a hook call anywhere in a widely-rendered component, grep the fork's own
 `vi.mock("<module>")` factories for the newly-required export, not just the renamed test files.
+
+**Since the 60th reconcile upstream's copy goes through gt-react.** The `dom` project in
+`apps/web/vite.config.ts` also loads `./test/i18nSetup.ts` and resolves with conditions
+`["browser", "module", "import", "default"]`, because gt-react's default export is its server
+build, which ignores the client init. A unit-project test that renders GT components must become a
+`*.dom.test.tsx` (`ThreadDetailsPanel.test.tsx` moved this run). The config also defines upstream's
+`renders` project (`test/*.renders.tsx`, run only by `scripts/render-metrics.ts`); the `test` script
+does not run it.
 
 ### 37. `FORCE_KILL_AFTER` on the git spawn is fork-only, and every git timeout depends on it
 
@@ -1322,6 +1354,13 @@ survive: `enumerateOversizedUntracked` (its `:(exclude,literal)` pathspecs are p
 `VcsProcess.run` (#11665) is complementary and kept. Upstream's racy stamp now calls the fork's
 `copiedIndexStampSeconds`, which keeps its unit test pinned to the production path.
 
+The 60th reconcile added three upstream pieces, and none escapes the fork's bound or retry:
+`readHeadMoves` (a reflog read before the retried body; it needs neither, as it fails open to no
+moves),
+untracked-blob reuse (`vcs/checkpointUntrackedBlobs.ts`, inside the retried body; it only reuses
+blobs an earlier capture staged, so oversized files stay out), and per-submodule capture through a
+recursive `captureCheckpoint`, so each submodule gets its own size bound and retry.
+
 ### 56. The fork's arraybuffer WebSocket constructor must accept effect's options argument
 
 `apps/web/src/lib/runtime.ts` and `apps/mobile/src/lib/runtime.ts` replace effect's
@@ -1408,11 +1447,12 @@ copy of the block is gone from `vite.config.ts` too (0 `maxOccurrences`). What s
 before tests in `pnpm verify`, and one lint error cancels the whole test step, so run
 `pnpm run lint` right after the last merge edit.
 
-### 46. Run the gate on the PINNED Node (`26.12.1`), not whatever `node` resolves to
+### 46. Run the gate on the PINNED Node (`26.13.1`), not whatever `node` resolves to
 
-Since the 52nd reconcile `engines.node` is upstream's exact `26.12.1` (#23165), which is also what
-upstream CI installs (`setup-ci-deps` reads `engines.node`); `.nvmrc` follows it. Install it with
-`nvm install 26.12.1` and put its `bin` first on `PATH` for the gate. Every `pnpm` line in a gate
+Since the 52nd reconcile `engines.node` is upstream's exact version (#23165; `26.13.1` since the 60th
+reconcile), which is also what upstream CI installs (`setup-ci-deps` reads `engines.node`); the
+fork-only `.nvmrc` follows it and must be bumped by hand with it. Install it with
+`fnm install 26.13.1` and put its `bin` first on `PATH` for the gate. Every `pnpm` line in a gate
 log opens with `[WARN] Unsupported engine` when it is not. That warning is the only tell, and it is
 easy to read past. The history below is why the runtime matters.
 
@@ -1452,11 +1492,12 @@ cannot silently start matching everything.
 ### 65. Fork WebSocket RPCs get their own handler layer
 
 Since the 52nd reconcile upstream splits its own handlers too (`SplitWsRpcGroup` /
-`OtherWsRpcGroup` by tag prefix, merged with `Context.merge` inside `Layer.effectContext`). The fork
+`OtherWsRpcGroup` by tag prefix in `SPLIT_WS_RPC_PREFIXES`, merged with `Context.merge` inside
+`Layer.effectContext`). Since the 60th reconcile the prefixes include `issues` and `issueTrackers`. The fork
 applies that split to `UpstreamServerWsRpcGroup` and adds `ForkServerWsRpcGroup.toHandlers` as a
 third context in the same `Context.mergeAll`. Before that, `ws.ts` built handlers with
 `UpstreamServerWsRpcGroup.toLayer` plus `ForkServerWsRpcGroup.toLayer`,
-not one `ServerWsRpcGroup.toLayer`. A single `toLayer` over all ~196 RPCs exceeds the checker's
+not one `ServerWsRpcGroup.toLayer`. A single `toLayer` over all ~246 RPCs (60th reconcile) exceeds the checker's
 instantiation budget (TS2589, measured at the 47th reconcile; upstream alone sits just under it).
 `tsc-rs` splits files across checkers, so the TS2589 is dropped and only its `any` surfaces, as
 `TS377030 any in the requirements channel` in whichever file first needs `Ws.layer`
@@ -1486,6 +1527,11 @@ resolved path, so the lease is re-entrant for the holder while its hold is activ
 recreation on Linux deadlocked (macOS hid it: `/var` vs `/private/var` made the keys differ).
 `workspaceLease.test.ts` pins it.
 
+The takeover treats an EMPTY folder as missing too: since upstream #38163 (60th reconcile) a
+leftover worktree folder is emptied rather than deleted (Windows cannot delete one in use), and
+`git worktree add` itself accepts an empty directory. A non-empty or unreadable folder is still
+refused. `GitVcsDriverCore.test.ts` "takes over a stale registration whose folder is left empty".
+
 `GitVcsDriverCore.removeWorktree` still prunes after a remove finds the worktree already gone;
 that is upstream's and outside this rule for now.
 
@@ -1493,9 +1539,12 @@ that is upstream's and outside this rule for now.
 
 The `active/total` header counts are fork code over upstream's sidebar. `isSidebarThreadWoke`
 (`Sidebar.logic.ts`) is the one wake rule for both the row and the counts: port any upstream edit
-to the row's former inline `const isWoke` / `wokeAtDate` block into it. The counts use
-`resolveSidebarV2TopStatus`, so the row's upstream `topStatus` chain must keep the
-same statuses in the same order. The Working, Snoozed and Settled headers pass
+to the row's former inline `const isWoke` / `wokeAtDate` block into it. Since the 60th reconcile
+the counts (`isSidebarThreadActive`) feed `resolveSidebarV2TopStatus` the row's own status,
+`resolveSidebarRowStatus` with `lastVisitedAt`, so a failure the user has opened stops counting
+just as the row settles it. The row's upstream `topStatus` chain must keep the same statuses in
+the same order. Open gap: `resolveSidebarV2TopStatus` has no `"preparing"` branch, so a row
+showing "Setting up" is not counted as active. The Working, Snoozed and Settled headers pass
 `count={sectionCounts.*}`; upstream builds those labels as `` `Name (${n})` ``, so a resolution
 taking upstream's side drops the count. Since the 51st reconcile the row lives in
 `apps/web/src/components/sidebar/SidebarThreadRow.tsx` and the headers stay in `Sidebar.tsx`.
@@ -1630,8 +1679,12 @@ reader that stopped taking, so each reader needs its own bound.
 - **Internal workers use the unbounded form on purpose** (`streamDomainEvents`, or
   `stream({ eventType })`). A worker must not lose events, so it is not budgeted; instead its
   handler must take promptly and hand work to a `DrainableWorker` carrying ids, never event
-  bodies. Today: PullRequestSyncReactor, ThreadPullRequestService, ThreadSettlementService,
-  AgentAwarenessRelay, StorageCleanup, WebPushRelay. WebPushRelay's handler classifies the event
+  bodies. At the 60th reconcile: PullRequestSyncReactor, PullRequestWatchReactor,
+  ThreadPullRequestService, ThreadSettlementService, DelegatedTaskQuestionReactor,
+  IdleCompactionService, UsageLimitRecoveryWorker, AgentAwarenessRelay, RemoteDelegation,
+  DelegatedTaskAnalytics, StorageCleanup, WebPushRelay. Open follow-up: upstream's
+  `orchestration-v2/PullRequestWatchReactor.ts` runs its pass inline in the subscriber handler
+  (a projection read plus host fingerprint reads on `thread.pull-request-synced`), not on a worker. WebPushRelay's handler classifies the event
   and enqueues a run or request id; its reads and sends (up to 15 s each) run on the worker,
   except a final-looking finish, which waits out its grace in its own fiber (a `FiberSet`)
   outside the worker; `drain` waits for those too. Test:

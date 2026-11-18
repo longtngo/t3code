@@ -1,5 +1,6 @@
 import { FileTextIcon } from "lucide-react";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { useGT } from "gt-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { TrustedFileView } from "~/components/files/TrustedFileView";
@@ -20,6 +21,7 @@ import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
  * Escape reverts. Resyncs to `value` when the loaded path changes and the field is not being edited.
  */
 function AddressBar({ value, onSubmit }: { value: string; onSubmit: (path: string) => void }) {
+  const gt = useGT();
   const [draft, setDraft] = useState(value);
   const [editing, setEditing] = useState(false);
   // Set by Escape so the blur it triggers reverts instead of submitting. A ref
@@ -75,7 +77,7 @@ function AddressBar({ value, onSubmit }: { value: string; onSubmit: (path: strin
                 event.currentTarget.blur();
               }
             }}
-            aria-label="File path"
+            aria-label={gt("File path")}
             className="min-w-0 flex-1 truncate rounded bg-muted/40 px-2 py-1 font-mono text-xs text-muted-foreground/90 outline-none hover:bg-muted/60 focus:bg-muted/70 focus:text-foreground"
           />
         }

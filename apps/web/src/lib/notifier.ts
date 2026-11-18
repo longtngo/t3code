@@ -12,7 +12,10 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 
+import { msg } from "gt-react";
+
 import { isElectron } from "../env";
+import { m } from "../i18n/messages";
 
 export type TerminalTurnOutcome = "completed" | "error" | "interrupted";
 
@@ -135,16 +138,16 @@ function isViewingThread(ref: ScopedThreadRef): boolean {
 function outcomeBody(outcome: TerminalTurnOutcome): string {
   switch (outcome) {
     case "completed":
-      return "The agent finished this task.";
+      return m(msg("The agent finished this task."));
     case "error":
-      return "The agent stopped with an error.";
+      return m(msg("The agent stopped with an error."));
     case "interrupted":
-      return "The turn was interrupted.";
+      return m(msg("The turn was interrupted."));
   }
 }
 
 function dispatchNotification(ref: ScopedThreadRef, completion: ThreadCompletion): void {
-  const title = completion.title || "Task finished";
+  const title = completion.title || m(msg("Task finished"));
   const body = outcomeBody(completion.outcome);
 
   if (isElectron) {

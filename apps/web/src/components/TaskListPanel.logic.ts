@@ -1,7 +1,9 @@
 import type { OrchestrationV2ThreadProjection, PlanId, RunId } from "@t3tools/contracts";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
+import { msg } from "gt-react";
 
+import { m, type MessageResolver } from "~/i18n/messages";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 
 type TodoPlan = Extract<
@@ -175,10 +177,10 @@ export function taskListToggleSummary(
 }
 
 export type TaskListHeaderChip =
-  | { readonly tone: "live"; readonly label: "● Updating" }
-  | { readonly tone: "finished"; readonly label: "Finished" }
-  | { readonly tone: "stopped"; readonly label: "Stopped" }
-  | { readonly tone: "promoted"; readonly label: "Last task list"; readonly time: string };
+  | { readonly tone: "live"; readonly label: string }
+  | { readonly tone: "finished"; readonly label: string }
+  | { readonly tone: "stopped"; readonly label: string }
+  | { readonly tone: "promoted"; readonly label: string; readonly time: string };
 
 /**
  * The header chip. Only the latest run's own list can be live, and a settled one reads
@@ -190,17 +192,18 @@ export function taskListHeaderState(
   primaryKind: TaskListView["primaryKind"],
   latestRunActive: boolean,
   nowMs: number,
+  resolve: MessageResolver = m,
 ): TaskListHeaderChip | null {
   if (primary === null || primaryKind === null) return null;
   if (primaryKind === "promoted") {
     return {
       tone: "promoted",
-      label: "Last task list",
-      time: formatRelativeTimeLabel(primary.createdAt, nowMs),
+      label: resolve(msg("Last task list")),
+      time: formatRelativeTimeLabel(primary.createdAt, nowMs, resolve),
     };
   }
-  if (latestRunActive) return { tone: "live", label: "● Updating" };
+  if (latestRunActive) return { tone: "live", label: resolve(msg("● Updating")) };
   return primary.steps.every((step) => step.status === "completed")
-    ? { tone: "finished", label: "Finished" }
-    : { tone: "stopped", label: "Stopped" };
+    ? { tone: "finished", label: resolve(msg("Finished", { $context: "task list status" })) }
+    : { tone: "stopped", label: resolve(msg("Stopped", { $context: "task list status" })) };
 }

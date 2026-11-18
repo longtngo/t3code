@@ -2,7 +2,10 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import { THREAD_QUEUE_MAX_ENTRIES, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 
+import { msg } from "gt-react";
+
 import { stackedThreadToast, toastManager } from "./components/ui/toast";
+import { m } from "./i18n/messages";
 import { readThreadShell } from "./state/entities";
 import {
   isClaimedThread,
@@ -113,8 +116,8 @@ export function leaveQueueForUndo(threadKey: string): (() => void) | undefined {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to queue thread",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          title: m(msg("Failed to queue thread")),
+          description: error instanceof Error ? error.message : m(msg("An error occurred.")),
         }),
       );
     }

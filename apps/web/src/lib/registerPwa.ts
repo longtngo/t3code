@@ -1,3 +1,6 @@
+import { msg } from "gt-react";
+
+import { m } from "../i18n/messages";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 
 // A coding session keeps one SPA tab open for hours with no navigations, and
@@ -18,13 +21,13 @@ export async function registerPwa(): Promise<void> {
       toastManager.add(
         stackedThreadToast({
           type: "info",
-          title: "New version available",
-          description: "Reload to get the latest T3 Code.",
+          title: m(msg("New version available")),
+          description: m(msg("Reload to get the latest T3 Code.")),
           // Persist until the user acts; a new build is not urgent enough to auto-reload
           // an active session out from under them.
           timeout: 0,
           actionProps: {
-            children: "Reload",
+            children: m(msg("Reload", { $context: "verb, reload the page" })),
             onClick: () => {
               // Activates the waiting worker (skipWaiting) and reloads the page.
               void updateSW(true);

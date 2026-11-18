@@ -5,6 +5,7 @@
  *
  * Relative times follow the minute clock; nothing animates continuously.
  */
+import { useGT } from "gt-react";
 import { ChevronRightIcon } from "lucide-react";
 import { memo } from "react";
 
@@ -51,10 +52,14 @@ function StepList({
   plan: ActivePlanState;
   steps?: ReadonlyArray<ActivePlanState["steps"][number]>;
 }) {
+  const gt = useGT();
   return (
     <ComposerBanner.Children
       render={<ul />}
-      aria-label={`Task list. ${completedCount(plan)} of ${plan.steps.length} complete.`}
+      aria-label={gt("Task list. {completed} of {total} complete.", {
+        completed: completedCount(plan),
+        total: plan.steps.length,
+      })}
     >
       <TaskStepList steps={steps} />
     </ComposerBanner.Children>
@@ -112,6 +117,7 @@ export const TaskListPanel = memo(function TaskListPanel({
   /** Whether the thread's activity run is still working; only its own list can be live. */
   latestRunActive: boolean;
 }) {
+  const gt = useGT();
   const nowMinute = useNowMinute();
   const nowMs = Date.parse(`${nowMinute}:00.000Z`);
   if (primary === null) return null;
@@ -124,7 +130,7 @@ export const TaskListPanel = memo(function TaskListPanel({
     <ThreadDetailsSection
       headingId="thread-details-tasks-heading"
       collapseKey="tasks"
-      title={`Tasks · ${completed}/${primary.steps.length}`}
+      title={gt("Tasks · {completed}/{total}", { completed, total: primary.steps.length })}
       data-thread-details-activity
       actions={
         <>
@@ -153,7 +159,7 @@ export const TaskListPanel = memo(function TaskListPanel({
         </ThreadDetailsRowGroup>
         <ThreadDetailsRowGroup
           key={`${threadKey}:history`}
-          label="Previous task lists"
+          label={gt("Previous task lists")}
           rows={history}
         >
           {(groups) =>

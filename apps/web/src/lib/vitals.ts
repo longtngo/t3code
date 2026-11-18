@@ -1,6 +1,8 @@
 import type { ServerProviderUsageLimits, ServerProviderUsageSpend } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
+import { msg } from "gt-react";
 
+import { m, type MessageResolver } from "../i18n/messages";
 import { formatShortTimestamp } from "../timestampFormat";
 
 /**
@@ -192,11 +194,12 @@ function formatSpend(used: number, limit: number | null, currency: string): stri
 export function extraUsageWindow(
   spend: ServerProviderUsageSpend | null,
   nowMs: number,
+  resolve: MessageResolver = m,
 ): SpendWindowView | null {
   if (!spend || spend.used <= 0 || spend.usedPercent === undefined) return null;
   const { resetsAt, windowMs } = billingMonthWindow(nowMs);
   return {
-    label: "Extra usage",
+    label: resolve(msg("Extra usage")),
     detail: formatSpend(spend.used, spend.limit ?? null, spend.currency),
     utilization: spend.usedPercent,
     resetsAt,

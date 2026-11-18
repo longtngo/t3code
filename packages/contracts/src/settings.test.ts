@@ -10,6 +10,7 @@ import {
 import {
   ClientSettingsSchema,
   ClientSettingsPatch,
+  ClientServerSettingsPatch,
   ClaudeSettings,
   CLAUDE_OUTPUT_STYLES,
   DEFAULT_SERVER_SETTINGS,
@@ -40,11 +41,24 @@ const decodeStringOnlyEnvironment = Schema.decodeUnknownSync(
   ),
 );
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
+const decodeClientServerSettingsPatch = Schema.decodeUnknownSync(ClientServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodeServerSettingsPatch = Schema.encodeSync(ServerSettingsPatch);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 const decodeTypedServerSettings = Schema.decodeSync(ServerSettings);
 const decodeTypedServerSettingsPatch = Schema.decodeSync(ServerSettingsPatch);
+
+it("drops theme defaults from a client's settings patch", () => {
+  expect(
+    decodeClientServerSettingsPatch({
+      newWorktreesStartFromOrigin: false,
+      defaultTheme: "grove",
+      defaultThemeSetAt: "2026-11-13T00:00:00.000Z",
+      defaultAppearance: "dark",
+      defaultAppearanceSetAt: "2026-11-13T00:00:00.000Z",
+    }),
+  ).toEqual({ newWorktreesStartFromOrigin: false });
+});
 
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
@@ -117,6 +131,12 @@ describe("storage cleanup settings", () => {
     expect(() =>
       decodeServerSettingsPatch({ storageCleanup: { worktreeKeepWhen: "unknown" } }),
     ).toThrow();
+  });
+});
+
+describe("ClientSettings terminal close confirmation", () => {
+  it("keeps confirmation enabled for settings without a saved preference", () => {
+    expect(decodeClientSettings({}).confirmTerminalClose).toBe(true);
   });
 });
 
@@ -409,17 +429,17 @@ describe("ServerSettings environment icon", () => {
 
 const decodeDeviceHostSettings = Schema.decodeSync(ServerSettings);
 
-// `deviceHosts` as it was decoded before EAS hosts existed: an SSH host needs a target.
+// `deviceHosts` as it was decoded before Expo hosts existed: an SSH host needs a target.
 const decodeOlderDeviceHostSettings = Schema.decodeUnknownSync(
   Schema.Struct({
     deviceHosts: Schema.Array(Schema.Struct({ id: Schema.String, target: Schema.String })),
   }),
 );
 
-it("keeps EAS hosts out of the SSH host list servers and clients before EAS hosts decode", () => {
+it("keeps Expo hosts out of the SSH host list servers and clients before Expo hosts decode", () => {
   const settings = decodeDeviceHostSettings({
     deviceHosts: [{ id: "mini", label: "Mac mini", target: "user@mini" }],
-    easDeviceHosts: [{ kind: "eas", id: "eas", label: "EAS Simulator" }],
+    easDeviceHosts: [{ kind: "eas", id: "eas", label: "Expo Simulators" }],
   });
   const wire = encodeServerSettings(settings);
   expect(decodeOlderDeviceHostSettings(wire).deviceHosts).toEqual([
@@ -430,7 +450,7 @@ it("keeps EAS hosts out of the SSH host list servers and clients before EAS host
 
 it("validates remote device hosts and rejects ambiguous host ids", () => {
   const host = { id: "mini", label: "Mac mini", target: "user@mini", port: 2222 };
-  // Hosts saved before EAS hosts existed have no `kind`; they are SSH hosts.
+  // Hosts saved before Expo hosts existed have no `kind`; they are SSH hosts.
   expect(decodeDeviceHostSettings({ deviceHosts: [host] }).deviceHosts).toEqual([
     { kind: "ssh", ...host },
   ]);
@@ -507,6 +527,11 @@ describe("voice settings", () => {
       speechPostProcessingEnabled: true,
     };
     expect(decodeClientSettings({}).speechSilenceFiltering).toBe(true);
+    expect(decodeClientSettings({}).speechStreaming).toBe(true);
+    expect(decodeClientSettings({ speechStreaming: false }).speechStreaming).toBe(false);
+    expect(decodeClientSettingsPatch({ speechStreaming: false })).toEqual({
+      speechStreaming: false,
+    });
     expect(decodeClientSettingsPatch({ speechSilenceFiltering: false })).toEqual({
       speechSilenceFiltering: false,
     });
@@ -781,12 +806,6 @@ describe("settings schema / patch parity", () => {
       // Read once at startup as a privilege-escalation guard; deliberately not
       // editable over the settings RPC. See ServerSettingsPatch's own comment.
       "disableAuthentication",
-      // The environment's default theme is owned by `t3 theme set`,
-      // which rewrites settings.json directly (apps/server/src/cli/theme.ts) and
-      // removes both keys when cleared. Clients only READ them, so routing them
-      // through the patch RPC would give two writers for one pair of fields.
-      "defaultTheme",
-      "defaultThemeSetAt",
       // Upstream's one-time marker for the legacy per-project settings fold
       // (apps/server/src/serverSettings.ts). The server writes it once and reads
       // it on every load; a client patch would re-run or skip the migration.

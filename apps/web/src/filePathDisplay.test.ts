@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { basenamePathSegment } from "./filePathDisplay";
+import { basenamePathSegment, formatWorkspaceRelativePath } from "./filePathDisplay";
 
 describe("basenamePathSegment", () => {
   it("returns the final segment of a file path", () => {
@@ -20,5 +20,18 @@ describe("basenamePathSegment", () => {
     expect(basenamePathSegment("/")).toBe("/");
     expect(basenamePathSegment("//")).toBe("//");
     expect(basenamePathSegment("")).toBe("");
+  });
+});
+
+describe("formatWorkspaceRelativePath", () => {
+  it("labels only relative paths, not Windows paths outside the workspace", () => {
+    const workspaceRoot = "C:\\Users\\mike\\dev-stuff\\t3code";
+    expect(
+      formatWorkspaceRelativePath("C:\\Users\\mike\\.claude\\settings.json:3", workspaceRoot),
+    ).toBe("C:/Users/mike/.claude/settings.json:3");
+    expect(formatWorkspaceRelativePath("D:/data/report.csv", workspaceRoot)).toBe(
+      "D:/data/report.csv",
+    );
+    expect(formatWorkspaceRelativePath("src/app.ts", workspaceRoot)).toBe("t3code/src/app.ts");
   });
 });

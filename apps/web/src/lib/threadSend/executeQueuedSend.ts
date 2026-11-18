@@ -7,7 +7,9 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { StartThreadTurnInput } from "@t3tools/client-runtime/operations";
 import type { MessageId, ThreadId } from "@t3tools/contracts";
+import { msg } from "gt-react";
 
+import { m } from "../../i18n/messages";
 import { markPromotedDraftThreadByRef, useComposerDraftStore } from "../../composerDraftStore";
 import {
   persistThreadSettingsForNextTurn,
@@ -115,7 +117,7 @@ export async function executeQueuedSend(
   }
 
   if (isAtomCommandInterrupted(failure)) {
-    return { kind: "failed", message: "The send was interrupted." };
+    return { kind: "failed", message: m(msg("The send was interrupted.")) };
   }
   const error = squashAtomCommandFailure(failure);
   if (plan.isLocalDraftThread && snapshot.draftId && wasBootstrapThreadDeleted(error)) {
@@ -131,6 +133,6 @@ export async function executeQueuedSend(
   }
   return {
     kind: "failed",
-    message: error instanceof Error ? error.message : "Failed to send message.",
+    message: error instanceof Error ? error.message : m(msg("Failed to send message.")),
   };
 }

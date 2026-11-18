@@ -1,3 +1,4 @@
+import { T } from "gt-react";
 import { useEffect, useId, useState } from "react";
 import { create } from "zustand";
 import { SIDEBAR_SECTION_NAME_MAX_LENGTH } from "@t3tools/contracts";
@@ -69,7 +70,9 @@ function SidebarSectionNameDialog({ request }: { readonly request: Request }) {
           </DialogHeader>
           <DialogPanel>
             <div className="grid gap-1.5">
-              <Label htmlFor={id}>Name</Label>
+              <Label htmlFor={id}>
+                <T>Name</T>
+              </Label>
               <Input
                 id={id}
                 autoFocus
@@ -81,10 +84,10 @@ function SidebarSectionNameDialog({ request }: { readonly request: Request }) {
           </DialogPanel>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => finish(null)}>
-              Cancel
+              <T>Cancel</T>
             </Button>
             <Button type="submit" disabled={trimmed === ""}>
-              Save
+              <T>Save</T>
             </Button>
           </DialogFooter>
         </form>

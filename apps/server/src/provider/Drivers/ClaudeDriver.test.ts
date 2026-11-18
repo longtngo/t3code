@@ -103,6 +103,7 @@ describe("ClaudeDriver idle compaction wiring", () => {
               setModel: () => Effect.void,
               setPermissionMode: () => Effect.void,
               applyFlagSettings: () => Effect.void,
+              renameSession: () => Effect.void,
               interrupt: Effect.void,
               stopTask: () => Effect.void,
               backgroundTasks: () => Effect.succeed(false),

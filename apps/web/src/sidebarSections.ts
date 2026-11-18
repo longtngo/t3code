@@ -5,6 +5,9 @@
  */
 import { terminalOutputText } from "@t3tools/client-runtime/state/terminal";
 import type { KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
+import { msg } from "gt-react";
+
+import { m, type MessageResolver } from "./i18n/messages";
 
 export const AUTO_CLEAR_TTL_HOURS = 6;
 
@@ -57,6 +60,7 @@ function backgroundStatus(
 /** Map per-thread terminal sessions to background-process items. */
 export function deriveBackgroundItems(
   terminals: ReadonlyArray<KnownTerminalSession>,
+  resolve: MessageResolver = m,
 ): BackgroundSidebarItem[] {
   return terminals.map((terminal) => {
     const summary = terminal.state.summary;
@@ -68,7 +72,7 @@ export function deriveBackgroundItems(
     return {
       kind: "background" as const,
       id: terminal.target.terminalId,
-      label: asTrimmedString(summary?.label) ?? "Terminal",
+      label: asTrimmedString(summary?.label) ?? resolve(msg("Terminal")),
       ...(summary?.cwd ? { cwd: summary.cwd } : {}),
       status,
       exitCode,

@@ -7,6 +7,9 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 
+import { msg } from "gt-react";
+
+import { m } from "../i18n/messages";
 import type { QueuedSendOutcome } from "../lib/threadSend/executeQueuedSend";
 // Type-only: the send planner pulls in UI modules this pure logic must not load.
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
@@ -229,7 +232,7 @@ export async function claimAndSendQueueEntry(deps: {
     try {
       return deps.title(entry, null);
     } catch {
-      return "New thread";
+      return m(msg("New thread"));
     }
   };
   // Once this tab starts the send, its outcome is this tab's to report, claim or no claim.
@@ -277,7 +280,7 @@ export async function claimAndSendQueueEntry(deps: {
   } catch (error) {
     outcome = {
       kind: "failed",
-      message: error instanceof Error ? error.message : "Failed to send message.",
+      message: error instanceof Error ? error.message : m(msg("Failed to send message.")),
     };
   }
   const queue = useThreadQueueStore.getState();

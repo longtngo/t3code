@@ -1,3 +1,4 @@
+import { T, useGT } from "gt-react";
 import { CheckIcon, CopyIcon, Maximize2Icon } from "lucide-react";
 import { useRef, useState, type ComponentProps } from "react";
 
@@ -15,6 +16,7 @@ import { reportMarkdownActionFailure } from "./markdownActionFailure";
 
 // FORK: the footer button opens the whole table in a full-width dialog.
 export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
+  const gt = useGT();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [expandedOpen, setExpandedOpen] = useState(false);
   const { copyToClipboard, isCopied: copied } = useCopyToClipboard<"markdown" | "csv">({
@@ -22,8 +24,8 @@ export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
     onError: (cause, format) =>
       reportMarkdownActionFailure({ operation: "copy-table", format }, cause),
   });
-  const expandLabel = "Expand table";
-  const copyLabel = copied ? "Copied" : "Copy table";
+  const expandLabel = gt("Expand table");
+  const copyLabel = copied ? gt("Copied") : gt("Copy table");
 
   const handleCopy = (format: "markdown" | "csv") => {
     const table = containerRef.current?.querySelector("table");
@@ -80,14 +82,20 @@ export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
             <TooltipPopup side="top">{copyLabel}</TooltipPopup>
           </Tooltip>
           <MenuPopup align="end">
-            <MenuItem onClick={() => handleCopy("markdown")}>Copy as Markdown</MenuItem>
-            <MenuItem onClick={() => handleCopy("csv")}>Copy as CSV</MenuItem>
+            <MenuItem onClick={() => handleCopy("markdown")}>
+              <T>Copy as Markdown</T>
+            </MenuItem>
+            <MenuItem onClick={() => handleCopy("csv")}>
+              <T>Copy as CSV</T>
+            </MenuItem>
           </MenuPopup>
         </Menu>
       </div>
       <Dialog open={expandedOpen} onOpenChange={setExpandedOpen}>
         <DialogPopup className="max-h-[88vh] max-w-[min(96vw,72rem)]">
-          <DialogTitle className="sr-only">Expanded table</DialogTitle>
+          <DialogTitle className="sr-only">
+            <T>Expanded table</T>
+          </DialogTitle>
           <DialogPanel>
             <div className="chat-markdown">
               <table {...props}>{children}</table>

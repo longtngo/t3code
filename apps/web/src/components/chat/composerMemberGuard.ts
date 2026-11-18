@@ -1,6 +1,8 @@
 import type { WorkspaceMemberBranchReport } from "@t3tools/contracts";
+import { msg } from "gt-react";
 
 import type { WorkspaceRepo } from "~/hooks/useWorkspaceRepos";
+import { m, type MessageResolver } from "~/i18n/messages";
 
 /**
  * A member repository sitting on a branch some other thread cut. One shared checkout per
@@ -125,10 +127,15 @@ export function resolveMemberGuardState(input: {
   return { kind: "unknown", reason: input.isEnvironmentUnavailable ? "offline" : "checking" };
 }
 
-export function describeUnknownMemberGuard(reason: MemberGuardUnknownReason): string {
-  if (reason === "checking") return "Checking the attached repositories...";
-  if (reason === "offline") return "Can't check the attached repositories while disconnected.";
-  return "Couldn't check the attached repositories.";
+export function describeUnknownMemberGuard(
+  reason: MemberGuardUnknownReason,
+  resolve: MessageResolver = m,
+): string {
+  if (reason === "checking") return resolve(msg("Checking the attached repositories..."));
+  if (reason === "offline") {
+    return resolve(msg("Can't check the attached repositories while disconnected."));
+  }
+  return resolve(msg("Couldn't check the attached repositories."));
 }
 
 /**
@@ -150,13 +157,14 @@ export type ContestedMembersCopy =
 
 export function describeContestedMembers(
   members: ReadonlyArray<ContestedMember>,
+  resolve: MessageResolver = m,
 ): ContestedMembersCopy | null {
   const first = members[0];
   if (first === undefined) return null;
   if (members.length === 1) {
     return {
       kind: "one",
-      title: `${first.title} is on another thread's branch`,
+      title: resolve(msg("{title} is on another thread's branch", { title: first.title })),
       beforeBranch: "It is on ",
       branch: first.branch,
       afterBranch:
@@ -168,7 +176,17 @@ export function describeContestedMembers(
   const list = remaining > 0 ? `${named.join(", ")} and ${remaining} more` : named.join(" and ");
   return {
     kind: "many",
-    title: `${members.length} repositories are on other threads' branches`,
-    description: `${list} are on branches other threads are working in. Anything you send now is written there, mixed in with that work.`,
+    title: resolve(
+      msg(
+        "{count, plural, one {{count} repository is on another thread's branch} other {{count} repositories are on other threads' branches}}",
+        { count: members.length },
+      ),
+    ),
+    description: resolve(
+      msg(
+        "{list} are on branches other threads are working in. Anything you send now is written there, mixed in with that work.",
+        { list },
+      ),
+    ),
   };
 }

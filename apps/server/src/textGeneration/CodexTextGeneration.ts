@@ -23,6 +23,7 @@ import {
   codexMcpListLaunchArgs,
   resolveCodexLaunchArgs,
 } from "../provider/codexLaunchArgs.ts";
+import { codexAppServerEnvironment } from "../provider/CodexProvider.ts";
 import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
 import {
   cliFailureDetail,
@@ -287,7 +288,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         resolved || fellBack ? undefined : getCodexServiceTierOptionValue(modelSelection);
       const binary = effectiveConfig.binaryPath || "codex";
       const env = {
-        ...effectiveEnvironment,
+        ...codexAppServerEnvironment(effectiveEnvironment),
         ...(effectiveConfig.homePath
           ? {
               CODEX_HOME: expandHomePath(
@@ -327,6 +328,11 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           model,
           "--config",
           `model_reasoning_effort="${reasoningEffort}"`,
+          // Current Codex gives hooks precedence over the historical codex_hooks alias.
+          "--config",
+          "features.codex_hooks=false",
+          "--config",
+          "features.hooks=false",
           ...(serviceTier ? ["--config", `service_tier="${serviceTier}"`] : []),
           "--output-schema",
           schemaPath,

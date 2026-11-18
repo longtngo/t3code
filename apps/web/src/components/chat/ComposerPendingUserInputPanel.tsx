@@ -1,5 +1,6 @@
 import { type RuntimeRequestId, type ScopedThreadRef } from "@t3tools/contracts";
 import { markdownProseDirection, textDirection } from "~/textDirection";
+import { useGT } from "gt-react";
 import { memo, use, useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { BackgroundThreadContext } from "./backgroundThread";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -85,6 +86,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   onAdvance: () => void;
   onDismiss: (requestId: RuntimeRequestId) => void;
 }) {
+  const gt = useGT();
   // Message-mode requests remain answerable after their provider turn ends.
   const canRespond = prompt.responseCapability !== "not_resumable";
   const responseDisabled = disabled || isResponding || !canRespond;
@@ -175,7 +177,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     // FORK: no `isCollapsed` bail - the options list stays mounted through a collapse.
     if (!activeQuestion || responseDisabled || backgroundThread) return;
     const handler = (event: globalThis.KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
       if (isInSideChatPane(target)) return;
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
@@ -183,7 +185,9 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       }
       if (
         target instanceof HTMLElement &&
-        target.closest('[contenteditable]:not([contenteditable="false"])')
+        target.closest(
+          'select, [contenteditable]:not([contenteditable="false"]), [role="dialog"], [aria-modal="true"], [role="menu"], [role="combobox"], [data-slot$="popup"]',
+        )
       ) {
         return;
       }
@@ -265,7 +269,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                   type="button"
                   disabled={isResponding}
                   data-pending-user-input-dismiss
-                  aria-label="Dismiss question without answering"
+                  aria-label={gt("Dismiss question without answering")}
                   onClick={() => onDismiss(prompt.requestId)}
                   className="-my-1 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-secondary-label outline-none transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-50"
                 />
@@ -273,7 +277,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             >
               <XIcon className="size-4" />
             </TooltipTrigger>
-            <TooltipPopup>Dismiss question without answering</TooltipPopup>
+            <TooltipPopup>{gt("Dismiss question without answering")}</TooltipPopup>
           </Tooltip>
         ) : null}
       </div>
@@ -285,7 +289,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         className={cn("text-foreground/90", questionTextAlign)}
       />
       {activeQuestion.multiSelect ? (
-        <p className="mt-1 text-secondary-label text-xs">Select one or more options.</p>
+        <p className="mt-1 text-secondary-label text-xs">{gt("Select one or more options.")}</p>
       ) : null}
       {isCollapsed ? (
         <button

@@ -28,6 +28,29 @@ describe("deriveAuthClientMetadata", () => {
     });
   });
 
+  it("records the forwarded client address of a request proxied by Tailscale Serve", () => {
+    const metadata = deriveAuthClientMetadata({
+      request: {
+        headers: {
+          "x-forwarded-for": "100.64.0.2",
+          "x-forwarded-host": "host-a.tailnet-name.ts.net",
+          "x-forwarded-proto": "https",
+        },
+        source: { remoteAddress: "127.0.0.1" },
+      } as never,
+    });
+
+    expect(metadata.ipAddress).toBe("100.64.0.2");
+
+    const direct = deriveAuthClientMetadata({
+      request: {
+        headers: { "x-forwarded-for": "100.64.0.2" },
+        source: { remoteAddress: "192.168.1.20" },
+      } as never,
+    });
+    expect(direct.ipAddress).toBe("192.168.1.20");
+  });
+
   it.each([
     [
       "Edge on Android",
@@ -163,11 +186,13 @@ describe("resolveClientIpAddress", () => {
     ).toBe("203.0.113.7");
   });
 
-  it("takes the original client from the left of a proxy chain", () => {
+  // The local proxy appends the address it saw, so only the right-most entry is its
+  // own; anything to its left came from the client and may be forged.
+  it("takes the right-most entry of a proxy chain, not a client-planted left one", () => {
     expect(
       resolveClientIpAddress({
         socketAddress: "::1",
-        forwardedFor: "203.0.113.7, 198.51.100.2, 127.0.0.1",
+        forwardedFor: "10.0.0.1, 203.0.113.7",
       }),
     ).toBe("203.0.113.7");
   });

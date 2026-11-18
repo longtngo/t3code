@@ -1,3 +1,4 @@
+import { T, useGT } from "gt-react";
 import { useEffect, useState } from "react";
 import { ChevronDownIcon, ChevronUpIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react";
 import type { ComposerShortcut } from "@t3tools/contracts";
@@ -44,6 +45,7 @@ function ShortcutManagerDialog({
   shortcuts: readonly ComposerShortcut[];
   onSave: (next: ComposerShortcut[]) => void;
 }) {
+  const gt = useGT();
   const [draft, setDraft] = useState<ComposerShortcut[]>([]);
 
   // Re-seed the draft from the saved list each time the dialog opens.
@@ -70,15 +72,17 @@ function ShortcutManagerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Custom prompt shortcuts</DialogTitle>
+          <DialogTitle>
+            <T>Custom prompt shortcuts</T>
+          </DialogTitle>
           <DialogDescription>
-            Buttons above the composer that insert a saved prompt. Reorder with the arrows.
+            <T>Buttons above the composer that insert a saved prompt. Reorder with the arrows.</T>
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           {draft.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              No shortcuts yet. Add one to get started.
+              <T>No shortcuts yet. Add one to get started.</T>
             </p>
           ) : (
             draft.map((shortcut, index) => (
@@ -90,7 +94,7 @@ function ShortcutManagerDialog({
                   <Button
                     variant="outline"
                     size="icon-sm"
-                    aria-label="Move up"
+                    aria-label={gt("Move up")}
                     disabled={index === 0}
                     onClick={() => move(index, -1)}
                   >
@@ -99,7 +103,7 @@ function ShortcutManagerDialog({
                   <Button
                     variant="outline"
                     size="icon-sm"
-                    aria-label="Move down"
+                    aria-label={gt("Move down")}
                     disabled={index === draft.length - 1}
                     onClick={() => move(index, 1)}
                   >
@@ -112,14 +116,14 @@ function ShortcutManagerDialog({
                       className="text-3xs font-medium uppercase tracking-wide text-muted-foreground"
                       htmlFor={`shortcut-label-${shortcut.id}`}
                     >
-                      Button label
+                      <T>Button label</T>
                     </label>
                     <Input
                       id={`shortcut-label-${shortcut.id}`}
                       size="sm"
                       value={shortcut.label}
                       maxLength={40}
-                      placeholder="e.g. Write tests"
+                      placeholder={gt("e.g. Write tests")}
                       onChange={(event) => update(index, { label: event.target.value })}
                     />
                   </div>
@@ -128,13 +132,13 @@ function ShortcutManagerDialog({
                       className="text-3xs font-medium uppercase tracking-wide text-muted-foreground"
                       htmlFor={`shortcut-text-${shortcut.id}`}
                     >
-                      Prompt text
+                      <T>Prompt text</T>
                     </label>
                     <Textarea
                       id={`shortcut-text-${shortcut.id}`}
                       size="sm"
                       value={shortcut.text}
-                      placeholder="The text inserted into the composer…"
+                      placeholder={gt("The text inserted into the composer…")}
                       onChange={(event) => update(index, { text: event.target.value })}
                     />
                   </div>
@@ -142,7 +146,7 @@ function ShortcutManagerDialog({
                 <Button
                   variant="ghost-destructive"
                   size="icon-sm"
-                  aria-label="Delete shortcut"
+                  aria-label={gt("Delete shortcut")}
                   onClick={() => remove(index)}
                 >
                   <Trash2Icon className="size-4" />
@@ -151,15 +155,15 @@ function ShortcutManagerDialog({
             ))
           )}
           <Button variant="outline" className="w-full" onClick={add}>
-            <PlusIcon className="size-4" /> Add shortcut
+            <PlusIcon className="size-4" /> <T>Add shortcut</T>
           </Button>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-            Cancel
+            <T>Cancel</T>
           </Button>
           <Button size="sm" onClick={() => onSave(pruneEmpty(draft))}>
-            Save
+            <T>Save</T>
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -179,6 +183,7 @@ export function ComposerShortcutsControls({
   onInsert: (text: string) => void;
   disabled?: boolean;
 }) {
+  const gt = useGT();
   const shortcuts = useClientSettings((s) => s.composerShortcuts);
   const [managerOpen, setManagerOpen] = useState(false);
 
@@ -202,7 +207,8 @@ export function ComposerShortcutsControls({
               }
             >
               <span className="font-semibold text-primary">/</span>
-              {shortcut.label || "shortcut"}
+              {shortcut.label ||
+                gt("shortcut", { $context: "fallback name of an unnamed prompt shortcut" })}
             </TooltipTrigger>
             <TooltipPopup className="max-w-80">{shortcut.text}</TooltipPopup>
           </Tooltip>
@@ -213,7 +219,7 @@ export function ComposerShortcutsControls({
           render={
             <button
               type="button"
-              aria-label="manage custom prompt shortcut"
+              aria-label={gt("manage custom prompt shortcut")}
               onClick={() => setManagerOpen(true)}
               className="ml-auto inline-flex shrink-0 items-center rounded-md border bg-card p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
@@ -221,7 +227,9 @@ export function ComposerShortcutsControls({
             </button>
           }
         />
-        <TooltipPopup side="top">manage custom prompt shortcut</TooltipPopup>
+        <TooltipPopup side="top">
+          <T>manage custom prompt shortcut</T>
+        </TooltipPopup>
       </Tooltip>
       <ShortcutManagerDialog
         open={managerOpen}

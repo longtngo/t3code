@@ -1,4 +1,6 @@
+import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
+import { msg } from "gt-react";
 import {
   type EnvironmentId,
   type FilesystemBrowseResult,
@@ -12,11 +14,11 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 
+import { m, type MessageResolver } from "~/i18n/messages";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { filesystemEnvironment, useFilesystemReadAccess } from "~/state/filesystem";
 import { projectEnvironment } from "~/state/projects";
 import { useProjectPathSearch } from "~/state/queries";
-import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import { isDirectoryListing } from "./directoryListing.logic";
 import { revisionedQuery } from "~/state/revisionedQuery";
 
@@ -98,8 +100,9 @@ const EMPTY_RENDERED_HTML_ATOM = Atom.make(
 export function useTrustedMarkdownHtmlQuery(
   environmentId: EnvironmentId | null,
   path: string | null,
+  resolve: MessageResolver = m,
 ): ProjectQueryState<{ readonly html: string }> {
-  const fileAccess = useFilesystemReadAccess(environmentId);
+  const fileAccess = useFilesystemReadAccess(environmentId, resolve);
   const enabled = environmentId !== null && path !== null;
   const atom =
     enabled && fileAccess.canReadFiles
@@ -110,7 +113,7 @@ export function useTrustedMarkdownHtmlQuery(
   const refresh = () => refreshAtom();
   return {
     data: Option.getOrNull(AsyncResult.value(result)),
-    error: fileAccessError(fileAccess, enabled, failureCause(result)),
+    error: fileAccessError(fileAccess, enabled, failureCause(result), resolve),
     isPending: enabled && (fileAccess.isPending || result.waiting),
     refresh,
   };
@@ -127,7 +130,7 @@ export function setProjectFileQueryData(
     unsavedFileMounts.set(atom, appAtomRegistry.mount(atom));
   }
   appAtomRegistry.set(atom, {
-    confirmedAgainst: undefined,
+    saved: false,
     data: {
       relativePath,
       contents,
@@ -163,7 +166,7 @@ export function getUnsavedProjectFileQueryData(
   relativePath: string,
 ): ProjectReadFileResult | null {
   const optimistic = appAtomRegistry.get(optimisticFileAtom(environmentId, cwd, relativePath));
-  return optimistic?.confirmedAgainst === undefined ? (optimistic?.data ?? null) : null;
+  return !optimistic?.saved ? (optimistic?.data ?? null) : null;
 }
 
 export function confirmProjectFileQueryData(
@@ -177,21 +180,13 @@ export function confirmProjectFileQueryData(
   if (optimisticFile?.data.contents !== contents) return false;
 
   const queryAtom = getProjectFileQueryAtom(environmentId, cwd, relativePath);
-  const confirmed = {
+  appAtomRegistry.set(atom, {
     ...optimisticFile,
-    confirmedAgainst: appAtomRegistry.get(queryAtom),
-  };
-  appAtomRegistry.set(atom, confirmed);
+    saved: true,
+    confirmingQuery: queryAtom,
+  });
   releaseUnsavedFile(atom);
   appAtomRegistry.refresh(queryAtom);
-  void executeAtomQuery(appAtomRegistry, queryAtom, {
-    reportDefect: false,
-    reportFailure: false,
-  }).then((result) => {
-    if (result._tag === "Success" && appAtomRegistry.get(atom) === confirmed) {
-      appAtomRegistry.set(atom, null);
-    }
-  });
   return true;
 }
 
@@ -219,9 +214,9 @@ function failureCause<A>(result: AsyncResult.AsyncResult<A, unknown>): unknown {
   return result._tag === "Failure" ? Cause.squash(result.cause) : null;
 }
 
-function errorMessage(cause: unknown): string | null {
+function errorMessage(cause: unknown, resolve: MessageResolver): string | null {
   if (cause === null) return null;
-  return cause instanceof Error ? cause.message : "Workspace query failed.";
+  return thrownErrorMessage(cause, resolve) ?? resolve(msg("Workspace query failed."));
 }
 
 type FileAccess = ReturnType<typeof useFilesystemReadAccess>;
@@ -229,11 +224,16 @@ type FileAccess = ReturnType<typeof useFilesystemReadAccess>;
 /** FORK: the error the trusted and listing queries report, matching upstream's gated queries above
  *  and below: nothing while disabled or while access is still being checked, the server's error
  *  once the read ran, and the access error when it may not run. */
-function fileAccessError(fileAccess: FileAccess, enabled: boolean, cause: unknown): string | null {
+function fileAccessError(
+  fileAccess: FileAccess,
+  enabled: boolean,
+  cause: unknown,
+  resolve: MessageResolver,
+): string | null {
   if (!enabled || fileAccess.isPending) return null;
   return fileAccess.canReadFiles
-    ? errorMessage(cause)
-    : (fileAccess.error ?? "This connection cannot read host files.");
+    ? errorMessage(cause, resolve)
+    : (fileAccess.error ?? resolve(msg("This connection cannot read host files.")));
 }
 
 const isProjectReadFileError = Schema.is(ProjectReadFileError);
@@ -244,8 +244,9 @@ export function useProjectEntriesQuery(
   cwd: string,
   directoryPath?: string,
   revision?: string | null,
+  resolve: MessageResolver = m,
 ): ProjectQueryState<ProjectListEntriesResult> {
-  const fileAccess = useFilesystemReadAccess(environmentId);
+  const fileAccess = useFilesystemReadAccess(environmentId, resolve);
   const { canReadFiles } = fileAccess;
   const atom = canReadFiles
     ? getProjectEntriesQueryAtom(environmentId, cwd, directoryPath)
@@ -258,8 +259,8 @@ export function useProjectEntriesQuery(
     error: fileAccess.isPending
       ? null
       : canReadFiles
-        ? errorMessage(failureCause(result))
-        : (fileAccess.error ?? "This connection cannot read host files."),
+        ? errorMessage(failureCause(result), resolve)
+        : (fileAccess.error ?? resolve(msg("This connection cannot read host files."))),
     isPending: fileAccess.isPending || result.waiting,
     refresh,
   };
@@ -272,6 +273,7 @@ export function useProjectFilePickerQuery(
   query: string,
   limit: number,
   options?: { readonly imageOnly?: boolean },
+  resolve: MessageResolver = m,
 ) {
   const search = useProjectPathSearch(
     {
@@ -283,6 +285,7 @@ export function useProjectFilePickerQuery(
     },
     limit,
     { allowEmptyQuery: true },
+    resolve,
   );
 
   return {
@@ -298,9 +301,10 @@ export function useProjectFileQuery(
   cwd: string,
   relativePath: string | null,
   enabled = true,
+  resolve: MessageResolver = m,
 ): ProjectFileQueryState {
   // Read media-like paths too; a failed read is how folders with those names are detected.
-  const fileAccess = useFilesystemReadAccess(environmentId);
+  const fileAccess = useFilesystemReadAccess(environmentId, resolve);
   const { canReadFiles } = fileAccess;
   const isQueryEnabled = enabled;
   const atom =
@@ -328,9 +332,9 @@ export function useProjectFileQuery(
         ? null
         : canReadFiles
           ? isMissing && !optimisticFile
-            ? `'${relativePath}' does not exist.`
-            : errorMessage(cause)
-          : (fileAccess.error ?? "This connection cannot read host files."),
+            ? resolve(msg("''{path}'' does not exist.", { path: relativePath }))
+            : errorMessage(cause, resolve)
+          : (fileAccess.error ?? resolve(msg("This connection cannot read host files."))),
     isPending: isQueryEnabled && (fileAccess.isPending || result.waiting),
     readError,
     isNotFile,
@@ -348,8 +352,9 @@ export function useProjectFileQuery(
 export function useTrustedFileQuery(
   environmentId: EnvironmentId | null,
   path: string | null,
+  resolve: MessageResolver = m,
 ): ProjectQueryState<ProjectReadFileResult> {
-  const fileAccess = useFilesystemReadAccess(environmentId);
+  const fileAccess = useFilesystemReadAccess(environmentId, resolve);
   const enabled = environmentId !== null && path !== null;
   const atom =
     enabled && fileAccess.canReadFiles
@@ -360,7 +365,7 @@ export function useTrustedFileQuery(
   const refresh = () => refreshAtom();
   return {
     data: Option.getOrNull(AsyncResult.value(result)),
-    error: fileAccessError(fileAccess, enabled, failureCause(result)),
+    error: fileAccessError(fileAccess, enabled, failureCause(result), resolve),
     isPending: enabled && (fileAccess.isPending || result.waiting),
     refresh,
   };
@@ -378,8 +383,9 @@ const EMPTY_DIRECTORY_LISTING_ATOM = Atom.make(
 export function useDirectoryListingQuery(
   environmentId: EnvironmentId | null,
   directoryPath: string | null,
+  resolve: MessageResolver = m,
 ): ProjectQueryState<FilesystemBrowseResult> {
-  const fileAccess = useFilesystemReadAccess(environmentId);
+  const fileAccess = useFilesystemReadAccess(environmentId, resolve);
   const enabled = environmentId !== null && directoryPath !== null;
   const atom =
     enabled && fileAccess.canReadFiles
@@ -401,8 +407,8 @@ export function useDirectoryListingQuery(
   return {
     data: supported ? value : null,
     error: supported
-      ? fileAccessError(fileAccess, enabled, failureCause(result))
-      : "This server cannot list folders.",
+      ? fileAccessError(fileAccess, enabled, failureCause(result), resolve)
+      : resolve(msg("This server cannot list folders.")),
     isPending: enabled && (fileAccess.isPending || result.waiting),
     refresh,
   };

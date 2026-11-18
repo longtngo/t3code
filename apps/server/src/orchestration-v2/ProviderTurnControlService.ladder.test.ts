@@ -23,6 +23,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import {
@@ -192,6 +193,7 @@ const controlLayer = (units: ReadonlyArray<Unit>, now: DateTime.Utc) => {
           get: (providerSessionId) =>
             Effect.succeed(Option.fromNullishOr(runtimes.get(providerSessionId))),
         }),
+        McpAppModelContext.layerEmpty,
       ),
     ),
   );

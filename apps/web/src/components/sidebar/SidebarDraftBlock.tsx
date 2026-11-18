@@ -5,8 +5,11 @@ import { type QueueRowSortableBag } from "../SidebarQueueBlock";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useThreadQueueStore } from "../../threadQueueStore";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
+import type { ContextMenuSource } from "@t3tools/contracts";
+import { contextMenuSourceOf } from "../../contextMenuSource";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { T, useGT, Var } from "gt-react";
 import { SquarePenIcon, XIcon } from "lucide-react";
 import {
   memo,
@@ -46,7 +49,11 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   sortable?: QueueRowSortableBag;
   /** See SidebarThreadRow: the drag presentation belongs to the copy, not the row left behind. */
   isOverlayCopy?: boolean | undefined;
-  onContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
+  onContextMenu: (
+    draftId: DraftId,
+    position: { x: number; y: number },
+    source: ContextMenuSource,
+  ) => void;
 }) {
   const {
     composer,
@@ -58,6 +65,7 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
     session,
     sortable,
   } = props;
+  const gt = useGT();
   const promptPreview =
     assistantCitationsToPlainText(
       replaceComposerContextReferences(composer.prompt, (occurrence) => occurrence.label),
@@ -75,10 +83,12 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   const preview =
     promptPreview.length > 0
       ? promptPreview
-      : `${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}`;
+      : gt("{count, plural, one {{count} attachment} other {{count} attachments}}", {
+          count: attachmentCount,
+        });
   const accessibility = resolveSidebarRowAccessibility({
     title: preview,
-    statusLabel: "Unsent draft",
+    statusLabel: gt("Unsent draft"),
     projectDisplayName: props.projectDisplayName,
     isActive: props.isActive,
   });
@@ -91,7 +101,7 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
     if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
       event.preventDefault();
       const rect = event.currentTarget.getBoundingClientRect();
-      onContextMenu(draftId, { x: rect.left, y: rect.bottom });
+      onContextMenu(draftId, { x: rect.left, y: rect.bottom }, "keyboard");
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onNavigate(draftId);
@@ -99,7 +109,7 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   };
   const handleContextMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
-    onContextMenu(draftId, { x: event.clientX, y: event.clientY });
+    onContextMenu(draftId, { x: event.clientX, y: event.clientY }, contextMenuSourceOf(event));
   };
   const handleDiscard = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -148,7 +158,6 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
         onContextMenu={handleContextMenu}
         onKeyDown={handleKeyDown}
       >
-        <span className="sr-only">{preview}</span>
         <div className="relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
           <div className="flex h-5 min-w-0 items-center gap-1.5">
             <SquarePenIcon aria-hidden className={draftPenClassName} />
@@ -164,7 +173,7 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
                   render={
                     <button
                       type="button"
-                      aria-label={props.queued ? "Remove from queue" : "Add to queue"}
+                      aria-label={props.queued ? gt("Remove from queue") : gt("Add to queue")}
                       disabled={queueReadOnly}
                       onClick={handleToggleQueue}
                       className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100 disabled:cursor-default disabled:hover:text-muted-foreground"
@@ -178,7 +187,7 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
                   }
                 />
                 <TooltipPopup side="top">
-                  {props.queued ? "Remove from queue" : "Add to queue"}
+                  {props.queued ? <T>Remove from queue</T> : <T>Add to queue</T>}
                 </TooltipPopup>
               </Tooltip>
               <Tooltip>
@@ -186,7 +195,7 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
                   render={
                     <button
                       type="button"
-                      aria-label="Discard draft"
+                      aria-label={gt("Discard draft")}
                       onClick={handleDiscard}
                       className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
                     >
@@ -194,13 +203,13 @@ export const SidebarDraftRow = memo(function SidebarDraftRow(props: {
                     </button>
                   }
                 />
-                <TooltipPopup side="top">Discard draft</TooltipPopup>
+                <TooltipPopup side="top">
+                  <T>Discard draft</T>
+                </TooltipPopup>
               </Tooltip>
             </span>
           </div>
-          <div aria-hidden className="mt-0.5 truncate text-sm font-medium text-foreground/90">
-            {preview}
-          </div>
+          <div className="mt-0.5 truncate text-sm font-medium text-foreground/90">{preview}</div>
         </div>
       </div>
     </li>
@@ -221,7 +230,11 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   onNavigateToDraft: (draftId: DraftId) => void;
   queuedDraftIds: ReadonlySet<string>;
   onToggleDraftQueue: (draftId: DraftId, session: DraftSessionState) => void;
-  onDraftContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
+  onDraftContextMenu: (
+    draftId: DraftId,
+    position: { x: number; y: number },
+    source: ContextMenuSource,
+  ) => void;
 }) {
   const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
   const draftsByThreadKey = useComposerDraftStore(
@@ -303,7 +316,9 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
         >
           <span className="shrink-0">
             {/* Drafts have no status, so they count idle, as in the Queue. */}
-            {`Not started (0/${drafts.length})`}
+            <T>
+              Not started (0/<Var>{drafts.length}</Var>)
+            </T>
           </span>
           <span aria-hidden className="h-px min-w-2 flex-1 bg-sidebar-border/60" />
           <ChevronDownIcon

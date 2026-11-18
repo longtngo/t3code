@@ -209,6 +209,17 @@ import Migration0096 from "./Migrations/086_QueuedTurnInputIndex.ts";
 import Migration0097 from "./Migrations/087_ProjectionProjectsCustomTitle.ts";
 import Migration0098 from "./Migrations/088_TurnItemTypeStatusIndex.ts";
 import Migration0099 from "./Migrations/089_ShellThreadReadIndexes.ts";
+// Upstream's 090-098 arrive after the fork already deployed ids 33-99, so they take the next
+// free ids (100-108), a flat +10, rather than their filename numbers (registry section 1).
+import Migration0100 from "./Migrations/090_AuthConnectDevices.ts";
+import Migration0101 from "./Migrations/091_AuthConnectDeniedRequests.ts";
+import Migration0102 from "./Migrations/092_QueuedTurnInputIndexJsonValid.ts";
+import Migration0103 from "./Migrations/093_ProviderTurnAttemptIndex.ts";
+import Migration0104 from "./Migrations/094_TurnItemMessageOrdinalIndex.ts";
+import Migration0105 from "./Migrations/095_TurnItemInlineWorkOutput.ts";
+import Migration0106 from "./Migrations/096_RepairStaleTitleRegeneration.ts";
+import Migration0107 from "./Migrations/097_IssueTrackerBindings.ts";
+import Migration0108 from "./Migrations/098_ActiveShellIndexIndexes.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -314,6 +325,15 @@ export const migrationEntries = [
   [97, "ProjectionProjectsCustomTitle", Migration0097],
   [98, "TurnItemTypeStatusIndex", Migration0098],
   [99, "ShellThreadReadIndexes", Migration0099],
+  [100, "AuthConnectDevices", Migration0100],
+  [101, "AuthConnectDeniedRequests", Migration0101],
+  [102, "QueuedTurnInputIndexJsonValid", Migration0102],
+  [103, "ProviderTurnAttemptIndex", Migration0103],
+  [104, "TurnItemMessageOrdinalIndex", Migration0104],
+  [105, "TurnItemInlineWorkOutput", Migration0105],
+  [106, "RepairStaleTitleRegeneration", Migration0106],
+  [107, "IssueTrackerBindings", Migration0107],
+  [108, "ActiveShellIndexIndexes", Migration0108],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -400,7 +420,8 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
   // The desktop waits past its readiness budget until the finished line follows this one.
-  if (yield* hasPendingMigrations()) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
+  const hasPending = yield* hasPendingMigrations();
+  if (hasPending) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   if (includesV2) {

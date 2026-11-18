@@ -3,6 +3,7 @@ import type {
   ScopedThreadRef,
   WorkspaceMemberBranchReport,
 } from "@t3tools/contracts";
+import { useGT } from "gt-react";
 import { GitBranchIcon, TriangleAlertIcon, UnplugIcon } from "lucide-react";
 import { useEffect, useMemo } from "react";
 
@@ -37,6 +38,7 @@ export default function WorkspaceRepoBar({
   selectedId,
   threadRef,
 }: WorkspaceRepoBarProps) {
+  const gt = useGT();
   const thread = useThreadShell(threadRef);
   const projectId = thread?.projectId ?? null;
   const hasMembers = repos.some((repo) => repo.kind === "member");
@@ -57,7 +59,7 @@ export default function WorkspaceRepoBar({
   if (repos.length < 2) return null;
   return (
     <div
-      aria-label="Workspace repositories"
+      aria-label={gt("Workspace repositories")}
       className={cn(
         "flex shrink-0 items-center gap-1 overflow-x-auto border-border/70 border-b px-2 py-1.5",
         className,
@@ -99,6 +101,7 @@ function WorkspaceRepoTab({
   // A server that ignores `includeRemote: false` starts a remote poller per subscription, so
   // seven repositories would fetch seven remotes on a timer (the fetch-storm shape that once made
   // this backend unresponsive). Against such a server the tab shows no status instead.
+  const gt = useGT();
   const supportsLocalOnlyStatus = useEnvironmentSupportsLocalOnlyStatus(environmentId);
   const statusQuery = useEnvironmentQuery(
     supportsLocalOnlyStatus
@@ -155,10 +158,12 @@ function WorkspaceRepoTab({
         }
       >
         <span className="min-w-0 max-w-40 truncate font-medium">{repo.title}</span>
-        {isUnavailable ? <UnplugIcon aria-label="Unavailable" className="size-3 shrink-0" /> : null}
+        {isUnavailable ? (
+          <UnplugIcon aria-label={gt("Unavailable")} className="size-3 shrink-0" />
+        ) : null}
         {isOwnedByOther ? (
           <TriangleAlertIcon
-            aria-label="Another thread is working in this repository"
+            aria-label={gt("Another thread is working in this repository")}
             className="size-3 shrink-0 text-warning"
           />
         ) : null}
@@ -170,7 +175,10 @@ function WorkspaceRepoTab({
         ) : null}
         {changedFileCount > 0 ? (
           <span
-            aria-label={`${changedFileCount} changed ${changedFileCount === 1 ? "file" : "files"}`}
+            aria-label={gt(
+              "{count, plural, one {{count} changed file} other {{count} changed files}}",
+              { count: changedFileCount },
+            )}
             className="shrink-0 rounded-full bg-foreground/10 px-1.5 text-3xs tabular-nums"
           >
             {changedFileCount}
@@ -179,9 +187,9 @@ function WorkspaceRepoTab({
       </TooltipTrigger>
       <TooltipPopup>
         {isUnavailable
-          ? `${repo.cwd}: ${report?.detail ?? "unavailable"}`
+          ? `${repo.cwd}: ${report?.detail ?? gt("unavailable")}`
           : isOwnedByOther
-            ? `${repo.cwd}: on a branch another thread is working in`
+            ? gt("{cwd}: on a branch another thread is working in", { cwd: repo.cwd })
             : repo.cwd}
       </TooltipPopup>
     </Tooltip>

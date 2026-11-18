@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { useState } from "react";
+import { T, useGT, Var } from "gt-react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { ENVIRONMENT_SETTINGS_READ_ONLY } from "../../permissionCopy";
@@ -36,6 +37,7 @@ function RedactedLogin(props: {
   readonly revealed: boolean;
   readonly label?: string;
 }) {
+  const gt = useGT();
   return props.revealed ? (
     <span className="min-w-0 truncate font-mono text-2xs">{props.account}</span>
   ) : (
@@ -43,7 +45,7 @@ function RedactedLogin(props: {
       <span className="select-none blur-xs" aria-hidden>
         {redactedPlaceholder(props.account)}
       </span>
-      <span className="sr-only">{props.label ?? "Hidden account"}</span>
+      <span className="sr-only">{props.label ?? gt("Hidden account")}</span>
     </span>
   );
 }
@@ -57,13 +59,18 @@ function PerFolderLabel(props: {
   return (
     <span className="flex min-w-0 items-center gap-1">
       {group.activeAccount ? (
-        <>
-          Per folder, else
-          <RedactedLogin revealed={revealed} account={group.activeAccount} />
-          {group.activeUsable ? null : "(can't be used)"}
-        </>
+        group.activeUsable ? (
+          <T>
+            Per folder, else <RedactedLogin revealed={revealed} account={group.activeAccount} />
+          </T>
+        ) : (
+          <T>
+            Per folder, else <RedactedLogin revealed={revealed} account={group.activeAccount} />{" "}
+            (can&apos;t be used)
+          </T>
+        )
       ) : (
-        "Per folder"
+        <T>Per folder</T>
       )}
     </span>
   );
@@ -82,6 +89,7 @@ export function SourceControlAccountSettings({
   readonly auth: SourceControlProviderAuth;
   readonly onSaved: () => void;
 }) {
+  const gt = useGT();
   const { hosts, tokens } = useEnvironmentSettings(environmentId, (settings) =>
     readHostCredentialSettings(settings, definition.kind),
   );
@@ -118,9 +126,13 @@ export function SourceControlAccountSettings({
   if (groups.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        Sign in with{" "}
-        <code className="rounded bg-muted px-1 py-px text-2xs">{credentials.loginCommand}</code> on
-        the server host, then rescan to choose accounts here.
+        <T>
+          Sign in with{" "}
+          <code className="rounded bg-muted px-1 py-px text-2xs">
+            <Var>{credentials.loginCommand}</Var>
+          </code>{" "}
+          on the server host, then rescan to choose accounts here.
+        </T>
       </p>
     );
   }
@@ -129,8 +141,13 @@ export function SourceControlAccountSettings({
     <div className="grid gap-4">
       <div className="flex items-center justify-between gap-3">
         <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
-          Choose which <code className="rounded bg-muted px-1 py-px text-2xs">{cliName}</code> login
-          each {label} host uses, or turn a host off.
+          <T>
+            Choose which{" "}
+            <code className="rounded bg-muted px-1 py-px text-2xs">
+              <Var>{cliName}</Var>
+            </code>{" "}
+            login each <Var>{label}</Var> host uses, or turn a host off.
+          </T>
           {/* FORK: why the controls below are disabled for a login without `settings:write`. */}
           {writeDenied ? ` ${ENVIRONMENT_SETTINGS_READ_ONLY}` : null}
         </p>
@@ -138,7 +155,11 @@ export function SourceControlAccountSettings({
           size="icon-xs"
           variant="ghost-muted"
           onClick={() => setRevealed((current) => !current)}
-          aria-label={revealed ? `Hide ${label} accounts` : `Reveal ${label} accounts`}
+          aria-label={
+            revealed
+              ? gt("Hide {label} accounts", { label })
+              : gt("Reveal {label} accounts", { label })
+          }
           aria-pressed={revealed}
         >
           {revealed ? <EyeOffIcon /> : <EyeIcon />}
@@ -164,7 +185,9 @@ export function SourceControlAccountSettings({
                 <span className="text-xs font-medium text-foreground">{group.host}</span>
                 {group.selectable.length === 1 && group.selectable[0] !== undefined ? (
                   <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-                    <span>Signed in as</span>
+                    <span>
+                      <T>Signed in as</T>
+                    </span>
                     <RedactedLogin revealed={revealed} account={group.selectable[0]} />
                   </p>
                 ) : null}
@@ -173,13 +196,15 @@ export function SourceControlAccountSettings({
                 checked={enabled}
                 // FORK: disabled for a login without `settings:write`.
                 disabled={saving || writeDenied}
-                aria-label={`Use ${label} on ${group.host}`}
+                aria-label={gt("Use {label} on {host}", { label, host: group.host })}
                 onCheckedChange={(checked) => void save(group.host, { enabled: checked })}
               />
             </div>
             {group.selectable.length > 1 ? (
               <div className="flex items-center justify-between gap-3">
-                <span className="text-xs text-muted-foreground">Account</span>
+                <span className="text-xs text-muted-foreground">
+                  <T>Account</T>
+                </span>
                 <div className="w-64 max-w-full">
                   <Select
                     value={pinned}
@@ -192,7 +217,10 @@ export function SourceControlAccountSettings({
                       });
                     }}
                   >
-                    <SelectTrigger size="sm" aria-label={`${label} account for ${group.host}`}>
+                    <SelectTrigger
+                      size="sm"
+                      aria-label={gt("{label} account for {host}", { label, host: group.host })}
+                    >
                       <SelectValue>
                         {(value: string) =>
                           value === ACTIVE_ACCOUNT ? (
@@ -211,7 +239,11 @@ export function SourceControlAccountSettings({
                         <SelectItem value={unusablePin} disabled>
                           <span className="flex min-w-0 items-center gap-1">
                             <RedactedLogin revealed={revealed} account={unusablePin} />
-                            {state.pinProblem === "broken" ? "(can't be used)" : "(signed out)"}
+                            {state.pinProblem === "broken" ? (
+                              <T>(can&apos;t be used)</T>
+                            ) : (
+                              <T>(signed out)</T>
+                            )}
                           </span>
                         </SelectItem>
                       ) : null}
@@ -220,7 +252,7 @@ export function SourceControlAccountSettings({
                           <RedactedLogin
                             revealed={revealed}
                             account={account}
-                            label={`Account ${index + 1}`}
+                            label={gt("Account {number}", { number: index + 1 })}
                           />
                         </SelectItem>
                       ))}
@@ -232,9 +264,17 @@ export function SourceControlAccountSettings({
             {state.warning !== null ? (
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs text-warning">
-                  {state.warning === "broken"
-                    ? "The chosen login can't be used, so requests on this host fail until you sign in to it again or pick another."
-                    : `The chosen login is no longer signed in, so the active ${cliName} login is used for every folder.`}
+                  {state.warning === "broken" ? (
+                    <T>
+                      The chosen login can&apos;t be used, so requests on this host fail until you
+                      sign in to it again or pick another.
+                    </T>
+                  ) : (
+                    <T>
+                      The chosen login is no longer signed in, so the active <Var>{cliName}</Var>{" "}
+                      login is used for every folder.
+                    </T>
+                  )}
                 </p>
                 <Button
                   size="xs"
@@ -243,7 +283,7 @@ export function SourceControlAccountSettings({
                   disabled={saving || writeDenied}
                   onClick={() => void save(group.host, { account: null })}
                 >
-                  Use per folder
+                  <T>Use per folder</T>
                 </Button>
               </div>
             ) : null}
@@ -252,21 +292,36 @@ export function SourceControlAccountSettings({
                 key={entry.account}
                 className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-muted-foreground/70"
               >
-                <RedactedLogin revealed={revealed} account={entry.account} />
-                <span>
-                  can't be used: {entry.error ?? `${cliName} reports this login as invalid.`}
-                </span>
+                {entry.error ? (
+                  <T>
+                    <RedactedLogin revealed={revealed} account={entry.account} />{" "}
+                    <span>
+                      can&apos;t be used: <Var>{entry.error}</Var>
+                    </span>
+                  </T>
+                ) : (
+                  <T>
+                    <RedactedLogin revealed={revealed} account={entry.account} />{" "}
+                    <span>
+                      can&apos;t be used: <Var>{cliName}</Var> reports this login as invalid.
+                    </span>
+                  </T>
+                )}
               </p>
             ))}
             {state.override === "savedToken" ? (
               <p className="text-xs text-warning">
-                A token is saved for this host, so it overrides the account chosen here until it is
-                removed.
+                <T>
+                  A token is saved for this host, so it overrides the account chosen here until it
+                  is removed.
+                </T>
               </p>
             ) : state.override === "environment" ? (
               <p className="text-xs text-warning">
-                {group.environmentVariable} is set on the server, so it overrides the account chosen
-                here until it is unset.
+                <T>
+                  <Var>{group.environmentVariable}</Var> is set on the server, so it overrides the
+                  account chosen here until it is unset.
+                </T>
               </p>
             ) : null}
           </div>

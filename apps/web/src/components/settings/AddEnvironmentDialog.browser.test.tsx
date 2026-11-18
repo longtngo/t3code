@@ -97,6 +97,24 @@ describe("AddEnvironmentDialog", () => {
     await expectDefaultModeAfterReopen();
   });
 
+  it("drops an SSH error when switching to Remote link", async () => {
+    using _bridge = setup();
+    await using _screen = await render(<Owner />);
+
+    mocks.connectSshEnvironment.mockResolvedValueOnce(
+      AsyncResult.failure(Cause.fail(new Error("ssh: connection refused"))),
+    );
+    await openDialogOnSsh();
+    await userEvent.type(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
+    await userEvent.click(
+      page.getByRole("dialog").getByRole("button", { name: "Add environment" }),
+    );
+    await expect.element(page.getByText(/connection refused/)).toBeInTheDocument();
+
+    await userEvent.click(remoteCard());
+    await expect.element(page.getByText(/connection refused/)).not.toBeInTheDocument();
+  });
+
   // `fill` rather than `type`: what is under test is the reset on dismiss, not keystrokes, and
   // 47 typed keys are 47 round trips that took about 7 s of its 15 s in a full-suite run.
   it("clears the form after dismissing it on SSH", async () => {

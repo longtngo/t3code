@@ -1,4 +1,7 @@
 import type { WorkspaceMember } from "@t3tools/contracts";
+import { msg } from "gt-react";
+
+import { m, type MessageResolver } from "~/i18n/messages";
 
 export interface WorkspaceMemberDraft {
   readonly path: string;
@@ -69,18 +72,19 @@ export function validateMemberDraft(
   draft: WorkspaceMemberDraft,
   existing: ReadonlyArray<WorkspaceMember>,
   editingId?: string,
+  resolve: MessageResolver = m,
 ): string | null {
   const path = normalizeMemberPath(draft.path);
   const branch = draft.integrationBranch.trim();
-  if (path.length === 0) return "Enter a repository path.";
+  if (path.length === 0) return resolve(msg("Enter a repository path."));
   if (!isAbsoluteOrHomePath(path)) {
-    return "Enter an absolute path, or one starting with ~/.";
+    return resolve(msg("Enter an absolute path, or one starting with ~/."));
   }
-  if (branch.length === 0) return "Enter the branch this repository integrates into.";
+  if (branch.length === 0) return resolve(msg("Enter the branch this repository integrates into."));
   if (
     existing.some((member) => member.id !== editingId && normalizeMemberPath(member.path) === path)
   ) {
-    return "That repository is already attached.";
+    return resolve(msg("That repository is already attached."));
   }
   return null;
 }
@@ -162,20 +166,25 @@ export function canAutofillBranch(branchValue: string, autofilledValue: string |
  * reading": returning nothing mid-query collapsed the line and made the centred dialog flicker
  * per keystroke. The caller also reserves the line when this is null.
  */
-export function resolveBranchHint(input: {
-  /** The resolved repository directory, or null while the path is unusable. */
-  readonly branchCwd: string | null;
-  /** False while the branch query has not answered for the current directory. */
-  readonly hasRefsAnswer: boolean;
-  readonly isRepository: boolean;
-  readonly currentBranch: string | null;
-  readonly branch: string;
-}): string | null {
-  if (input.branchCwd === null) return "Choose a repository to list its branches.";
-  if (!input.hasRefsAnswer) return "Reading branches…";
-  if (!input.isRepository) return "That folder is not a git repository.";
+export function resolveBranchHint(
+  input: {
+    /** The resolved repository directory, or null while the path is unusable. */
+    readonly branchCwd: string | null;
+    /** False while the branch query has not answered for the current directory. */
+    readonly hasRefsAnswer: boolean;
+    readonly isRepository: boolean;
+    readonly currentBranch: string | null;
+    readonly branch: string;
+  },
+  resolve: MessageResolver = m,
+): string | null {
+  if (input.branchCwd === null) return resolve(msg("Choose a repository to list its branches."));
+  if (!input.hasRefsAnswer) return resolve(msg("Reading branches…"));
+  if (!input.isRepository) return resolve(msg("That folder is not a git repository."));
   if (input.currentBranch !== null && input.branch.trim() === input.currentBranch) {
-    return `${input.currentBranch} is checked out in that repository.`;
+    return resolve(
+      msg("{branch} is checked out in that repository.", { branch: input.currentBranch }),
+    );
   }
   return null;
 }

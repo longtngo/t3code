@@ -2,12 +2,18 @@
 // state/contextWindow.ts (the fork's carried compaction facts moved with it); the
 // fork's display helpers for the Vitals gauge stay here.
 import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
+import { msg } from "gt-react";
+
+import { m, type MessageResolver } from "~/i18n/messages";
 
 export type { ContextWindowSnapshot };
 
 /** Map a provider driver kind to a user-facing display name. */
-export function formatProviderDisplayName(provider: string | null | undefined): string {
-  if (!provider) return "This agent";
+export function formatProviderDisplayName(
+  provider: string | null | undefined,
+  resolve: MessageResolver = m,
+): string {
+  if (!provider) return resolve(msg("This agent"));
   switch (provider) {
     case "claudeAgent":
     case "claude":
@@ -73,6 +79,7 @@ export function formatContextWindowTokens(value: number | null): string {
  */
 export function deriveCompactionMarker(
   usage: ContextWindowSnapshot,
+  resolve: MessageResolver = m,
 ): { readonly pct: number; readonly label: string } | null {
   const { autoCompactThreshold, autoCompactSource, maxTokens } = usage;
   // `== null` covers both halves deliberately: the mapped type keeps each key
@@ -83,6 +90,8 @@ export function deriveCompactionMarker(
   if (autoCompactThreshold >= maxTokens) return null;
   return {
     pct: (autoCompactThreshold / maxTokens) * 100,
-    label: `compacts at ${formatContextWindowTokens(autoCompactThreshold)}`,
+    label: resolve(
+      msg("compacts at {tokens}", { tokens: formatContextWindowTokens(autoCompactThreshold) }),
+    ),
   };
 }

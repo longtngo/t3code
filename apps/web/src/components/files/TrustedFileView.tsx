@@ -4,6 +4,7 @@
  * the `/viewer/$` route and the right panel's trusted-file surface; editable workspace files
  * use `FilePreviewPanel` instead.
  */
+import { T, useGT } from "gt-react";
 import { LoaderCircle, RotateCcwIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
@@ -123,6 +124,7 @@ function TrustedFileViewContents({
   className,
   onOpenListedFile,
 }: TrustedFileViewProps) {
+  const gt = useGT();
   // "Show the non-default view for this kind": rendered↔source for html, and
   // markdown↔server-rendered-html for markdown. Reset per file by the `key` on the
   // wrapper below, so a toggle set while reading a report cannot follow you to the
@@ -168,10 +170,18 @@ function TrustedFileViewContents({
 
   const body = (() => {
     if (absolutePath === null) {
-      return <TrustedFileNotice>No file selected.</TrustedFileNotice>;
+      return (
+        <TrustedFileNotice>
+          <T>No file selected.</T>
+        </TrustedFileNotice>
+      );
     }
     if (environmentId === null) {
-      return <TrustedFileNotice>Connect to an environment to view files.</TrustedFileNotice>;
+      return (
+        <TrustedFileNotice>
+          <T>Connect to an environment to view files.</T>
+        </TrustedFileNotice>
+      );
     }
     if (usesRawBytes) {
       const outcome = rawMediaOutcome({
@@ -186,7 +196,7 @@ function TrustedFileViewContents({
         return (
           <TrustedFileNotice>
             <LoaderCircle className="size-4 animate-spin" aria-hidden />
-            Connecting…
+            <T>Connecting…</T>
           </TrustedFileNotice>
         );
       }
@@ -203,15 +213,17 @@ function TrustedFileViewContents({
         return (
           <TrustedFileNotice>
             <LoaderCircle className="size-4 animate-spin" aria-hidden />
-            Loading…
+            <T>Loading…</T>
           </TrustedFileNotice>
         );
       }
       if (outcome === "failed") {
         return (
           <TrustedFileNotice tone="error">
-            This file could not be played. It may be missing, too large, or in a format this browser
-            cannot decode.
+            <T>
+              This file could not be played. It may be missing, too large, or in a format this
+              browser cannot decode.
+            </T>
           </TrustedFileNotice>
         );
       }
@@ -265,7 +277,7 @@ function TrustedFileViewContents({
       // an opaque origin with no access to this app, but interactive.
       return (
         <iframe
-          title="Rendered document"
+          title={gt("Rendered document")}
           src={rawUrlWithReload}
           // Belt and braces: the server already serves this document under a CSP
           // `sandbox` directive, so it has an opaque origin either way. Declaring it
@@ -281,14 +293,14 @@ function TrustedFileViewContents({
         // Sandboxed: the rendered document is treated as untrusted content and
         // gets an opaque origin with no access to this app.
         <iframe
-          title="Rendered document"
+          title={gt("Rendered document")}
           sandbox=""
           srcDoc={rendered.data.html}
           className="min-h-0 flex-1 border-0 bg-white"
         />
       ) : (
         <TrustedFileNotice tone={rendered.error ? "error" : "muted"}>
-          {rendered.error ?? "Rendering…"}
+          {rendered.error ?? gt("Rendering…")}
         </TrustedFileNotice>
       );
     }
@@ -306,7 +318,7 @@ function TrustedFileViewContents({
         return (
           <TrustedFileNotice>
             <LoaderCircle className="size-4 animate-spin" aria-hidden />
-            Loading…
+            <T>Loading…</T>
           </TrustedFileNotice>
         );
       }
@@ -316,7 +328,7 @@ function TrustedFileViewContents({
       return (
         <TrustedFileNotice>
           <LoaderCircle className="size-4 animate-spin" aria-hidden />
-          {file.isPending ? "Loading…" : "No content."}
+          {file.isPending ? gt("Loading…") : gt("No content.")}
         </TrustedFileNotice>
       );
     }
@@ -342,7 +354,7 @@ function TrustedFileViewContents({
               nothing made a large file look complete. */}
           {file.data?.truncated ? (
             <p className="mb-3 rounded border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              Showing the first 1 MB of this file.
+              <T>Showing the first 1 MB of this file.</T>
             </p>
           ) : null}
           <HighlightedCodeView code={contents} path={absolutePath} />
@@ -355,12 +367,14 @@ function TrustedFileViewContents({
     kind === "markdown"
       ? {
           text: showAlternate ? "MD" : "HTML",
-          title: showAlternate ? "Show markdown" : "Render as HTML",
+          title: showAlternate ? gt("Show markdown") : gt("Render as HTML"),
         }
       : kind === "html"
         ? {
-            text: showAlternate ? "Preview" : "Code",
-            title: showAlternate ? "Render the document" : "Show HTML source",
+            text: showAlternate
+              ? gt("Preview", { $context: "noun, rendered view of a file" })
+              : gt("Code", { $context: "noun, source view of a file" }),
+            title: showAlternate ? gt("Render the document") : gt("Show HTML source"),
           }
         : null;
 
@@ -402,7 +416,7 @@ function TrustedFileViewContents({
                 if (file.error !== null) listing.refresh();
               }
             }}
-            title="Reload file"
+            title={gt("Reload file")}
           >
             <RotateCcwIcon className="size-3.5" />
           </Button>

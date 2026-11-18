@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { ChevronRightIcon, GaugeIcon } from "lucide-react";
 import * as Schema from "effect/Schema";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
@@ -6,6 +7,7 @@ import type { EnvironmentConnectionSummary } from "@t3tools/client-runtime/state
 import type { ResourceQueueItem, ResourceQueueSnapshot } from "@t3tools/contracts";
 import type { HostMetricsSample } from "../../lib/hostMetrics";
 
+import type { MessageResolver } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
 import { fullnessArc, SEVERITY_TEXT } from "../../lib/vitals";
 import { type HostMetricsState, useHostMetrics } from "../../hooks/useHostMetrics";
@@ -84,7 +86,9 @@ function Tag({ label, className }: { label: string; className: string }) {
  * controls — every pixel here is one the row does not have to wrap over.
  */
 function CountBadge({ n, kind }: { n: number; kind: "run" | "wait" }) {
+  const gt = useGT();
   const zero = n === 0;
+  const count = String(n);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -94,7 +98,11 @@ function CountBadge({ n, kind }: { n: number; kind: "run" | "wait" }) {
             // say which count it is, since the tooltip text is only on hover. A
             // generic span cannot carry a name, so it is an image of its count.
             role="img"
-            aria-label={`${String(n)} ${kind === "run" ? "running (holding a lease)" : "waiting (queued)"}`}
+            aria-label={
+              kind === "run"
+                ? gt("{count} running (holding a lease)", { count })
+                : gt("{count} waiting (queued)", { count })
+            }
             className={sidebarFooterBadgeClass(
               zero ? "idle" : kind === "run" ? "active" : "pending",
             )}
@@ -104,7 +112,7 @@ function CountBadge({ n, kind }: { n: number; kind: "run" | "wait" }) {
         {n}
       </TooltipTrigger>
       <TooltipPopup>
-        {kind === "run" ? "running (holding a lease)" : "waiting (queued)"}
+        {kind === "run" ? gt("running (holding a lease)") : gt("waiting (queued)")}
       </TooltipPopup>
     </Tooltip>
   );
@@ -131,9 +139,13 @@ function RowProgressBadge({ progress }: { progress: RowProgress }) {
               className="stroke-muted-foreground/40"
             />
           </svg>
-          <span className="text-3xs text-muted-foreground">queued</span>
+          <span className="text-3xs text-muted-foreground">
+            <T>queued</T>
+          </span>
         </TooltipTrigger>
-        <TooltipPopup>queued, not started</TooltipPopup>
+        <TooltipPopup>
+          <T>queued, not started</T>
+        </TooltipPopup>
       </Tooltip>
     );
   }
@@ -168,7 +180,11 @@ function RowProgressBadge({ progress }: { progress: RowProgress }) {
         </svg>
         <span className="text-3xs tabular-nums text-muted-foreground">{pct}%</span>
       </TooltipTrigger>
-      <TooltipPopup>{pct}% of estimated time</TooltipPopup>
+      <TooltipPopup>
+        <T>
+          <Var>{pct}</Var>% of estimated time
+        </T>
+      </TooltipPopup>
     </Tooltip>
   );
 }
@@ -188,10 +204,22 @@ function QueueRow({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const gt = useGT();
   const { name, description } = splitReason(item.reason);
   const progress = rowProgress(item, nowMs);
-  const where =
-    item.state === "waiting" ? `#${item.pos ?? "?"} in ${item.resource} queue` : "holding lease";
+  const pid = String(item.pid ?? "-");
+  const since = clockOf(item.sinceMs);
+  const eta = item.etaSec != null ? humanizeSec(item.etaSec) : "-";
+  const details =
+    item.state === "waiting"
+      ? gt("pid {pid} · #{pos} in {resource} queue · enqueued {since} · eta {eta}", {
+          pid,
+          pos: String(item.pos ?? "?"),
+          resource: item.resource,
+          since,
+          eta,
+        })
+      : gt("pid {pid} · holding lease · started {since} · eta {eta}", { pid, since, eta });
   return (
     <div
       className="flex cursor-pointer gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent"
@@ -218,7 +246,7 @@ function QueueRow({
             {item.resource}
           </span>
           <RowProgressBadge progress={progress} />
-          <span className="ml-1.5">{name || "(no description)"}</span>
+          <span className="ml-1.5">{name || gt("(no description)")}</span>
         </div>
         {/* line 2 — optional description mined from the reason */}
         {description ? (
@@ -249,8 +277,7 @@ function QueueRow({
             expanded ? "mt-1 max-h-16 opacity-100" : "max-h-0 opacity-0",
           )}
         >
-          pid {item.pid ?? "-"} · {where} · {item.state === "running" ? "started" : "enqueued"}{" "}
-          {clockOf(item.sinceMs)} · eta {item.etaSec != null ? humanizeSec(item.etaSec) : "-"}
+          {details}
         </div>
       </div>
       <svg
@@ -278,26 +305,26 @@ const NO_FOLDS: Record<string, boolean> = {};
  * a sample 9 999 ms old is live, one exactly 10 000 ms old is not.
  */
 const LIVE_WINDOW_MS = 10_000;
-const NOT_SUPPORTED = "Not available on this server";
-const REQUEST_FAILED = "Request failed";
+const NOT_SUPPORTED = msg("Not available on this server");
+const REQUEST_FAILED = msg("Request failed");
 
 /** Header text for each connection phase; `connected` shows none. */
-function phaseText(phase: EnvironmentConnectionPhase): string | null {
+function phaseText(phase: EnvironmentConnectionPhase, resolve: MessageResolver): string | null {
   switch (phase) {
     case "connected":
       return null;
     case "available":
-      return "Not connected";
+      return resolve(msg("Not connected"));
     case "offline":
-      return "Offline";
+      return resolve(msg("Offline"));
     case "connecting":
-      return "Connecting";
+      return resolve(msg("Connecting"));
     case "reconnecting":
-      return "Reconnecting";
+      return resolve(msg("Reconnecting"));
     case "error":
-      return "Connection failed";
+      return resolve(msg("Connection failed"));
     case "unsupported":
-      return "Client not supported";
+      return resolve(msg("Client not supported"));
   }
 }
 
@@ -313,24 +340,35 @@ function reservable(snapshot: ResourceQueueSnapshot | null) {
  * The reservations part's one-line state: why there is nothing to list, or the counts. Shown
  * folded, and in place of the job list when there is no list to show.
  */
-function reservationState(queue: QueueView): string {
-  if (queue.status === "unsupported") return NOT_SUPPORTED;
+function reservationState(queue: QueueView, resolve: MessageResolver): string {
+  if (queue.status === "unsupported") return resolve(NOT_SUPPORTED);
   const snapshot = queue.data;
   if (snapshot == null) {
-    return queue.status === "failed" ? (queue.message ?? REQUEST_FAILED) : "Connecting…";
+    return queue.status === "failed"
+      ? (queue.message ?? resolve(REQUEST_FAILED))
+      : resolve(msg("Connecting…"));
   }
   if (!snapshot.available) {
-    return `Resource broker unavailable: ${snapshot.unavailableReason ?? "unknown"}`;
+    return resolve(
+      msg("Resource broker unavailable: {reason}", {
+        reason: snapshot.unavailableReason ?? resolve(msg("unknown")),
+      }),
+    );
   }
   const { running, waiting } = reservable(snapshot);
-  return `${running.length} running · ${waiting.length} waiting`;
+  return resolve(
+    msg("{running} running · {waiting} waiting", {
+      running: String(running.length),
+      waiting: String(waiting.length),
+    }),
+  );
 }
 
 /** Folded reservations: the state, plus the error of a failed refresh that kept its last data. */
-function reservationSummary(queue: QueueView): string {
-  const state = reservationState(queue);
+function reservationSummary(queue: QueueView, resolve: MessageResolver): string {
+  const state = reservationState(queue, resolve);
   return queue.status === "failed" && queue.data != null
-    ? `${state} · ${queue.message ?? REQUEST_FAILED}`
+    ? `${state} · ${queue.message ?? resolve(REQUEST_FAILED)}`
     : state;
 }
 
@@ -367,10 +405,14 @@ function machineFacts(
 type MachineFacts = ReturnType<typeof machineFacts>;
 
 /** The usage part's text when there is no sample to draw. */
-function usageState(host: HostMetricsState, connected: boolean): string {
-  if (host.status === "unsupported") return NOT_SUPPORTED;
-  if (host.status === "failed") return `Usage unavailable: ${host.message ?? "unknown"}`;
-  return connected ? "Waiting for usage…" : "Usage unavailable";
+function usageState(host: HostMetricsState, connected: boolean, resolve: MessageResolver): string {
+  if (host.status === "unsupported") return resolve(NOT_SUPPORTED);
+  if (host.status === "failed") {
+    return resolve(
+      msg("Usage unavailable: {reason}", { reason: host.message ?? resolve(msg("unknown")) }),
+    );
+  }
+  return connected ? resolve(msg("Waiting for usage…")) : resolve(msg("Usage unavailable"));
 }
 
 function QuickStat({
@@ -492,6 +534,7 @@ function MachineSection({
   folds: Record<string, boolean>;
   onFold: (part: FoldPart, open: boolean) => void;
 }) {
+  const messages = useMessages();
   const { environmentId, connectionState } = environment;
   const connected = connectionState === "connected";
   // Sections exist only inside the open panel, so being mounted already means "open".
@@ -509,7 +552,7 @@ function MachineSection({
   const reservationsOpen = foldOpen(folds, environmentId, "reservations", defaults);
   // `receivedAt` is 0 until a sample arrives, so no sample is never live.
   const live = now - host.receivedAt < LIVE_WINDOW_MS;
-  const phase = phaseText(connectionState);
+  const phase = phaseText(connectionState, messages);
   // The header's name is spoken in place of its content, so it carries the badges' counts.
   const quickShown = hasBody && !machineOpen;
   // Collapsed, why there are no badges, shown where they go; open, the body says it in full.
@@ -620,7 +663,7 @@ function MachineSection({
                   <UsageStats sample={host.sample} withGpu />
                 </span>
               ) : (
-                usageState(host, connected)
+                usageState(host, connected, messages)
               )
             }
             onToggle={() => onFold("usage", !usageOpen)}
@@ -634,7 +677,7 @@ function MachineSection({
                 </div>
               ) : (
                 <div className="px-0.5 py-1 text-2xs text-muted-foreground/70">
-                  {usageState(host, connected)}
+                  {usageState(host, connected, messages)}
                 </div>
               )}
             </div>
@@ -644,7 +687,7 @@ function MachineSection({
             part="reservations"
             open={reservationsOpen}
             controls={`${partId}-reservations`}
-            summary={reservationSummary(queue)}
+            summary={reservationSummary(queue, messages)}
             onToggle={() => onFold("reservations", !reservationsOpen)}
           />
           {reservationsOpen ? (
@@ -687,11 +730,11 @@ function MachineSection({
               ) : null}
               {!showList ? (
                 <div className="px-0.5 py-1 text-2xs text-muted-foreground/70">
-                  {reservationState(queue)}
+                  {reservationState(queue, messages)}
                 </div>
               ) : rows.length === 0 ? (
                 <div className="px-0.5 py-1 text-2xs text-muted-foreground/60">
-                  Nothing running or queued. All resources free.
+                  <T>Nothing running or queued. All resources free.</T>
                 </div>
               ) : (
                 rows.map((item) => {
@@ -727,6 +770,7 @@ export function SidebarResourceQueue({
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const gt = useGT();
   const primaryId = usePrimaryEnvironmentId();
   const summaries = useEnvironmentConnectionSummaries();
   // `pinned` stays local because it records WHY the panel is open — a click rather than a hover —
@@ -825,7 +869,7 @@ export function SidebarResourceQueue({
         onClick={togglePin}
         aria-expanded={open}
         aria-controls={open ? RESOURCE_QUEUE_PANEL_ID : undefined}
-        aria-label="Resource Queue"
+        aria-label={gt("Resource Queue")}
       >
         <GaugeIcon className="size-3.5" />
         {totals.maintenance ? (
@@ -834,14 +878,16 @@ export function SidebarResourceQueue({
               render={
                 <span
                   role="img"
-                  aria-label="broker in maintenance (draining)"
+                  aria-label={gt("broker in maintenance (draining)")}
                   className="rounded-full bg-destructive px-1 py-px text-3xs font-semibold text-white"
                 />
               }
             >
               maint
             </TooltipTrigger>
-            <TooltipPopup>broker in maintenance (draining)</TooltipPopup>
+            <TooltipPopup>
+              <T>broker in maintenance (draining)</T>
+            </TooltipPopup>
           </Tooltip>
         ) : null}
         <CountBadge n={totals.running} kind="run" />
@@ -855,7 +901,7 @@ export function SidebarResourceQueue({
         >
           <div className="flex items-center justify-between px-0.5 pb-1">
             <span className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Resource queue
+              <T>Resource queue</T>
             </span>
             <span className="flex items-center gap-2">
               {totals.maintenance ? (
@@ -863,7 +909,9 @@ export function SidebarResourceQueue({
                   maintenance
                 </span>
               ) : null}
-              <span className="text-3xs text-muted-foreground/60">refresh 5s</span>
+              <span className="text-3xs text-muted-foreground/60">
+                <T>refresh 5s</T>
+              </span>
             </span>
           </div>
 
@@ -887,8 +935,10 @@ export function SidebarResourceQueue({
 
           <div className="mt-1.5 flex items-center justify-between gap-2 border-t pt-1.5 text-3xs text-muted-foreground/60">
             <span data-footer-counts>
-              {totals.running} running · {totals.waiting} waiting · {reachable} of{" "}
-              {environments.length} reachable
+              <T>
+                <Var>{totals.running}</Var> running · <Var>{totals.waiting}</Var> waiting ·{" "}
+                <Var>{reachable}</Var> of <Var>{environments.length}</Var> reachable
+              </T>
             </span>
             {anyOpen || anyBusy ? (
               <button
@@ -897,7 +947,7 @@ export function SidebarResourceQueue({
                 onClick={foldAll}
                 className="shrink-0 text-primary hover:underline"
               >
-                {anyOpen ? "collapse all" : "expand busy"}
+                {anyOpen ? gt("collapse all") : gt("expand busy")}
               </button>
             ) : null}
           </div>

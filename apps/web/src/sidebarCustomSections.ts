@@ -5,9 +5,11 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { AuthSettingsWriteScope, type SidebarSectionDefinition } from "@t3tools/contracts";
+import { msg } from "gt-react";
 import { useCallback, useContext, useMemo } from "react";
 
 import { requestSidebarSectionName } from "./components/SidebarSectionNameDialog";
+import { m } from "./i18n/messages";
 import { toastManager } from "./components/ui/toast";
 import { readLocalApi } from "./localApi";
 import { readThreadShells } from "./state/entities";
@@ -26,9 +28,12 @@ import {
 } from "./sidebarCustomSections.logic";
 
 const NOT_APPLIED = {
-  create: { title: "Section not created", description: "The server did not store the section." },
-  rename: { title: "Section not renamed", description: "The server kept the old name." },
-  delete: { title: "Section not deleted", description: "The server kept the section." },
+  create: {
+    title: msg("Section not created"),
+    description: msg("The server did not store the section."),
+  },
+  rename: { title: msg("Section not renamed"), description: msg("The server kept the old name.") },
+  delete: { title: msg("Section not deleted"), description: msg("The server kept the section.") },
 } as const;
 
 /** Null means no section UI: no primary, or a primary that does not store sections. */
@@ -61,13 +66,17 @@ export function useSidebarSectionCommands() {
       // A transport failure is already reported by useAtomCommand.
       if (result._tag !== "Success") return false;
       if (sidebarSectionPatchLanded(result.value.sidebarSections, patch)) return true;
-      toastManager.add({ type: "warning", ...NOT_APPLIED[change] });
+      toastManager.add({
+        type: "warning",
+        title: m(NOT_APPLIED[change].title),
+        description: m(NOT_APPLIED[change].description),
+      });
       return false;
     },
     [primaryId, updateSettings],
   );
   const create = useCallback(async () => {
-    const name = await requestSidebarSectionName({ title: "New section", initialName: "" });
+    const name = await requestSidebarSectionName({ title: m(msg("New section")), initialName: "" });
     if (name === null) return;
     await write(
       { [newSidebarSectionId()]: { name, createdAt: new Date().toISOString() } },
@@ -77,7 +86,7 @@ export function useSidebarSectionCommands() {
   const rename = useCallback(
     async (section: SidebarSectionView) => {
       const name = await requestSidebarSectionName({
-        title: "Rename section",
+        title: m(msg("Rename section")),
         initialName: section.name,
       });
       if (name === null) return;
@@ -85,8 +94,8 @@ export function useSidebarSectionCommands() {
       if (sidebarSectionGone(live, section.id)) {
         toastManager.add({
           type: "info",
-          title: "Section was deleted",
-          description: "The new name was not saved.",
+          title: m(msg("Section was deleted")),
+          description: m(msg("The new name was not saved.")),
         });
         return;
       }
@@ -106,8 +115,8 @@ export function useSidebarSectionCommands() {
       ) {
         toastManager.add({
           type: "info",
-          title: "Section was deleted",
-          description: "It was already removed.",
+          title: m(msg("Section was deleted")),
+          description: m(msg("It was already removed.")),
         });
         return;
       }

@@ -44,6 +44,7 @@ import {
 } from "../../composerDraftStore";
 import { NO_PROVIDER_MODEL_SELECTION, providerInstanceEntriesFor } from "../../providerInstances";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
+import { threadHasStarted } from "../chatThreadActions";
 import { buildMessageContext, terminalContextReference } from "../composerContextRecords";
 import { removeInlineContextReference } from "../composerContextReferences";
 import { composeTurnStart, composeTurnTitle, type TurnStartBootstrap } from "./composeTurnStart";
@@ -232,6 +233,7 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
   const selectedInstanceId = selectedProviderEntry.instanceId;
   const { modelOptions, selectedModel } = deriveEffectiveComposerModelState({
     draft,
+    threadStarted: !isLocalDraftThread && threadHasStarted(shell),
     providers,
     selectedProvider,
     selectedInstanceId,
