@@ -103,7 +103,6 @@ import {
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
 } from "./composerMentionDrag";
-import { ComposerShortcutsControls } from "./ComposerShortcutsControls";
 import { serializeComposerImages } from "./composerImagePersistence";
 import {
   isInsideCollapsedComposerControls,
@@ -241,11 +240,6 @@ import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
 import { getComposerPromptInjectionState, getComposerReasoningStep } from "./composerProviderState";
 import { readPromptUltrathink } from "./TraitsPicker";
-import { getDisplayModelName } from "./providerIconUtils";
-import { VitalsGaugeConnected } from "./VitalsGauge";
-// `ContextWindowMeter` / `resolveContextWindowModelDisplayName` are deliberately NOT
-// imported: invariant 10 in docs/fork/README.md -- the meter is replaced by the vitals
-// gauge and the display name is reimplemented inline below.
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
 import {
   buildAttachmentVideoPreview,
@@ -277,8 +271,6 @@ import { assistantCitationNavigation } from "../../lib/assistantCitationNavigati
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { useManagedPolicy } from "../../state/managedPolicy";
-// FORK-ONLY: `getProviderDisplayName` is dead upstream (its dead-code sweep deleted it there).
-import { getProviderDisplayName } from "../../providerModels";
 import { hasProviderSetup } from "./ProviderStatusBanner";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
@@ -291,8 +283,6 @@ import {
   resolveComposerDispatchMode,
   type ComposerDispatchMode,
 } from "@t3tools/client-runtime/state/composer-dispatch";
-import { deriveLatestContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
-import { formatProviderDisplayName } from "../../lib/contextWindow";
 import {
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
@@ -463,10 +453,6 @@ export interface ChatComposerProps {
   activeProjectId: ProjectId | null;
   projectName?: string | undefined;
 
-  // FORK (inv 4/10): the Vitals gauge reads the context window; upstream dropped these with its meter.
-  contextWindowEntries: Parameters<typeof deriveLatestContextWindowSnapshot>[0];
-  contextWindowLiveUsage: Parameters<typeof deriveLatestContextWindowSnapshot>[1];
-  contextWindowProviderThread: Parameters<typeof deriveLatestContextWindowSnapshot>[2];
   compactThreadUnavailable: boolean;
   compactDisabled: boolean;
 
@@ -611,9 +597,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     reportedModelSelection,
     activeProjectId,
     projectName,
-    contextWindowEntries,
-    contextWindowLiveUsage,
-    contextWindowProviderThread,
     compactThreadUnavailable,
     compactDisabled,
     resolvedTheme,
@@ -659,11 +642,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onRemoveEditingQueuedAttachment,
     onRestoreEditingQueuedAttachment,
   } = props;
-  const activeContextWindow = deriveLatestContextWindowSnapshot(
-    contextWindowEntries,
-    contextWindowLiveUsage,
-    contextWindowProviderThread,
-  );
   const {
     activePendingProgress: incomingPendingProgress,
     activePendingResolvedAnswers,
@@ -1009,22 +987,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     supportsAttachmentUploads,
   ]);
 
-  /**
-   * Whether the SESSION's provider reports token usage, keyed on the session's instance: the
-   * picker moves without the thread, so the selection would blame the wrong provider. `undefined`
-   * (capability not advertised) leaves the client's driver-list fallback in charge.
-   */
-  const activeSessionReportsContextUsage = providerStatuses.find(
-    (status) => status.instanceId === activeThread?.runtime?.providerInstanceId,
-  )?.reportsContextUsage;
-  /**
-   * The instance whose usage limits the Vitals gauge shows: the one the
-   * session spent on, else the one the thread's next turn will use.
-   */
-  const usageProviderInstanceId =
-    activeThread?.runtime?.providerInstanceId ?? activeThreadModelSelection?.instanceId;
-  const usageProvider =
-    providerStatuses.find((status) => status.instanceId === usageProviderInstanceId) ?? null;
   const {
     providerInstanceEntries,
     selectedProviderEntry,
@@ -1138,26 +1100,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
       ? selectedModelForPicker
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
-  })();
-
-  const activeThreadProviderDisplayName = (() => {
-    if (!activeThreadModelSelection) return null;
-    const entry = providerStatuses.find(
-      (p) => p.instanceId === activeThreadModelSelection.instanceId,
-    );
-    if (entry) {
-      return getProviderDisplayName(providerStatuses, entry.driver);
-    }
-    return formatProviderDisplayName(activeThreadModelSelection.instanceId, m);
-  })();
-  // Names the model the context window belongs to: the slug looked up in its instance's options,
-  // else the raw slug. Reimplements upstream's helper, deleted with ContextWindowMeter (invariant 10).
-  const activeThreadModelDisplayName = (() => {
-    if (!activeThreadModelSelection) return null;
-    const selected = modelOptionsByInstance
-      .get(activeThreadModelSelection.instanceId)
-      ?.find((model) => model.slug === activeThreadModelSelection.model);
-    return selected ? getDisplayModelName(selected) : activeThreadModelSelection.model;
   })();
 
   const [composerCursor, setComposerCursor] = useState(() => {
@@ -3097,23 +3039,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const addComposerFilePathsStable = useStableCallback(addComposerFilePaths);
 
-  // Whether the composer can currently accept inserted text (mirrors the guards in
-  // `insertComposerTextAtEnd`) — used to disable prompt-shortcut chips mid-approval,
-  // awaiting plan input, or before a project is selected.
-  const canInsertComposerText =
-    !isComposerApprovalState && pendingUserInputs.length === 0 && !projectSelectionRequired;
-
-  const handleInsertShortcut = (text: string) => {
-    if (text.length === 0 || !canInsertComposerText) return;
-    const current = promptRef.current;
-    // Separate the inserted prompt from existing draft text with a newline, unless the draft
-    // is empty or already ends in whitespace.
-    const separator = current.length > 0 && !/\s$/.test(current) ? "\n" : "";
-    const end = current.length;
-    applyPromptReplacement(end, end, separator + text);
-  };
-  const handleInsertShortcutStable = useStableCallback(handleInsertShortcut);
-
   const insertComposerFolders = async (
     folders: File[],
     target: FolderDropTarget,
@@ -3994,15 +3919,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   className="flex shrink-0 items-center gap-2"
                   data-chat-composer-transition-actions="true"
                 >
-                  <VitalsGaugeConnected
-                    environmentId={environmentId}
-                    context={activeContextWindow}
-                    usageProvider={usageProvider}
-                    providerDisplayName={activeThreadProviderDisplayName}
-                    modelDisplayName={activeThreadModelDisplayName}
-                    sessionProvider={activeThread?.runtime?.providerName ?? null}
-                    reportsContextUsage={activeSessionReportsContextUsage}
-                  />
                   {canInterrupt ? (
                     // The composer footer is not rendered at all while collapsed, and this is
                     // the only Stop control there. FORK (invariant 7): the fork's own ladder
@@ -4157,17 +4073,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   composerSendHeld && "opacity-65",
                 )}
               >
-                {!isComposerCollapsedMobile &&
-                  !isComposerApprovalState &&
-                  pendingUserInputs.length === 0 && (
-                    <div className="mb-2 flex items-center gap-2">
-                      <ComposerShortcutsControls
-                        onInsert={handleInsertShortcutStable}
-                        disabled={!canInsertComposerText}
-                      />
-                    </div>
-                  )}
-
                 {previewFile ? (
                   <ComposerFilePreviewDialog
                     file={previewFile}
@@ -4349,15 +4254,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     // Stop state belongs to one thread; the composer stays mounted across threads.
                     key={`${environmentId}:${activeThreadId ?? "new"}`}
                     compact={isComposerPrimaryActionsCompact}
-                    environmentId={environmentId}
                     canOperateThread={canOperateThread}
-                    activeContextWindow={
-                      settings.contextWindowMeterEnabled ? activeContextWindow : null
-                    }
-                    activeThreadProviderDisplayName={activeThreadProviderDisplayName}
-                    activeThreadModelDisplayName={activeThreadModelDisplayName}
-                    activeThreadSessionProvider={activeThread?.runtime?.providerName ?? null}
-                    usageProvider={usageProvider}
                     pendingAction={pendingPrimaryAction}
                     isRunning={(phase === "running" || phase === "connecting") && !draftRunsLocally}
                     canInterrupt={canInterrupt}

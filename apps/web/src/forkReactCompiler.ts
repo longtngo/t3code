@@ -21,8 +21,6 @@ export const FORK_REACT_COMPILER_LINT_EXEMPT: ReadonlyArray<string> = [
   "apps/web/src/components/TaskListPanel.tsx",
   "apps/web/src/components/ThreadQueueCoordinator.tsx",
   "apps/web/src/components/ThreadQueueServerSync.tsx",
-  "apps/web/src/components/chat/ComposerShortcutsControls.tsx",
-  "apps/web/src/components/chat/VitalsGauge.tsx",
   "apps/web/src/components/chat/streamingMarkdownText.ts",
   "apps/web/src/components/chat/useChatEscapeKey.dom.test.tsx",
   "apps/web/src/components/settings/NotificationsSettings.tsx",

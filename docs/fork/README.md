@@ -283,10 +283,11 @@ This is what caught the ClaudeAdapter steering test below, which the conflict pr
 ordinary upstream addition.
 
 The fork's largest deletion: upstream's
-`ContextWindowMeter.tsx` and its `ContextWindowMeter.test.tsx` are gone, replaced by the fork's
-composer vitals gauge. Upstream deleted both meter files itself at the 57th reconcile, so the modify/delete below no longer arises; see invariant 10. They come back only if upstream _modifies_ one of them: git then raises a
+`ContextWindowMeter.tsx` and its `ContextWindowMeter.test.tsx` are gone. The fork's composer
+Vitals gauge that replaced them was itself removed on 2026-11-23 in favour of upstream's usage
+surfaces (thread details usage, Limits); do not restore either. Upstream deleted both meter files itself at the 57th reconcile, so the modify/delete below no longer arises; see invariant 10. They come back only if upstream _modifies_ one of them: git then raises a
 modify/delete conflict, and the resolution is a delete. `ChatComposer.tsx` carries a comment at
-the former call site recording why.
+the former call site recording why (removed with the gauge).
 
 Two more in-file deletions, each with a comment where the code used to sit, both re-presented as
 ordinary upstream additions by the 17th reconcile:
@@ -418,8 +419,7 @@ a container's file bind mounts (`/etc/resolv.conf`) never name the disk.
 `ResourceQueue.ts` sends clients a short `unavailableReason` only; resctl's stderr and the
 command path go to the server log, never to a client.
 
-The composer Vitals gauge no longer carries a Machine block; machine and disk usage live in
-this panel.
+Machine and disk usage live only in this panel (the composer Vitals gauge is gone).
 
 The panel reads each environment's connection state through `useEnvironmentConnectionSummaries`
 (`apps/web/src/state/environments.ts`). Upstream deleted that hook with its Working-shelf revert
@@ -428,8 +428,7 @@ is a fork export now.
 
 Probe: `grep -c "useResourceQueues" apps/web/src/components/sidebar/SidebarResourceQueue.tsx`
 is `1` or more, `grep -c "export function useEnvironmentConnectionSummaries" apps/web/src/state/environments.ts`
-is `1`, and `grep -c "<MachineBlock" apps/web/src/components/chat/VitalsGauge.tsx`
-is `0`.
+is `1`.
 
 ### 6. RETIRED at the 61st reconcile: the workspace-repositories editor
 
@@ -481,7 +480,7 @@ unchanged.
   and presses in the next 10 s are no-ops (later ones re-send hard, never cooperative). The
   armed look comes from `stopRungAt`, the same clock as `nextStopAction`, so it appears at
   500 ms, not 0. Mobile shows the same rungs with an octagon icon.
-- The collapsed phone composer keeps the fork's Stop beside the vitals gauge and Send, because
+- The collapsed phone composer keeps the fork's Stop beside Send, because
   it runs the ladder. Upstream's `CollapsedComposerStopAction` (#29959, 59th reconcile) has no
   rungs, so it is left unmounted (only its own browser test renders it); do not mount it. The
   61st reconcile's resolver mounted it anyway (taking upstream's held-send change around it), with
@@ -536,12 +535,14 @@ Upstream deleted its meter and the `.logic.ts` sibling (#33131) and moved the co
 `apps/web/src/components/chat/compaction.logic.ts`, which is byte-identical to upstream here.
 `ChatView` imports `hasAvailableCompactionProvider` from it; `formatContextWindowCompactionMessage`
 is upstream's one-argument version, used by `ThreadDetailsUsage.tsx`. The fork's carried
-compaction facts (invariant 12) live in `packages/client-runtime/src/state/contextWindow.ts`, and
-`apps/web/src/lib/contextWindow.ts` keeps the fork's display helpers for the Vitals gauge.
+compaction facts (invariant 12) live in `packages/client-runtime/src/state/contextWindow.ts`.
+`apps/web/src/lib/contextWindow.ts` is byte-identical to upstream again since the Vitals gauge was
+removed (2026-11-23).
 Probe: `git ls-files apps/web/src/components/chat/ContextWindowMeter.tsx apps/web/src/components/chat/ContextWindowMeter.logic.ts | wc -l` is `0`.
 
 `reportsContextWindow` (upstream, a layout hint) and the fork's `reportsContextUsage` (a capability
-answer, absent means yes) are still different fields; keep both.
+answer, absent means yes) are still different fields. No client reads `reportsContextUsage` since
+the gauge was removed; the servers still publish it.
 
 ### 12. The Claude adapter still calls `getContextUsage`; upstream deleted it
 
@@ -551,8 +552,8 @@ one-second bound, with `detail: "summary"` (answers from the last response, so n
 token-count API calls upstream #8610 dropped the call over; it took 4-40 ms on CLI 2.1.288). It is
 skipped after an interrupted turn, and a slow or failed answer keeps the previous snapshot. The answer lands on the provider
 thread's `contextUsage` via `claudeContextUsageSnapshot`. It is the **only** source of
-`compactsAutomatically`, `autoCompactThreshold` and `autoCompactSource`, which the Vitals gauge's
-compaction note and marker render from; deleting it compiles, passes, and blanks the note.
+`compactsAutomatically`, `autoCompactThreshold` and `autoCompactSource`, which
+`ThreadDetailsUsage.tsx` renders from; deleting it compiles, passes, and blanks that note.
 
 Three traps:
 
@@ -714,41 +715,18 @@ resolves to nothing, and nothing renders the banner.
 **zero** times while the merged `ChatView.tsx` still referenced it once. When a conflict is an
 import list, count exports against references rather than reading the marker.
 
-### 19. `contextWindowMeterEnabled` defaults to TRUE here, not upstream's false
+### 19. RETIRED 2026-11-23: `contextWindowMeterEnabled`
 
-Upstream #9190 made its circular context-window indicator opt-in, defaulting the setting OFF and
-labelling the control "(legacy)" — it is retiring that indicator. In this fork the same switch
-gates `activeContextWindow` on the composer's **Vitals gauge**, which is current, not legacy, and
-has been on since it shipped. Taking upstream's default would have silently removed a shipped
-feature from every existing user on the next launch.
-
-The gate itself is upstream's and is KEPT: a settings switch that changes nothing is worse than
-the divergence. Only the default flips, in
-`packages/contracts/src/settings.ts`. `packages/contracts/src/settings.test.ts` ("defaults on and
-preserves an explicit opt-out") and the "(legacy)" wording in `SettingsPanels.tsx` /
-`settingsSearch.ts` follow it.
-
-**Corrected 2026-09-08.** This entry used to list
-`apps/desktop/src/settings/DesktopClientSettings.test.ts` as following the flip. It no longer
-does and should not: upstream rewrote that fixture to spread `DEFAULT_CLIENT_SETTINGS`, and its
-only defaults assertion compares `settings.get` against a re-decode of `{}` - self-referential,
-so it pins no particular value. The fixture's `contextWindowMeterEnabled` is now arbitrary and
-carries upstream's `false`. `settings.ts` is the single load-bearing site.
-
-**A reconcile that restores `Effect.succeed(false)` here turns the Vitals gauge's context ring
-off for everyone, and nothing fails.**
-
-**57th reconcile: upstream removed the setting (#33131) with its Labs → Legacy switch.** The fork
-keeps the setting, its patch mirror and the gate in `ChatComposer.tsx`; the switch moved to
-Settings → Chat (search id `context-window-indicator`). Dropping the setting instead would mean
-un-gating the ring in `ChatComposer.tsx`.
+The setting only gated the composer Vitals gauge's context ring. The gauge, the setting, its patch
+mirror and its Settings → Chat switch are gone, matching upstream (#33131). Old stored values are
+ignored on decode.
 
 ### 20. Two helpers upstream deleted as unused are still called here
 
 Upstream #9150's dead-code sweep removed `newCommandId` from `apps/web/src/lib/utils.ts` and
-`getProviderDisplayName` from `apps/web/src/providerModels.ts`. Both are dead upstream and live
-here — `ChatView` mints a command id for a queued follow-up turn, and the composer's
-provider label reads through the other. Both carry a `FORK-ONLY` comment now. The failure mode is
+`getProviderDisplayName` from `apps/web/src/providerModels.ts`. `newCommandId` is dead upstream and live
+here: `ChatView` mints a command id for a queued follow-up turn. It carries a `FORK-ONLY` comment.
+`getProviderDisplayName` died here too with the Vitals gauge (2026-11-23) and is gone. The failure mode is
 loud (typecheck), which is the good case; the point of the note is that upstream will keep
 deleting them.
 
@@ -917,24 +895,23 @@ A reconcile that restores the upstream HOME-only key, or any key built from the 
 string instead of the resolved `projects` path, silently re-refuses a switch this fork means to
 allow.
 
-### 29. The Vitals gauge reads the Limits tab's store, not a channel of its own
+### 29. Usage limits come from the Limits tab's store, not a channel of their own
 
-On orchestrator v2 the gauge's usage arcs and rows come from `ServerProvider.usageLimits` for
-the thread's provider instance (`accountUsageFromLimits` in `apps/web/src/lib/vitals.ts`), the
-same snapshot upstream's Limits tab reads. The fork's `account.usage.updated` channel and its
+The composer Vitals gauge that read `ServerProvider.usageLimits` was removed on 2026-11-23; upstream's
+Limits tab and thread details usage read the same snapshot. The fork's `account.usage.updated` channel and its
 OAuth/Codex/Cursor pollers are gone, so there is one normalizer per provider and one poller per
 endpoint. Do not restore the fork's direct `GET /api/oauth/usage` poll: Claude's capabilities
 probe already reads the claude.ai usage endpoint through the CLI's `get_usage`, and a second
 poller doubles the rate-limited calls.
 
-Three fork deltas keep the gauge honest on top of upstream:
+Fork deltas on top of upstream (written for the gauge; still feed the Limits tab):
 
 - `usageCheckedAt` on the Claude capabilities probe. The probe is cached for 5 minutes, so the
-  status check that publishes it must stamp the limits with when they were READ, or the gauge's
+  status check that publishes it must stamp the limits with when they were READ, or an
   age label calls cached numbers fresh. `resolveUsageLimitsAfterProbe` then keeps a newer runtime
   update over an older cached read.
 - `refreshProviders({ instanceId, fresh: true })` drops the instance's probe caches before
-  re-reading it. The gauge's refresh button sends it; without `fresh` a press inside the cache
+  re-reading it. The gauge's refresh button sent it; without `fresh` a press inside the cache
   window re-serves the last probe.
 - Cursor windows carry `windowDurationMins` from `billingCycleStart`, so they pace.
 - `claudeRateLimitEventToUpdate` reads `unifiedWindows`. The CLI's `rate_limit_event` carries the
@@ -1569,7 +1546,8 @@ markers, so a later merge can bring it back with nothing failing.
   subscriber (`pendingThreadIdsAtom` checks, the mount's new argument, the subscriber's tests) are
   rejected.
 - Claude's `monthly_spend` limit window (#19433). The fork's `spend` field carries the same percent
-  plus the money amounts, and Vitals already draws it; both would show spend twice. Probe:
+  plus the money amounts, and Vitals drew it; both would show spend twice. Vitals is gone
+  (2026-11-23), so adopting upstream's window is now an open question. Probe:
   `grep -c monthly_spend apps/server/src/provider/claudeUsageLimits.ts` is `0`.
 - Inline table expand (`data-expanded` CSS, #20878). The fork's tables open in a dialog
   (`chat/MarkdownTable.tsx`) and never set the attribute. Probe:

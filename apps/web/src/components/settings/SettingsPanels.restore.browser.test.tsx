@@ -49,10 +49,7 @@ function Probe() {
 }
 
 describe("restoring V2 settings", () => {
-  it.each([
-    ["threadDetailsSectionRowLimit", 10, "Thread details rows"],
-    ["usagePaceTolerance", 30, "Pace tolerance"],
-  ] as const)(
+  it.each([["threadDetailsSectionRowLimit", 10, "Thread details rows"]] as const)(
     "lists %s once it changes after the first render, and restores it",
     async (key, value, label) => {
       state.settings = { ...DEFAULT_UNIFIED_SETTINGS };

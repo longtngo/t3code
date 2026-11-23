@@ -14,11 +14,6 @@ import {
 } from "@t3tools/contracts";
 import { makeThreadProjectionFixture } from "../test-fixtures";
 import {
-  type ContextWindowSnapshot,
-  deriveCompactionMarker,
-  describeMissingContextUsage,
-} from "./contextWindow";
-import {
   deriveLatestContextWindowSnapshot,
   latestProviderTurnTokenUsage,
   shouldOfferResumeCompaction,
@@ -55,24 +50,6 @@ describe("V2 context window presentation", () => {
     const snapshot = deriveLatestContextWindowSnapshot([compactionEntry(null)]);
     expect(snapshot?.usedTokens).toBe(2_000);
     expect(snapshot?.totalProcessedTokens).toBe(10_000);
-  });
-
-  it("carries the provider's auto-compaction source, and leaves it unset when omitted", () => {
-    // FORK: the only field that says whether compaction is ARMED - the provider
-    // reports "auto" for the windows it refuses to compact.
-    const updatedAt = DateTime.makeUnsafe("2026-08-23T00:00:00.000Z");
-    const armed = deriveLatestContextWindowSnapshot([], undefined, {
-      id: ProviderThreadId.make("provider-thread"),
-      contextUsage: { usedTokens: 14_000, maxTokens: 258_000, autoCompactSource: "settings" },
-      updatedAt,
-    });
-    expect(armed?.autoCompactSource).toBe("settings");
-    const silent = deriveLatestContextWindowSnapshot([], undefined, {
-      id: ProviderThreadId.make("provider-thread"),
-      contextUsage: { usedTokens: 14_000 },
-      updatedAt,
-    });
-    expect(silent?.autoCompactSource).toBeNull();
   });
 
   it("ignores a retired provider thread's compaction after a provider switch", () => {
@@ -160,142 +137,6 @@ describe("live provider-turn usage (#8144)", () => {
     expect(formatContextWindowCompactionMessage(snapshot?.autoCompactThreshold)).toBe(
       "Compacts automatically at about 150,000 tokens.",
     );
-  });
-
-  it("carries the thread's compaction facts onto a live report of the same window", () => {
-    // FORK (invariant 12): Claude's live report has no compaction facts; the
-    // turn-end getContextUsage snapshot on the provider thread does.
-    const providerThread = {
-      id: ProviderThreadId.make("provider-thread"),
-      contextUsage: {
-        usedTokens: 500_000,
-        maxTokens: 1_000_000,
-        compactsAutomatically: true,
-        autoCompactThreshold: 967_000,
-        autoCompactSource: "settings",
-      },
-      updatedAt: DateTime.makeUnsafe("2026-08-27T00:00:00.000Z"),
-    };
-    const sameWindow = deriveLatestContextWindowSnapshot(
-      [],
-      { usedTokens: 541_000, maxTokens: 1_000_000, updatedAt: "2026-08-27T00:01:00.000Z" },
-      providerThread,
-    );
-    expect(sameWindow).toMatchObject({
-      usedTokens: 541_000,
-      autoCompactThreshold: 967_000,
-      autoCompactSource: "settings",
-    });
-    // A report that names its own threshold wins over the carried one.
-    const ownThreshold = deriveLatestContextWindowSnapshot(
-      [],
-      decodeTokenUsage({
-        usedTokens: 541_000,
-        maxTokens: 1_000_000,
-        autoCompactThreshold: 900_000,
-        updatedAt: "2026-08-27T00:01:00.000Z",
-      }),
-      providerThread,
-    );
-    expect(ownThreshold).toMatchObject({
-      autoCompactThreshold: 900_000,
-      autoCompactSource: "settings",
-    });
-    // A threshold is an absolute count for its window: after a model switch it
-    // would draw the marker for the wrong model, so it is dropped.
-    const otherWindow = deriveLatestContextWindowSnapshot(
-      [],
-      { usedTokens: 41_000, maxTokens: 200_000, updatedAt: "2026-08-27T00:02:00.000Z" },
-      providerThread,
-    );
-    expect(otherWindow).toMatchObject({ autoCompactThreshold: null, autoCompactSource: null });
-  });
-});
-
-describe("deriveCompactionMarker", () => {
-  const snapshot = (overrides: Partial<ContextWindowSnapshot>): ContextWindowSnapshot =>
-    ({
-      usedTokens: 541_000,
-      maxTokens: 1_000_000,
-      usedPercentage: 54.1,
-      remainingTokens: 459_000,
-      remainingPercentage: 45.9,
-      compactsAutomatically: true,
-      autoCompactThreshold: 567_000,
-      autoCompactSource: "settings",
-      updatedAt: "2026-08-27T00:00:00.000Z",
-      ...overrides,
-    }) as ContextWindowSnapshot;
-
-  it("places the marker at the threshold's share of the model window", () => {
-    const marker = deriveCompactionMarker(snapshot({}));
-    expect(marker?.pct).toBeCloseTo(56.7, 5);
-    expect(marker?.label).toBe("compacts at 567k");
-  });
-
-  it("draws nothing when the provider omits the source", () => {
-    // The gate is "present and not auto", NOT "!== auto". `autocompactSource`
-    // is absent from the SDK's declared response type and missing from most
-    // live snapshots, so a `!== "auto"` test degrades OPEN and would draw a
-    // marker on a window that will never compact.
-    expect(deriveCompactionMarker(snapshot({ autoCompactSource: null }))).toBeNull();
-  });
-
-  it("draws nothing when the window is one Claude refuses to compact", () => {
-    // `autoCompactThreshold` is present and meaningless in this state — the CLI
-    // computes it without consulting the source.
-    expect(
-      deriveCompactionMarker(
-        snapshot({ autoCompactSource: "auto", autoCompactThreshold: 967_000 }),
-      ),
-    ).toBeNull();
-  });
-
-  it("draws nothing without a threshold or a window to measure it against", () => {
-    expect(deriveCompactionMarker(snapshot({ autoCompactThreshold: null }))).toBeNull();
-    expect(deriveCompactionMarker(snapshot({ maxTokens: null }))).toBeNull();
-  });
-
-  it("draws nothing when the threshold is not inside the window", () => {
-    // Equal means the marker would sit on the bar's end cap, claiming a
-    // boundary that carries no information.
-    expect(deriveCompactionMarker(snapshot({ autoCompactThreshold: 1_000_000 }))).toBeNull();
-  });
-});
-
-describe("describeMissingContextUsage", () => {
-  // Which providers report usage is the server's knowledge now, advertised per
-  // instance as `reportsContextUsage`. The driver list in this module survives
-  // only as a fallback for a server too old to send it, so the precedence
-  // between the two is the thing worth pinning - and none of it was tested.
-  it("says nothing when the provider reports usage", () => {
-    expect(describeMissingContextUsage("claudeAgent", true)).toBeNull();
-  });
-
-  it("explains the gap when the provider says it does not", () => {
-    expect(describeMissingContextUsage("cursor", false)).toMatch(/does not report context usage/);
-  });
-
-  it("believes the provider over the built-in list", () => {
-    // "cursor" is on the fallback list; an explicit `true` must still win, or a
-    // provider that starts reporting usage stays mislabelled until a client ships.
-    expect(describeMissingContextUsage("cursor", true)).toBeNull();
-    // And the reverse, for a driver absent from the list.
-    expect(describeMissingContextUsage("claudeAgent", false)).toMatch(
-      /does not report context usage/,
-    );
-  });
-
-  it("falls back to the driver list when the server is silent", () => {
-    expect(describeMissingContextUsage("cursor", undefined)).toMatch(
-      /does not report context usage/,
-    );
-    expect(describeMissingContextUsage("claudeAgent", undefined)).toBeNull();
-  });
-
-  it("says nothing without a provider, whatever the capability says", () => {
-    expect(describeMissingContextUsage(null, false)).toBeNull();
-    expect(describeMissingContextUsage(undefined, false)).toBeNull();
   });
 });
 

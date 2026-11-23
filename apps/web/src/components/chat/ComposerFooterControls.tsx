@@ -1,16 +1,9 @@
-import type {
-  EnvironmentId,
-  ModelSelection,
-  ProviderInstanceId,
-  RuntimeMode,
-  ServerProvider,
-} from "@t3tools/contracts";
+import type { ModelSelection, ProviderInstanceId, RuntimeMode } from "@t3tools/contracts";
 import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 import { createModelSelection } from "@t3tools/shared/model";
 import { T, useGT, useMessages } from "gt-react";
 import { type ComponentProps, memo, useId, useRef, useState } from "react";
 
-import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -21,8 +14,6 @@ import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { resolveRuntimeModeOption, runtimeModeConfig } from "./runtimeModeConfig";
 import { useComposerMenuState } from "./useComposerMenuState";
-// FORK (inv 4/10): the vitals gauge replaces upstream's ContextWindowMeter and its placeholder.
-import { VitalsGaugeConnected } from "./VitalsGauge";
 
 export type RuntimeModeOption = {
   mode: RuntimeMode;
@@ -204,13 +195,7 @@ export function ComposerPermissionsSection(props: {
 export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   children?: React.ReactNode;
   compact: boolean;
-  environmentId: EnvironmentId;
   canOperateThread: boolean;
-  activeContextWindow: ContextWindowSnapshot | null;
-  activeThreadProviderDisplayName: string | null;
-  activeThreadSessionProvider: string | null;
-  activeThreadModelDisplayName: string | null;
-  usageProvider: ServerProvider | null;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -251,14 +236,6 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
 }) {
   return (
     <>
-      <VitalsGaugeConnected
-        environmentId={props.environmentId}
-        context={props.activeContextWindow}
-        usageProvider={props.usageProvider}
-        providerDisplayName={props.activeThreadProviderDisplayName}
-        modelDisplayName={props.activeThreadModelDisplayName}
-        sessionProvider={props.activeThreadSessionProvider}
-      />
       {props.isPreparingWorktree ? (
         <span className="text-secondary-label text-xs">
           <T>Preparing worktree...</T>

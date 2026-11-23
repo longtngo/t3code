@@ -1,24 +1,10 @@
-import type { ServerProviderUsageLimits, ServerProviderUsageSpend } from "@t3tools/contracts";
-import type { TimestampFormat } from "@t3tools/contracts/settings";
-import { msg } from "gt-react";
-
-import { m, type MessageResolver } from "../i18n/messages";
-import { formatShortTimestamp } from "../timestampFormat";
-
 /**
- * Vitals gauge logic — the pure (testable) core behind the header's
- * context / usage-limit affordance (host resources live in the sidebar). Covers the two severity
- * ramps the user specified, the pace projection for rolling usage windows, the
- * view of a provider's usage limits, and the full-ring glyph geometry.
+ * Severity ramp and bar helpers for the sidebar's host-resource and resource-queue rows.
  */
 
 export type Severity = "ok" | "warn" | "high" | "crit";
 
-/**
- * Absolute-fullness severity (context + host resources): ≤50 green, ≤75 yellow,
- * ≤90 orange, >90 red. Distinct from the host panel's old `usageLevel` (70/90) —
- * these are the thresholds the user specified for the gauge.
- */
+/** Absolute-fullness severity: ≤50 green, ≤75 yellow, ≤90 orange, >90 red. */
 export function vitalsLevel(pct: number): Severity {
   if (pct <= 50) return "ok";
   if (pct <= 75) return "warn";
@@ -26,24 +12,6 @@ export function vitalsLevel(pct: number): Severity {
   return "crit";
 }
 
-/**
- * Pace severity for a usage window, keyed on `diff = utilization − projection`:
- * green at or under pace, yellow up to `tolerance` points over, red beyond. There
- * is no orange step: `tolerance` is the user's "Pace tolerance" setting.
- */
-export function paceLevel(diff: number, tolerance: number): Severity {
-  if (diff <= 0) return "ok";
-  if (diff <= tolerance) return "warn";
-  return "crit";
-}
-
-/** Severity → the app's Tailwind palette (matches the old host panel's mapping). */
-export const SEVERITY_STROKE: Record<Severity, string> = {
-  ok: "var(--color-green-500)",
-  warn: "var(--color-yellow-500)",
-  high: "var(--color-orange-400)",
-  crit: "var(--color-red-500)",
-};
 export const SEVERITY_TEXT: Record<Severity, string> = {
   ok: "text-green-500",
   warn: "text-yellow-500",
@@ -57,355 +25,28 @@ export const SEVERITY_BG: Record<Severity, string> = {
   crit: "bg-red-500",
 };
 
-/** Classes for a thin horizontal usage track (host rows, the gauge's pace bar). */
+/** Classes for a thin horizontal usage track. */
 export const TRACK_CLASS = "overflow-hidden rounded-full bg-muted";
-
-/** Unfilled arc / bar track — matches the context meter's track tint. */
-export const VITALS_TRACK_STROKE =
-  "color-mix(in oklab, var(--color-muted-foreground) 24%, transparent)";
 
 export function clampPct(value: number): number {
   // Coerce non-finite input to 0 so a stray NaN percentage never paints a full
-  // (red) ring or a "NaN%" readout.
+  // (red) bar or a "NaN%" readout.
   return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
 }
 
-// Account usage (rolling 5-hour / 7-day windows)
-
-/** Rolling-window durations, in ms, used to turn `resetsAt` into an elapsed fraction. */
-export const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
-export const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
-const ONE_MINUTE_MS = 60 * 1000;
-const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
-const ONE_DAY_MS = 24 * ONE_HOUR_MS;
-
-export interface UsageWindowView {
-  /** Float percent 0..100. */
-  readonly utilization: number;
-  /** ISO 8601 reset instant, or null when the provider doesn't expose one. */
-  readonly resetsAt: string | null;
-}
-
-/**
- * Any window other than Claude's 5h/7d (Codex session/weekly, Cursor's cycle
- * pools, Claude's model-scoped weekly), shown as a popover row. `windowMs` is
- * null when the provider sends no window length, and the row then shows
- * utilization without a pace projection.
- */
-export interface LabeledUsageWindowView extends UsageWindowView {
-  readonly id: string;
-  readonly label: string;
-  readonly windowMs: number | null;
-  readonly segmentCount?: number | undefined;
-}
-
-/**
- * A spend row as a paced window. Distinct from {@link LabeledUsageWindowView} because the reset is
- * DERIVED (see {@link billingMonthWindow}), `detail` carries the money figure a percentage-only row
- * would drop, and `segmentCount` is the days in the month.
- */
-export interface SpendWindowView extends UsageWindowView {
-  readonly label: string;
-  readonly detail: string;
-  readonly windowMs: number;
-  readonly segmentCount: number;
-}
-
-export interface AccountUsageView {
-  readonly fiveHour: UsageWindowView | null;
-  readonly sevenDay: UsageWindowView | null;
-  /** Claude's extra usage, when spending is enabled. Paced by {@link extraUsageWindow}. */
-  readonly spend: ServerProviderUsageSpend | null;
-  /**
-   * When the provider last reported these numbers. Honest for the ring's
-   * 5h/7d, which every turn event updates together; the model-scoped and
-   * spend rows only refresh with a probe, so they can be up to one probe
-   * interval older than this label says.
-   */
-  readonly fetchedAt: string | null;
-  /** Every other window, in the provider's order. The ring glyph draws only 5h/7d. */
-  readonly extraWindows: ReadonlyArray<LabeledUsageWindowView>;
-}
-
-/**
- * Reads the same `ServerProvider.usageLimits` snapshot as the Limits tab, so the two cannot
- * disagree. Claude's `five_hour` / `seven_day` feed the ring; the rest become popover rows. Null
- * with no snapshot, an account that can never report windows, or a probe with no result yet.
- */
-export function accountUsageFromLimits(
-  limits: ServerProviderUsageLimits | null | undefined,
-): AccountUsageView | null {
-  if (
-    !limits ||
-    limits.unavailable?.reason === "unsupported" ||
-    (limits.windows.length === 0 && !limits.spend)
-  ) {
-    return null;
-  }
-  let fiveHour: UsageWindowView | null = null;
-  let sevenDay: UsageWindowView | null = null;
-  const extraWindows: LabeledUsageWindowView[] = [];
-  for (const window of limits.windows) {
-    const view = { utilization: window.usedPercent, resetsAt: window.resetsAt ?? null };
-    if (window.id === "five_hour") {
-      fiveHour = view;
-      continue;
-    }
-    if (window.id === "seven_day") {
-      sevenDay = view;
-      continue;
-    }
-    const windowMs =
-      window.windowDurationMins !== undefined && window.windowDurationMins > 0
-        ? window.windowDurationMins * 60_000
-        : null;
-    extraWindows.push({
-      ...view,
-      id: window.id,
-      label: window.label,
-      windowMs,
-      ...(windowMs !== null ? { segmentCount: windowSegments(windowMs) } : {}),
-    });
-  }
-  return {
-    fiveHour,
-    sevenDay,
-    spend: limits.spend ?? null,
-    fetchedAt: limits.checkedAt,
-    extraWindows,
-  };
-}
-
-/**
- * Format a spend figure with its currency. A money amount keeps both decimals
- * on both sides — "$12.50 of $50" reads as two different kinds of number.
- */
-function formatSpend(used: number, limit: number | null, currency: string): string {
-  const symbol = currency === "USD" ? "$" : `${currency} `;
-  const amount = (value: number) => `${symbol}${value.toFixed(2)}`;
-  return limit === null ? amount(used) : `${amount(used)} of ${amount(limit)}`;
-}
-
-/**
- * Null until spending starts (an enabled cap with nothing spent is not worth a row) and when there
- * is no percentage to pace (spend with no cap). The reset is derived: see {@link billingMonthWindow}.
- * Overspend: the bar caps at the server's 100% `usedPercent`; `detail` shows the real amount.
- */
-export function extraUsageWindow(
-  spend: ServerProviderUsageSpend | null,
-  nowMs: number,
-  resolve: MessageResolver = m,
-): SpendWindowView | null {
-  if (!spend || spend.used <= 0 || spend.usedPercent === undefined) return null;
-  const { resetsAt, windowMs } = billingMonthWindow(nowMs);
-  return {
-    label: resolve(msg("Extra usage")),
-    detail: formatSpend(spend.used, spend.limit ?? null, spend.currency),
-    utilization: spend.usedPercent,
-    resetsAt,
-    windowMs,
-    segmentCount: daysInUtcMonth(nowMs),
-  };
-}
-
-/** Day dividers for windows of a day or longer, hour dividers below that. */
-function windowSegments(windowMs: number): number {
-  return Math.max(1, Math.round(windowMs / (windowMs >= ONE_DAY_MS ? ONE_DAY_MS : ONE_HOUR_MS)));
-}
-
-export interface WindowPace {
-  /** Rounded utilization, for display and bar width. */
-  readonly usage: number;
-  /**
-   * Rounded on-pace target — the fraction of the window's time elapsed — or null
-   * when `resetsAt` is missing/invalid (no pace can be computed).
-   */
-  readonly projection: number | null;
-  /** `usage − projection`, or null when there is no projection. */
-  readonly diff: number | null;
-}
-
-/**
- * Projection = the elapsed share of the window (`1 - timeUntilReset / windowMs`), where usage would
- * sit if spent evenly; the signed `diff` is the headline. Shown alongside {@link formatWindowReset},
- * since pace and reset time answer different questions.
- */
-export function computeWindowPace(
-  window: UsageWindowView,
-  windowMs: number | null,
-  nowMs: number,
-): WindowPace {
-  const usage = Math.round(window.utilization);
-  let projection: number | null = null;
-  if (windowMs !== null && window.resetsAt !== null) {
-    const resetMs = Date.parse(window.resetsAt);
-    if (Number.isFinite(resetMs)) {
-      projection = Math.round(clampPct((1 - (resetMs - nowMs) / windowMs) * 100));
-    }
-  }
-  const diff = projection === null ? null : usage - projection;
-  return { usage, projection, diff };
-}
-
-/** Severity for a window row: by pace when a projection exists, else by fullness. */
-export function windowSeverity(pace: WindowPace, tolerance: number): Severity {
-  return pace.diff === null ? vitalsLevel(pace.usage) : paceLevel(pace.diff, tolerance);
-}
-
-/** Date half of a distant reset. System locale, matching `formatShortTimestamp`. */
-const resetDateFormatter = new Intl.DateTimeFormat(undefined, {
-  month: "numeric",
-  day: "numeric",
-});
-
-/**
- * `14:20` inside 24 hours, `8/21 14:20` beyond, and `now` once passed: providers refresh lazily, so
- * an elapsed reset lingers and would render as a past time. Null means no reset clock to show.
- * Delegates to `formatShortTimestamp` so the 12/24-hour preference is honoured (no hardcoded h23).
- */
-export function formatWindowReset(
-  resetsAt: string | null,
-  nowMs: number,
-  timestampFormat: TimestampFormat,
-): string | null {
-  if (resetsAt === null) return null;
-  const at = Date.parse(resetsAt);
-  // Guarded here rather than left to the delegate: formatShortTimestamp answers
-  // "" for an unparseable date, which would render a bare "resets" with no time.
-  if (!Number.isFinite(at)) return null;
-  if (at <= nowMs) return "now";
-  const time = formatShortTimestamp(resetsAt, timestampFormat);
-  if (time === "") return null;
-  return at - nowMs < ONE_DAY_MS ? time : `${resetDateFormatter.format(at)} ${time}`;
-}
-
-/**
- * Built stop-by-stop: `repeating-linear-gradient` also emits a boundary at 100%, a sliver in the
- * track's rounded cap. Paint this ABOVE the fill, not on the track: a track background is painted
- * under positioned children, and at 31 segments and 97% used zero separators were visible.
- */
-export function segmentBoundariesBackground(segments: number): string | undefined {
-  if (!Number.isFinite(segments) || segments < 2) return undefined;
-  const count = Math.min(Math.round(segments), 62);
-  const stops: string[] = [];
-  for (let index = 1; index < count; index += 1) {
-    const at = (index / count) * 100;
-    stops.push(
-      `transparent calc(${at}% - 0.5px)`,
-      `var(--segment-gap, var(--popover)) calc(${at}% - 0.5px)`,
-      `var(--segment-gap, var(--popover)) calc(${at}% + 0.5px)`,
-      `transparent calc(${at}% + 0.5px)`,
-    );
-  }
-  return stops.length > 0 ? `linear-gradient(to right, ${stops.join(", ")})` : undefined;
-}
-
-/** Days in the UTC month containing `nowMs`; the extra-usage bar's segment count. */
-export function daysInUtcMonth(nowMs: number): number {
-  const now = new Date(nowMs);
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
-}
-
-/**
- * The provider sends no reset instant for `extra_usage`, so this is DERIVED from the maintainer's
- * statement that the anchor is the 1st; another anchor makes the pace wrong. UTC deliberately: a
- * local month at UTC+14 turns over 14 hours early and reads "+98% over pace" every month.
- * `windowMs` spans the two boundaries so its length always matches the month.
- */
-export function billingMonthWindow(nowMs: number): { resetsAt: string; windowMs: number } {
-  const now = new Date(nowMs);
-  const startedAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-  const resetsAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
-  return { resetsAt: new Date(resetsAt).toISOString(), windowMs: resetsAt - startedAt };
-}
-
-/**
- * Floored at "just now": the instant is server-stamped and `nowMs` is the client's clock, so a
- * remote phone a few minutes ahead would otherwise render "-4m ago".
- */
-export function formatSnapshotAge(fetchedAt: string | null, nowMs: number): string | null {
-  if (fetchedAt === null) return null;
-  const at = Date.parse(fetchedAt);
-  if (!Number.isFinite(at)) return null;
-  const elapsed = nowMs - at;
-  if (elapsed < ONE_MINUTE_MS) return "just now";
-  if (elapsed < ONE_HOUR_MS) return `${Math.floor(elapsed / ONE_MINUTE_MS)}m ago`;
-  if (elapsed < ONE_DAY_MS) return `${Math.floor(elapsed / ONE_HOUR_MS)}h ago`;
-  return `${Math.floor(elapsed / ONE_DAY_MS)}d ago`;
-}
-
-/**
- * Sweep and colour are different questions: a usage window sweeps by fullness but is coloured by
- * pace (74% under pace is green, not yellow). Carrying severity on the arc, not re-deriving it from
- * the percentage at draw time, keeps the icon and the detail panel from disagreeing.
- */
 export interface VitalsGaugeArc {
-  /** Sweep, 0–100, or null when there is no reading yet. */
+  /** Fill, 0–100, or null when there is no reading yet. */
   readonly pct: number | null;
   /** Fill colour, or null when there is nothing to fill. */
   readonly level: Severity | null;
 }
 
 /**
- * The percentage a surface both displays and colours by. Readings show rounded, so severity must
- * bucket the rounded value too, or 50.4 shows "50%" (green) while colouring as yellow.
+ * A reading coloured by absolute fullness. Readings show rounded, so severity buckets the
+ * rounded value too, or 50.4 shows "50%" (green) while colouring as yellow.
  */
-export function readingPct(pct: number): number {
-  return Math.round(clampPct(pct));
-}
-
-/** An arc whose colour is absolute fullness: context and host resources. */
 export function fullnessArc(pct: number | null): VitalsGaugeArc {
   if (pct === null || !Number.isFinite(pct)) return { pct: null, level: null };
-  const reading = readingPct(pct);
+  const reading = Math.round(clampPct(pct));
   return { pct: reading, level: vitalsLevel(reading) };
-}
-
-/**
- * An arc for a rolling usage window: swept by usage, coloured by pace — the
- * same `computeWindowPace` → `windowSeverity` pair the detail panel's row uses,
- * so the glyph and the row cannot report different severities for one window.
- */
-export function windowArc(
-  window: UsageWindowView | null | undefined,
-  windowMs: number | null,
-  nowMs: number,
-  tolerance: number,
-): VitalsGaugeArc {
-  if (!window) return { pct: null, level: null };
-  const pace = computeWindowPace(window, windowMs, nowMs);
-  return { pct: pace.usage, level: windowSeverity(pace, tolerance) };
-}
-
-/** Signed pace label, e.g. "on pace", "4% under pace", "+57% over pace". */
-export function paceDiffLabel(diff: number): string {
-  if (diff === 0) return "on pace";
-  if (diff < 0) return `${Math.abs(diff)}% under pace`;
-  return `+${diff}% over pace`;
-}
-
-// Ring geometry
-
-/** SVG side length of the gauge's viewBox (square). */
-export const GAUGE_VIEWBOX = 44;
-
-/** Ring radii: outer = context, middle = 5h, inner = 7d. */
-export const GAUGE_RINGS = { outer: 18.5, middle: 13, inner: 7.6 } as const;
-export const GAUGE_STROKE_WIDTH = 3;
-
-/**
- * Derive a pace-able window from a billing-cycle start and reset instant.
- * Returns null unless both parse and `resetsAt > startsAt`.
- */
-export function cycleWindow(
-  startsAt: string | null | undefined,
-  resetsAt: string | null,
-): { windowMs: number; segmentCount: number } | null {
-  if (startsAt == null || resetsAt == null) return null;
-  const startMs = Date.parse(startsAt);
-  const endMs = Date.parse(resetsAt);
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
-  const windowMs = endMs - startMs;
-  const segmentCount = Math.round(windowMs / ONE_DAY_MS);
-  return { windowMs, segmentCount };
 }

@@ -88,14 +88,6 @@ export const SidebarProjectGroupingMode = Schema.Literals([
 ]);
 export type SidebarProjectGroupingMode = typeof SidebarProjectGroupingMode.Type;
 const DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE: SidebarProjectGroupingMode = "repository";
-export const MIN_USAGE_PACE_TOLERANCE = 0;
-export const MAX_USAGE_PACE_TOLERANCE = 100;
-/** Points over pace a usage window may run before its colour turns from yellow to red. */
-export const UsagePaceTolerance = Schema.Int.check(
-  Schema.isBetween({ minimum: MIN_USAGE_PACE_TOLERANCE, maximum: MAX_USAGE_PACE_TOLERANCE }),
-);
-export type UsagePaceTolerance = typeof UsagePaceTolerance.Type;
-export const DEFAULT_USAGE_PACE_TOLERANCE: UsagePaceTolerance = 15;
 
 export const MIN_THREAD_DETAILS_SECTION_ROW_LIMIT = 1;
 export const MAX_THREAD_DETAILS_SECTION_ROW_LIMIT = 50;
@@ -230,13 +222,6 @@ export const EnvironmentIdentificationMode = Schema.Literals([
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
 export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
 
-/** A user-defined composer prompt shortcut: a button label plus the prompt text it inserts. */
-export const ComposerShortcut = Schema.Struct({
-  id: Schema.String,
-  label: Schema.String,
-  text: Schema.String,
-});
-export type ComposerShortcut = typeof ComposerShortcut.Type;
 export const SnapShotKeyChord = KeybindingShortcut.check(
   Schema.makeFilter(
     (shortcut) =>
@@ -558,11 +543,6 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW)),
   ),
 
-  // User-managed prompt shortcuts shown above the composer input; clicking one inserts its
-  // text. Ordered by the user in the manager. Client-only (no server round-trip needed).
-  composerShortcuts: Schema.Array(ComposerShortcut).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
   browserProfiles: Schema.Array(BrowserProfile).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -633,11 +613,6 @@ export const ClientSettingsSchema = Schema.Struct({
 
   pullRequestLinksOpenInApp: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 
-  // FORK: defaults to true, not upstream's false. Upstream retired its circular context
-  // indicator and this setting with it; here the same switch governs the composer
-  // Vitals gauge's context ring, which is current and has always been on. Defaulting it off
-  // would silently remove a shipped feature from every existing user.
-  contextWindowMeterEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   composerRichTextEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sendShortcut: Schema.Literals(["enter", "mod-enter-multiline", "mod-enter"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("enter")),
@@ -690,9 +665,6 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
-  ),
-  usagePaceTolerance: UsagePaceTolerance.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_USAGE_PACE_TOLERANCE)),
   ),
   threadDetailsSectionRowLimit: ThreadDetailsSectionRowLimit.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_THREAD_DETAILS_SECTION_ROW_LIMIT)),
@@ -2478,7 +2450,6 @@ export const ClientSettingsPatch = Schema.Struct({
   browserSearchEngine: Schema.optionalKey(BrowserSearchEngine),
   browserCustomSearchUrl: Schema.optionalKey(BrowserCustomSearchUrl),
   browserAutoShowFloatingPreview: Schema.optionalKey(Schema.Boolean),
-  composerShortcuts: Schema.optionalKey(Schema.Array(ComposerShortcut)),
   browserProfiles: Schema.optionalKey(Schema.Array(BrowserProfile)),
   browserDefaultProfileId: Schema.optionalKey(BrowserProfileId),
   confirmQuit: Schema.optionalKey(QuitConfirmationMode),
@@ -2510,7 +2481,6 @@ export const ClientSettingsPatch = Schema.Struct({
     Schema.Record(TrimmedNonEmptyString, PullRequestMergeMethod),
   ),
   pullRequestLinksOpenInApp: Schema.optionalKey(Schema.Boolean),
-  contextWindowMeterEnabled: Schema.optionalKey(Schema.Boolean),
   composerRichTextEnabled: Schema.optionalKey(Schema.Boolean),
   sendShortcut: Schema.optionalKey(Schema.Literals(["enter", "mod-enter-multiline", "mod-enter"])),
   followUpBehavior: Schema.optionalKey(Schema.Literals(["queue", "steer"])),
@@ -2533,7 +2503,6 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   timestampFormat: Schema.optionalKey(TimestampFormat),
-  usagePaceTolerance: Schema.optionalKey(UsagePaceTolerance),
   threadDetailsSectionRowLimit: Schema.optionalKey(ThreadDetailsSectionRowLimit),
   voiceMicrophone: Schema.optionalKey(Schema.String),
   voiceMicrophones: Schema.optionalKey(Schema.Array(VoiceMicrophoneEntry)),

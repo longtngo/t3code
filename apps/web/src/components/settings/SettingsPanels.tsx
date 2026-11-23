@@ -23,8 +23,6 @@ import {
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MAX_THREAD_DETAILS_SECTION_ROW_LIMIT,
   MIN_THREAD_DETAILS_SECTION_ROW_LIMIT,
-  MIN_USAGE_PACE_TOLERANCE,
-  MAX_USAGE_PACE_TOLERANCE,
   type ResponseStreamingMode,
   type QuitConfirmationMode,
   SidebarProjectSortOrder,
@@ -533,9 +531,6 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
       ? [gt("Time format")]
       : []),
-    ...(settings.usagePaceTolerance !== DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance
-      ? ["Pace tolerance"]
-      : []),
     ...(settings.threadDetailsSectionRowLimit !==
     DEFAULT_UNIFIED_SETTINGS.threadDetailsSectionRowLimit
       ? ["Thread details rows"]
@@ -605,9 +600,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       : []),
     ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
       ? [gt("Follow-up behavior")]
-      : []),
-    ...(settings.contextWindowMeterEnabled !== DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled
-      ? [gt("Context window indicator")]
       : []),
     ...(settings.sideThreadOpenTarget !== DEFAULT_UNIFIED_SETTINGS.sideThreadOpenTarget
       ? [gt("Open subagents and side chats in")]
@@ -738,7 +730,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
       language: DEFAULT_UNIFIED_SETTINGS.language,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
-      usagePaceTolerance: DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance,
       threadDetailsSectionRowLimit: DEFAULT_UNIFIED_SETTINGS.threadDetailsSectionRowLimit,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
@@ -753,7 +744,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
-      contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       sideThreadOpenTarget: DEFAULT_UNIFIED_SETTINGS.sideThreadOpenTarget,
       toolCallVisibility: DEFAULT_UNIFIED_SETTINGS.toolCallVisibility,
       screenReaderAnnouncements: DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements,
@@ -1301,33 +1291,6 @@ export function GeneralSettingsPanel() {
           }
         />
         <SettingsRow
-          {...setting("pace-tolerance")}
-          description={gt(
-            "How many points over pace a usage bar can run before it turns red. At or under pace is green; over pace, up to this many points, is yellow.",
-          )}
-          resetAction={
-            settings.usagePaceTolerance !== DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset pace tolerance to default")}
-                onClick={() =>
-                  updateSettings({
-                    usagePaceTolerance: DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <BoundedIntegerInput
-              value={settings.usagePaceTolerance}
-              min={MIN_USAGE_PACE_TOLERANCE}
-              max={MAX_USAGE_PACE_TOLERANCE}
-              ariaLabel={gt("Pace tolerance in points")}
-              onCommit={(usagePaceTolerance) => updateSettings({ usagePaceTolerance })}
-            />
-          }
-        />
-        <SettingsRow
           {...setting("thread-details-rows")}
           description={gt(
             "How many tasks, background jobs and related threads each section of the thread details card shows before Show more.",
@@ -1479,34 +1442,6 @@ export function ChatSettingsPanel() {
                 updateSettings({ alwaysShowMessageTimestamps: Boolean(checked) })
               }
               aria-label={gt("Always show message timestamps")}
-            />
-          }
-        />
-        {/* FORK: upstream removed this switch with its circular indicator. Here it
-            gates the context ring of the composer's Vitals gauge (fork invariant 19). */}
-        <SettingsRow
-          {...setting("context-window-indicator")}
-          description={gt("Shows context window usage in the composer's Vitals gauge.")}
-          resetAction={
-            settings.contextWindowMeterEnabled !==
-            DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset context window indicator to default")}
-                onClick={() =>
-                  updateSettings({
-                    contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.contextWindowMeterEnabled}
-              onCheckedChange={(checked) =>
-                updateSettings({ contextWindowMeterEnabled: Boolean(checked) })
-              }
-              aria-label={gt("Context window indicator")}
             />
           }
         />

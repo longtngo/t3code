@@ -671,20 +671,6 @@ describe("ClientSettings message timestamps", () => {
   });
 });
 
-describe("ClientSettings context window meter", () => {
-  // FORK: defaults ON. Upstream ships this off because it is retiring its own circular
-  // indicator; here the switch governs the composer Vitals gauge's context ring.
-  it("defaults on and preserves an explicit opt-out", () => {
-    expect(decodeClientSettings({}).contextWindowMeterEnabled).toBe(true);
-    expect(
-      decodeClientSettings({ contextWindowMeterEnabled: false }).contextWindowMeterEnabled,
-    ).toBe(false);
-    expect(
-      decodeClientSettingsPatch({ contextWindowMeterEnabled: true }).contextWindowMeterEnabled,
-    ).toBe(true);
-  });
-});
-
 describe("ServerSettings Jira link settings", () => {
   it("defaults the Jira link settings to empty and keeps what was typed", () => {
     expect(decodeServerSettings({}).jiraBaseUrl).toBe("");

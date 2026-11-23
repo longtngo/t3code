@@ -786,12 +786,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("timestamp clock locale system browser os 12 hour 24 hour")],
   },
   {
-    id: "pace-tolerance",
-    title: msg("Pace tolerance"),
-    to: "/settings/general",
-    searchTerms: [msg("usage limit colour color yellow red pace threshold cursor claude codex")],
-  },
-  {
     id: "thread-details-rows",
     title: msg("Thread details rows"),
     to: "/settings/general",
@@ -847,13 +841,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Rich text composer"),
     to: "/settings/chat",
     searchTerms: [msg("composer rich text tiptap bold italic markdown styled wysiwyg")],
-  },
-  {
-    // FORK: upstream removed this setting; here it gates the Vitals gauge's context ring.
-    id: "context-window-indicator",
-    title: msg("Context window indicator"),
-    to: "/settings/chat",
-    searchTerms: [msg("composer vitals gauge meter usage tokens ring")],
   },
   {
     id: "send-shortcut",

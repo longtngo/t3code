@@ -73,16 +73,6 @@ function getProviderSnapshot(
   return providers.find((candidate) => candidate.instanceId === defaultInstanceId);
 }
 
-// FORK-ONLY: upstream deleted this as unused there. The composer's provider label still reads
-// through it.
-export function getProviderDisplayName(
-  providers: ReadonlyArray<ServerProvider>,
-  provider: ProviderDriverKind,
-): string {
-  const snapshot = getProviderSnapshot(providers, provider);
-  return snapshot?.displayName?.trim() || formatProviderDriverKindLabel(provider);
-}
-
 export function getProviderInteractionModeToggle(
   providers: ReadonlyArray<ServerProvider>,
   provider: ProviderDriverKind,
