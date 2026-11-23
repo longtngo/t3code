@@ -68,6 +68,7 @@ function panelProps(overrides: Partial<ThreadDetailsPanelProps> = {}): ThreadDet
     gitCwd: "/tmp/thread-details-project",
     workspaceMutationId: null,
     isGitRepo: false,
+    offersWorkspaceModes: false,
     envLocked: false,
     availableEnvironments: [],
     onEnvironmentChange: vi.fn(),
@@ -83,7 +84,13 @@ function panelProps(overrides: Partial<ThreadDetailsPanelProps> = {}): ThreadDet
     taskListView: { primary: null, primaryKind: null, history: [] },
     taskListActive: false,
     backgroundTasks: [],
-    usage: { providerInstanceId: null, providers: [], sources: [], contextWindow: null },
+    usage: {
+      providerInstanceId: null,
+      model: null,
+      providers: [],
+      sources: [],
+      contextWindow: null,
+    },
     ...overrides,
   };
 }

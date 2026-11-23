@@ -54,6 +54,7 @@ export interface PendingUserInputCardProps {
   readonly stopRung?: StopRung;
   readonly cardProgress: SharedValue<number>;
   readonly cardCoverage: SharedValue<number>;
+  readonly onLayout?: (event: LayoutChangeEvent) => void;
   readonly onInputFocusChange?: (focused: boolean) => void;
   readonly drafts: Record<string, PendingUserInputDraftAnswer>;
   readonly answers: Record<string, string | ReadonlyArray<string>> | null;
@@ -413,6 +414,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
     <Animated.View
       className="relative"
       style={Platform.OS === "android" ? androidBoundsStyle : undefined}
+      onLayout={props.onLayout}
     >
       {bar}
       <Animated.View

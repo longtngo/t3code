@@ -1,3 +1,4 @@
+import * as FeatureFlags from "@t3tools/shared/FeatureFlags";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
@@ -57,6 +58,8 @@ const coreNode = (number: number) => ({
   deletions: 0,
   changedFiles: 0,
   mergedAt: null,
+  mergeCommit: null,
+  mergedBy: null,
   closedAt: null,
   isCrossRepository: false,
   headRepositoryOwner: null,
@@ -197,6 +200,7 @@ function harness(options: { readonly missingPullRequests?: boolean } = {}) {
     ),
     Layer.provide(TestSourceControlHost.layer()),
     Layer.provide(Layer.succeed(HostProcess.Environment, {})),
+    Layer.provide(FeatureFlags.layerTest()),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(NodeServices.layer),
   );
@@ -392,6 +396,27 @@ describe("repository account route", () => {
     [
       "updateComment",
       (api) => api.updateComment({ ...pr, commentId: "C", kind: "issue-comment", body: "b" }),
+    ],
+    [
+      "readCheckLogs",
+      (api) =>
+        api.readCheckLogs({
+          ...pr,
+          checks: [
+            { name: "job", url: "https://github.com/uni/delivery-api/actions/runs/1/job/2" },
+          ],
+          tailLines: 5,
+        }),
+    ],
+    [
+      "rerunChecks",
+      (api) =>
+        api.rerunChecks({
+          ...pr,
+          checks: [
+            { name: "job", url: "https://github.com/uni/delivery-api/actions/runs/1/job/2" },
+          ],
+        }),
     ],
     // Only a pinned credential revalidates; an unrouted call would send nothing.
     ["revalidateChecks", (api) => api.revalidateChecks(pr, Effect.die("read sends nothing"))],

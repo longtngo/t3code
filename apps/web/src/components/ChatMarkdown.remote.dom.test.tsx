@@ -14,22 +14,27 @@ const atomReader = vi.hoisted(() => ({
 }));
 vi.mock("@effect/atom-react", async () => {
   const { AtomRegistry } = await import("effect/reactivity");
-  let registry: ReturnType<typeof AtomRegistry.make> | null = null;
   // ChatMarkdown derives its server-config fields in an atom of its own; evaluate that one for
   // real (seeded with this file's config) and keep every other read on the stub.
   const isConfigFields = (atom: unknown) =>
     (atom as { label?: readonly [string, string] }).label?.[0] === "markdown-server-config-fields";
   return {
+    useAtomRefresh: () => () => undefined,
     useAtomValue: (atom: never) => {
       if (!isConfigFields(atom)) return null;
-      registry ??= AtomRegistry.make({ initialValues: atomReader.initialValues() });
-      return registry.get(atom);
+      // A fresh registry per read: an unmounted atom in a shared one is disposed after the first
+      // read, and its seeded config with it, so a second render would read an empty config.
+      return AtomRegistry.make({ initialValues: atomReader.initialValues() }).get(atom);
     },
   };
 });
 vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "dark" }),
   useRenderedAppearance: () => "dark",
+}));
+vi.mock("../state/query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/query")>()),
+  useEnvironmentQuery: () => ({ data: null }),
 }));
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));

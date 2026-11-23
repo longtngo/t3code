@@ -54,6 +54,8 @@ interface ComposerPrimaryActionsProps {
   /** Dictation is running; Send finishes it and submits once the transcript lands. */
   voiceInputActive?: boolean;
   isSendBusy: boolean;
+  /** A send is armed and waiting for its attachments to finish preparing or uploading. */
+  isSendHeld?: boolean;
   sendDisabledReason: string | null;
   /** FORK: the environment is disconnected. A plain message is QUEUED for reconnect. */
   isEnvironmentUnavailable: boolean;
@@ -295,6 +297,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   alternateShortcutLabel = null,
   voiceInputActive = false,
   isSendBusy,
+  isSendHeld = false,
   sendDisabledReason,
   isEnvironmentUnavailable,
   isSendBlocked,
@@ -426,7 +429,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   if (
     (canInterrupt || stopPhase === "pending" || stopPhase === "timedOut") &&
     !hasSendableContent &&
-    !isEditingQueuedMessage
+    !isEditingQueuedMessage &&
+    !isSendHeld
   ) {
     return (
       <>
@@ -459,14 +463,16 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     ? showResume
       ? gt("Environment disconnected")
       : gt("Queue message to send on reconnect")
-    : (sendDisabledReason ??
-      (isPreparingWorktree
-        ? gt("Preparing worktree")
-        : isSendBusy
-          ? isEditingQueuedMessage
-            ? gt("Updating queued message")
-            : gt("Submitting message")
-          : null));
+    : isSendHeld
+      ? gt("Sending when ready")
+      : (sendDisabledReason ??
+        (isPreparingWorktree
+          ? gt("Preparing worktree")
+          : isSendBusy
+            ? isEditingQueuedMessage
+              ? gt("Updating queued message")
+              : gt("Submitting message")
+            : null));
   const modifier = isMacPlatform(navigator.platform) ? "⌘" : "Ctrl";
   const dispatchTooltip =
     alternateAction === "queue"
@@ -490,6 +496,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         ? dispatchTooltip
         : submitLabel);
 
+  const isBusyOrHeld = isSendBusy || isSendHeld;
   const sendButton = (
     <button
       type={showResume ? "button" : "submit"}
@@ -512,20 +519,21 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       // disconnected environment leaves Send live so the message is queued for
       // reconnect instead of being swallowed by a dead button.
       disabled={
-        isSendBusy ||
+        isBusyOrHeld ||
         isSendDisabled ||
         isSendBlocked ||
         (showResume && isEnvironmentUnavailable) ||
         (!hasSendableContent && !showResume)
       }
       aria-label={submitStatus ?? submitLabel}
+      aria-busy={isBusyOrHeld || undefined}
     >
       {stageBackdropVariant ? (
         <span className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
           <StageBackdropButtonArt variant={stageBackdropVariant} />
         </span>
       ) : null}
-      {isSendBusy ? (
+      {isBusyOrHeld ? (
         <Spinner size="sm" aria-hidden="true" />
       ) : showResume ? (
         <PlayIcon className="size-4 fill-current" aria-hidden="true" />

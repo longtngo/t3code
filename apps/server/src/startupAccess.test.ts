@@ -81,6 +81,20 @@ it("formats open-access headless output without a token and with a warning", () 
   expect(output).not.toContain("Pairing URL:");
 });
 
+it("skips Windows VirtualBox and VMware host-only adapters for a private-network listener", () => {
+  expect(
+    resolveHeadlessConnectionString("0.0.0.0", 3773, {
+      interfaces: {
+        "VirtualBox Host-Only Network": [{ ...ipv4("192.168.56.1"), mac: "0a:00:27:00:00:0a" }],
+        "VMware Network Adapter VMnet8": [{ ...ipv4("192.168.159.1"), mac: "00:50:56:c0:00:08" }],
+        "Wi-Fi": [{ ...ipv4("192.168.1.20"), mac: "3c:22:fb:12:34:56" }],
+      },
+      privateNetworkOnly: true,
+      platform: "win32",
+    }),
+  ).toBe("http://192.168.1.20:3773");
+});
+
 it("skips NixOS container and systemd-nspawn veths for a private-network pairing URL", () => {
   expect(
     resolveHeadlessConnectionString("0.0.0.0", 3773, {

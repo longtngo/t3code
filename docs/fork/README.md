@@ -173,7 +173,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 108 entries, ids 1-108, unique and monotonic. Upstream's v2 schema
+Current: 120 entries, ids 1-120, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
@@ -186,7 +186,7 @@ Current: 108 entries, ids 1-108, unique and monotonic. Upstream's v2 schema
 `076_ProjectionProjectsPinArchive` is **85**). Id **90** is the fork's own `PushSubscriptions`
 repair, so upstream's `081`-`089` are **91**-**99** (a flat +10; `081_ProjectionMessageSearchText`
 is **91**, `089_ShellThreadReadIndexes` is **99**), and since the 60th reconcile its `090`-`098` are
-**100**-**108** (the same +10; `098_ActiveShellIndexIndexes` is **108**), so its next (`099`) takes **109**. Upstream's `hasPendingMigrations` also counts V2-preview rows for
+**100**-**108** (the same +10; `098_ActiveShellIndexIndexes` is **108**), and since the 61st its `099`-`110` are **109**-**120** (`110_Workflows` is **120**), so its next (`111`) takes **121**. Upstream's `hasPendingMigrations` also counts V2-preview rows for
 its preview reconciliation; the fork drops that clause (it would report pending forever).
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
@@ -212,7 +212,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -cE '^\s*\[(34|90), "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `108 108 ok` and `2`.
+Expect `120 120 ok` and `2`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -509,7 +509,10 @@ unchanged.
   500 ms, not 0. Mobile shows the same rungs with an octagon icon.
 - The collapsed phone composer keeps the fork's Stop beside the vitals gauge and Send, because
   it runs the ladder. Upstream's `CollapsedComposerStopAction` (#29959, 59th reconcile) has no
-  rungs, so it is left unmounted (only its own browser test renders it); do not mount it.
+  rungs, so it is left unmounted (only its own browser test renders it); do not mount it. The
+  61st reconcile's resolver mounted it anyway (taking upstream's held-send change around it), with
+  a green build. Probe: `grep -c '<CollapsedComposerStopAction' apps/web/src/components/chat/ChatComposer.tsx`
+  is `0` and `grep -c 'Stop generation' ...ChatComposer.tsx` is `1` or more.
 
 ### 8. RETIRED with V1: the interrupt reactor's live-session gate
 
@@ -1510,14 +1513,15 @@ looks the handler up by tag. A new fork RPC goes in both the fork group and the 
 `git worktree prune` is repo-global: it drops every registration whose directory is absent right
 now (an unmounted volume, a worktree mid-move), and `repair` cannot restore them. The fork
 recreates a deleted thread worktree with `createWorktree({ ..., reuseRegisteredPath: true })`,
-which takes over that one stale entry. Four calls: three in `workspace/restoreMissingWorktree.ts` (local branch, pushed branch, base ref;
+which takes over that one stale entry. Five calls: three in `workspace/restoreMissingWorktree.ts` (local branch, pushed branch, base ref;
 upstream's #24156 moved turn start's recreation there, with a prune, in the 59th reconcile; turn
-start and terminals share it) and one in
-`CheckpointRollbackService.ts`. Upstream's #15208 (49th reconcile) added the rollback site with a
-prune in front, which merged without a conflict. Probe, expect `0` and `4`:
+start and terminals share it) and two in
+`CheckpointRollbackService.ts` (single worktree, and upstream's task-folder recreate from the 61st, which
+also arrived with a prune). Upstream's #15208 (49th reconcile) added the rollback site with a
+prune in front, which merged without a conflict. Probe, expect `0` and `5`:
 
 ```sh
-git grep -n 'pruneWorktrees' -- apps/server/src/orchestration-v2 apps/server/src/workspace | grep -v -e '\.test\.' -e testkit | wc -l
+git grep -n 'pruneWorktrees' -- apps/server/src/orchestration-v2 apps/server/src/workspace ':!apps/server/src/workspace/TaskFolders.ts' | grep -v -e '\.test\.' -e testkit | wc -l
 git grep -n 'reuseRegisteredPath: true' -- apps/server/src/orchestration-v2 apps/server/src/workspace | grep -v '\.test\.' | wc -l
 ```
 
@@ -1532,8 +1536,10 @@ leftover worktree folder is emptied rather than deleted (Windows cannot delete o
 `git worktree add` itself accepts an empty directory. A non-empty or unreadable folder is still
 refused. `GitVcsDriverCore.test.ts` "takes over a stale registration whose folder is left empty".
 
-`GitVcsDriverCore.removeWorktree` still prunes after a remove finds the worktree already gone;
-that is upstream's and outside this rule for now.
+`GitVcsDriverCore.removeWorktree` still prunes after a remove finds the worktree already gone,
+and upstream's `workspace/TaskFolders.ts` prunes twice on task-folder REMOVAL (a checkout whose
+folder is gone, and cleanup after a failed create); those are upstream's and outside this rule
+for now (the probe excludes TaskFolders.ts).
 
 ### 67. Sidebar section header counts sit on upstream's row
 
@@ -1640,7 +1646,7 @@ is `1`. Report: `~/reports/t3code/2026-11/2026-11-04/mevq-run/flaky-browser-rca.
 ### 75. The fork's Notifications and Queue pages are in upstream's explicit settings nav
 
 Reconcile 54 replaced the nav built from every `SETTINGS_SECTION_LABELS` key with upstream's
-hand-written `SETTINGS_NAV_GROUPS`. The fork's `/settings/notifications` (Web Push switch,
+hand-written `SETTINGS_NAV_GROUPS` (since the 61st, the module-private `ALL_SETTINGS_NAV_GROUPS`). The fork's `/settings/notifications` (Web Push switch,
 notification categories) and `/settings/queue` kept their routes but lost their menu entries, so
 the Web Push switch looked like a lost feature. Both are back in the groups, and
 `settingsSearch.test.ts` "lists every labelled settings page in the nav" fails when a labelled
@@ -1648,7 +1654,7 @@ page is missing (Diagnostics and Secrets are the only deliberate exceptions). No
 in `SETTINGS_DEVICE_ONLY_PATHS` (`SettingsScopeSentence.tsx`), like Queue: without it the page
 shows a scope picker, and an unavailable scope replaces the page, Web Push switch included. A fork page added
 later needs a label and a group entry. Probe:
-`awk '/export const SETTINGS_NAV_GROUPS/,/^];/' apps/web/src/components/settings/settingsSearch.ts | grep -cE '"/settings/(notifications|queue)"'`
+`awk '/const ALL_SETTINGS_NAV_GROUPS/,/^];/' apps/web/src/components/settings/settingsSearch.ts | grep -cE '"/settings/(notifications|queue)"'`
 is `2`.
 
 ### 18. The event hubs are unbounded; every WebSocket reader of them must not be
@@ -1695,8 +1701,9 @@ reader that stopped taking, so each reader needs its own bound.
 - **`groupedWithin` is banned in new code** (`no-unsafe-stream-aggregate`). On the leaking
   effect build its idle schedule loop pins continuation frames until the next element arrives
   (beta.102: +3.5 MB in 4 s at 1,000 idle ticks/s; ~79 MB/h per idle 50 ms subscription). Two
-  upstream sites in `ws.ts` keep a suppression: measured flat on the pinned 4.0.0-rc.115
-  (+0.03 MB idle probe; a 50 ms window plateaus). Re-measure with `scripts/idle-aggregate-probe.ts`
+  upstream sites in `ws.ts` and one in web `files/fullFileText.ts` (61st) keep a suppression: measured
+  flat on 4.0.0-rc.115 (+0.03 MB idle probe; a 50 ms window plateaus) and again on effect 4.1.5
+  (0.000 MB, 61st reconcile). Re-measure with `scripts/idle-aggregate-probe.ts`
   on any effect bump. Use the idle probe: a bursty source hides the leak, because each element
   releases the frames.
 - **The health gauge belongs to the running server, not the layer.** `EventSinkV2.liveBacklog`

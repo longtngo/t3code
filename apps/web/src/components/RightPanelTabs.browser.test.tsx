@@ -182,7 +182,11 @@ function trackpad() {
   };
   let scrolling = false;
   return {
-    bridge: { onTrackpadScrollBegin: subscribe(begin), onTrackpadScrollEnd: subscribe(end) },
+    bridge: {
+      onTrackpadScrollBegin: subscribe(begin),
+      onTrackpadScrollEnd: subscribe(end),
+      onMenuAction: () => () => {},
+    },
     scroll(target: Element, deltas: readonly number[]) {
       let scroller: Element | null = target;
       while (
@@ -221,7 +225,7 @@ const surfaces: RightPanelSurface[] = Array.from({ length: 16 }, (_, index) => (
 }));
 
 describe("RightPanelTabs", () => {
-  it("a flick that scrolls the tab strip to its left edge keeps the thread, a swipe from the edge goes back", async () => {
+  it("a flick that scrolls the tab strip to its left edge keeps the thread, and so does a swipe from the edge", async () => {
     navigateHistory.mockReset();
     const { bridge, scroll } = trackpad();
     using _bridge = stubGlobal("desktopBridge", bridge);
@@ -291,7 +295,7 @@ describe("RightPanelTabs", () => {
     viewport.scrollLeft = 0;
     scroll(viewport.querySelector("[data-active-tab]")!, [-40, -40, -40, -40, -40]);
 
-    expect(navigateHistory).toHaveBeenCalledExactlyOnceWith("back");
+    expect(navigateHistory).not.toHaveBeenCalled();
   });
 });
 

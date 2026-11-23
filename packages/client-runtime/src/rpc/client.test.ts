@@ -918,3 +918,42 @@ it.effect("binds branch capability selection and execution to one session", () =
     yield* Deferred.await(executed);
   }),
 );
+
+describe("completion resubscribe budget", () => {
+  it.effect("a new session re-arms the completion resubscribe budget", () =>
+    Effect.gen(function* () {
+      const subscribed = yield* Queue.unbounded<string>();
+      const endsImmediately = (name: string) =>
+        ({
+          [WS_METHODS.subscribeTerminalMetadata]: () =>
+            Stream.unwrap(Queue.offer(subscribed, name).pipe(Effect.as(Stream.empty))),
+        }) as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor } = yield* makeHarness();
+      yield* SubscriptionRef.set(activeSession, Option.some(session(endsImmediately("a"))));
+      const fiber = yield* subscribe(
+        WS_METHODS.subscribeTerminalMetadata,
+        {},
+        { resubscribeOnCompletionAfter: "100 millis" },
+      ).pipe(
+        Stream.runDrain,
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      expect(yield* Queue.take(subscribed)).toBe("a");
+      // Climb the budget on session a: waits of 100, 200, 400 ms.
+      yield* TestClock.adjust("100 millis");
+      expect(yield* Queue.take(subscribed)).toBe("a");
+      yield* TestClock.adjust("200 millis");
+      expect(yield* Queue.take(subscribed)).toBe("a");
+      yield* TestClock.adjust("400 millis");
+      expect(yield* Queue.take(subscribed)).toBe("a");
+      // Next wait on a would be 800 ms. Switch sessions mid-wait.
+      yield* SubscriptionRef.set(activeSession, Option.some(session(endsImmediately("b"))));
+      expect(yield* Queue.take(subscribed)).toBe("b");
+      // Fresh budget: b's first resubscribe waits the caller's own 100 ms.
+      yield* TestClock.adjust("100 millis");
+      expect(yield* Queue.take(subscribed)).toBe("b");
+      yield* Fiber.interrupt(fiber);
+    }),
+  );
+});

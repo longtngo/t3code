@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
+import * as WorkspaceFolders from "../workspace/WorkspaceFolders.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 
 export class RuntimePolicyResolveError extends Schema.TaggedError<RuntimePolicyResolveError>()(
@@ -78,17 +79,7 @@ export class RuntimePolicyV2 extends Context.Service<RuntimePolicyV2, RuntimePol
   "t3/orchestration-v2/RuntimePolicy/RuntimePolicyV2",
 ) {}
 
-export const layer: Layer.Layer<RuntimePolicyV2> = Layer.succeed(RuntimePolicyV2, {
-  resolve: Effect.fn("RuntimePolicyV2.resolve")(function (input) {
-    return Effect.succeed({
-      runtimeMode: input.thread.runtimeMode,
-      interactionMode: input.thread.interactionMode,
-      cwd: input.thread.worktreePath,
-    });
-  }),
-});
-
-function providerRuntimeMode(
+export function providerRuntimeMode(
   runtimeMode: RuntimeMode,
   supportedRuntimeModes: ReadonlyArray<RuntimeMode> | undefined,
 ): RuntimeMode {
@@ -143,10 +134,12 @@ export const layerFromProjectStore: Layer.Layer<
   | ProjectStore.ProjectStoreV2
   | ProviderInstanceRegistry.ProviderInstanceRegistry
   | ServerSettings.ServerSettingsService
+  | WorkspaceFolders.WorkspaceFolders
 > = Layer.effect(
   RuntimePolicyV2,
   Effect.gen(function* () {
     const projects = yield* ProjectStore.ProjectStoreV2;
+    const workspaceFolders = yield* WorkspaceFolders.WorkspaceFolders;
     const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
     // The same ceiling the orchestrator enforces, fixed for the server's life.
     const { managedPolicy } = yield* ServerSettings.ServerSettingsService;
@@ -159,28 +152,50 @@ export const layerFromProjectStore: Layer.Layer<
           instance === undefined
             ? undefined
             : (yield* instance.snapshot.getSnapshot).supportedRuntimeModes;
-        const resolveError = (cause: unknown) =>
-          new RuntimePolicyResolveError({
+        const cwd =
+          input.thread.worktreePath ??
+          (yield* projects.get(input.thread.projectId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new RuntimePolicyResolveError({
+                  projectId: input.thread.projectId,
+                  providerInstanceId: input.modelSelection.instanceId,
+                  cause,
+                }),
+            ),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(
+                    new RuntimePolicyResolveError({
+                      projectId: input.thread.projectId,
+                      providerInstanceId: input.modelSelection.instanceId,
+                      cause: "Project not found.",
+                    }),
+                  ),
+                onSome: (project) => Effect.succeed(project.workspaceRoot),
+              }),
+            ),
+          ));
+        // The turn can still run in its own cwd, as a single-folder thread does.
+        const workspace = yield* workspaceFolders
+          .forThread({
             projectId: input.thread.projectId,
-            providerInstanceId: input.modelSelection.instanceId,
-            cause,
-          });
-        const project = Option.getOrUndefined(
-          yield* projects.get(input.thread.projectId).pipe(Effect.mapError(resolveError)),
-        );
-        // A thread in its own worktree does not need its project row for cwd,
-        // so a missing project only fails a thread that runs in the checkout.
-        const cwd = input.thread.worktreePath ?? project?.workspaceRoot;
-        if (cwd === undefined) return yield* resolveError("Project not found.");
-        // Workspace members are granted on every turn, so attaching or detaching
-        // one reaches the provider on the next turn without a manual restart.
-        const memberPaths = project?.members.map((member) => member.path) ?? [];
+            worktreePath: input.thread.worktreePath,
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not resolve the thread's tracked folders.", cause).pipe(
+                Effect.as(undefined),
+              ),
+            ),
+          );
         return ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
           runtimeMode: providerRuntimeMode(input.thread.runtimeMode, supportedRuntimeModes),
           interactionMode: input.thread.interactionMode,
           cwd,
-          ...(memberPaths.length === 0 ? {} : { additionalDirectories: memberPaths }),
           ...(maxRuntimeMode === undefined ? {} : { maxRuntimeMode }),
+          ...(workspace === undefined || workspace.folders.length === 0 ? {} : { workspace }),
         });
       }),
     });

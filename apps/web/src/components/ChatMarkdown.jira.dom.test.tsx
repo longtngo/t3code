@@ -13,16 +13,17 @@ const atomReader = vi.hoisted(() => ({
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
 vi.mock("@effect/atom-react", async () => {
   const { AtomRegistry } = await import("effect/reactivity");
-  let registry: ReturnType<typeof AtomRegistry.make> | null = null;
   // ChatMarkdown derives its server-config fields in an atom of its own; evaluate that one for
   // real (seeded with this file's config) and keep every other read on the stub.
   const isConfigFields = (atom: unknown) =>
     (atom as { label?: readonly [string, string] }).label?.[0] === "markdown-server-config-fields";
   return {
+    useAtomRefresh: () => () => undefined,
     useAtomValue: (atom: never) => {
       if (!isConfigFields(atom)) return atomReader.read(atom);
-      registry ??= AtomRegistry.make({ initialValues: atomReader.initialValues() });
-      return registry.get(atom);
+      // A fresh registry per read: an unmounted atom in a shared one is disposed after the first
+      // read, and its seeded config with it, so a second render would read an empty config.
+      return AtomRegistry.make({ initialValues: atomReader.initialValues() }).get(atom);
     },
   };
 });
@@ -39,9 +40,10 @@ vi.mock("../hooks/useSettings", async (importOriginal) => {
       select ? select(settings) : settings,
   };
 });
-vi.mock("./ui/tooltip", async () => {
+vi.mock("./ui/tooltip", async (importOriginal) => {
   const { cloneElement, isValidElement } = await import("react");
   return {
+    ...(await importOriginal<typeof import("./ui/tooltip")>()),
     Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
     TooltipTrigger({
       render,
@@ -53,6 +55,10 @@ vi.mock("./ui/tooltip", async () => {
     TooltipPopup: () => null,
   };
 });
+vi.mock("../state/query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/query")>()),
+  useEnvironmentQuery: () => ({ data: null }),
+}));
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../state/session", async (importOriginal) => {
@@ -124,11 +130,18 @@ describe("ChatMarkdown Jira ticket links", () => {
       "```\nOPS-12\n```",
       "<code>OPS-12</code>",
     ]) {
+      // A prose key in the same message proves linking is live in this render, so the absence
+      // below is the exclusion, not an empty config.
       const view = await renderDom(
-        <ChatMarkdown cwd="/tmp/project" environmentId={ENVIRONMENT} text={text} />,
+        <ChatMarkdown
+          cwd="/tmp/project"
+          environmentId={ENVIRONMENT}
+          text={`${text}\n\nOPS-12 in prose.`}
+        />,
       );
-      expect(view.text()).toContain("OPS-12");
-      expect(view.find(TICKET)).toBeNull();
+      const tickets = view.findAll(TICKET);
+      expect(tickets).toHaveLength(1);
+      expect(tickets[0]?.closest("p")?.textContent).toBe("OPS-12 in prose.");
     }
   });
 

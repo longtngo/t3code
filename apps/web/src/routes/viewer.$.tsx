@@ -114,7 +114,7 @@ function ViewerRouteView() {
       void navigate({
         to: "/viewer/$",
         params: { _splat: nextSplat },
-        search: (previous: ViewerSearch) => previous,
+        search: true,
       });
     },
     [navigate, splat],

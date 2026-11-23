@@ -7,6 +7,7 @@ import {
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
+import * as FeatureFlags from "@t3tools/shared/FeatureFlags";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -20,6 +21,7 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
+import { userFacingSourceControlDetail } from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 import type * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
@@ -515,6 +517,13 @@ describe("GitHubSourceControlProvider change request lookups by head", () => {
         ["open", "closed"],
       );
       assert.include(paths[0], "repos/acme/web/pulls?head=me%3Amain");
+      yield* gh.listChangeRequests({
+        cwd: "/repo",
+        headSelector: "me:main",
+        state: "open",
+        repository: "me/web",
+      });
+      assert.include(paths[2], "repos/me/web/pulls?head=me%3Amain");
       assert.lengthOf(graphqlCalls, 0);
     }).pipe(Effect.provide(layer));
   });
@@ -622,6 +631,15 @@ describe("GitHubSourceControlProvider writes", () => {
         body: "Body",
         maintainer_can_modify: true,
       });
+      yield* gh.createChangeRequest({
+        cwd: "/repo",
+        baseRefName: "main",
+        headSelector: "me:feature",
+        title: "Title",
+        bodyFile,
+        draft: true,
+      });
+      assert.strictEqual((requests[1]!.body as { draft?: unknown }).draft, true);
     }).pipe(Effect.provide(Layer.merge(layer, NodeServices.layer)));
   });
 
@@ -762,10 +780,47 @@ describe("GitHubSourceControlProvider writes", () => {
       for (const repository of ["me/", "/notes", "a/b/c/d", "", "two words"]) {
         const error = yield* Effect.flip(gh.getRepositoryCloneUrls({ cwd: "/repo", repository }));
         assert.include(error.message, "Repositories are named owner/name.");
+        assert.strictEqual(
+          userFacingSourceControlDetail(error.cause),
+          "Repositories are named owner/name.",
+        );
       }
       assert.strictEqual(requests.length, 2);
     });
   });
+  it.effect("exposes only fixed repository lookup details with the resolved owner", () =>
+    Effect.gen(function* () {
+      const gh = yield* makeProvider({
+        rest: (input) =>
+          input.path === "user"
+            ? Effect.succeed(restResponse({ login: "me" }))
+            : input.path === "repos/me/private"
+              ? Effect.fail(
+                  new GitHubRequestPolicy.GitHubApiAuthenticationError({
+                    host: input.host,
+                    operation: input.operation,
+                  }),
+                )
+              : Effect.fail(
+                  new GitHubRequestPolicy.GitHubApiNotFoundError({
+                    host: input.host,
+                    operation: input.operation,
+                  }),
+                ),
+      });
+      for (const repository of ["vouch", "other/vouch"]) {
+        const error = yield* Effect.flip(gh.getRepositoryCloneUrls({ cwd: "/repo", repository }));
+        assert.strictEqual(
+          userFacingSourceControlDetail(error.cause),
+          `Repository ${repository === "vouch" ? "me/vouch" : repository} was not found. Check the owner and name and try again.`,
+        );
+      }
+      const authError = yield* Effect.flip(
+        gh.getRepositoryCloneUrls({ cwd: "/repo", repository: "me/private" }),
+      );
+      assert.strictEqual(userFacingSourceControlDetail(authError.cause), undefined);
+    }),
+  );
 });
 
 describe("GitHubSourceControlProvider.checkoutChangeRequest", () => {
@@ -1593,7 +1648,10 @@ describe("per-folder account", () => {
       Layer.provideMerge(http),
       Layer.provideMerge(TestSourceControlHost.layer({ process: { run } })),
       Layer.provideMerge(Layer.succeed(HostProcess.Environment, {})),
+      Layer.provideMerge(FeatureFlags.layerTest()),
       Layer.provide(NodeCrypto.layer),
+      // gh's D-Bus probe must not touch the real disk: real I/O outlasts the TestClock batch window.
+      Layer.provide(FileSystem.layerNoop({})),
       Layer.provideMerge(NodeServices.layer),
     );
     return { layer, sent };
@@ -1868,6 +1926,7 @@ describe("clone lookups with any signed-in account", () => {
       Layer.provideMerge(http),
       Layer.provideMerge(TestSourceControlHost.layer({ settings, process: { run } })),
       Layer.provideMerge(Layer.succeed(HostProcess.Environment, scenario.env ?? {})),
+      Layer.provideMerge(FeatureFlags.layerTest()),
       Layer.provide(NodeCrypto.layer),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -1988,7 +2047,7 @@ describe("clone lookups with any signed-in account", () => {
     const { layer, sent } = stack({ stored: THREE });
     return Effect.gen(function* () {
       const error = yield* Effect.flip(lookup("acme/typo"));
-      assert.include(error.message, "Repository not found");
+      assert.include(error.message, "was not found");
       assert.deepStrictEqual(senders(sent), ["bob", "alice", "carol"]);
     }).pipe(Effect.provide(layer));
   });
@@ -2002,7 +2061,7 @@ describe("clone lookups with any signed-in account", () => {
       });
       return Effect.gen(function* () {
         const error = yield* Effect.flip(lookup("acme/secret"));
-        assert.include(error.message, "Repository not found");
+        assert.include(error.message, "was not found");
         assert.deepStrictEqual(senders(sent), ["bob", "alice"]);
       }).pipe(Effect.provide(layer));
     },

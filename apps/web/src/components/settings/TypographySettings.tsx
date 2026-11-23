@@ -517,6 +517,7 @@ function FontFamilySettingsRow({
           };
         }}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return;
           if (event.key === "Enter") flushDraft();
           if (event.key === "Escape") {
             // Escape reverts the field to its committed value.

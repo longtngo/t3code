@@ -12,7 +12,7 @@ import { ChevronDownIcon, FolderIcon } from "lucide-react";
 import { memo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useGT } from "gt-react";
 
-import { contextMenuSourceOf } from "../../contextMenuSource";
+import { contextMenuSourceOf, openContextMenuFromKeyboard } from "../../contextMenuSource";
 import { isAbsoluteFilePath } from "../../chatFilePathLinks";
 import { basenamePathSegment } from "../../filePathDisplay";
 import { readLocalApi } from "../../localApi";
@@ -26,6 +26,7 @@ import { documentChipKindForFileName } from "../../pierre-icons";
 import { ContextChip } from "../ContextChip";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { SharedTooltipTrigger, useSharedTooltip, withSharedTooltip } from "../ui/shared-tooltip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { FileTagChipContent } from "./FileTagChip";
 import {
@@ -388,103 +389,110 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   });
   const chipKind = documentChipKindForFileName(iconPath) ?? "mention";
 
+  const tooltipContent = (
+    <WorkspaceEntryTooltip path={iconPath} label={targetPath} environmentId={environmentId} />
+  );
+  const sharedTooltip = useSharedTooltip({
+    render: () => tooltipContent,
+    contentKey: `${iconPath}\u0000${targetPath}`,
+    variant: "code",
+  });
+  const chip = hasPrimaryAction ? (
+    <ContextChip
+      {...nativeDrag}
+      kind={chipKind}
+      dir="ltr"
+      render={<a href={href} />}
+      className={MARKDOWN_FILE_LINK_CLASS_NAME}
+      data-markdown-copy={copyMarkdown}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (onOpen && shouldOpenMarkdownFileLinkInEditor(event)) {
+          handleOpenInEditor();
+          return;
+        }
+        if (useBrowserPrimaryAction) {
+          handleOpenInBrowser();
+          return;
+        }
+        handleOpenInFilePreview();
+      }}
+      onContextMenu={handleContextMenu}
+      onKeyDown={openContextMenuFromKeyboard}
+    >
+      <FileTagChipContent
+        icon={
+          isAppBundle ? <AppBundleIcon environmentId={environmentId} path={iconPath} /> : undefined
+        }
+        path={iconPath}
+        environmentId={environmentId}
+        label={label}
+        theme={theme}
+      />
+    </ContextChip>
+  ) : (
+    <ContextChip
+      {...nativeDrag}
+      kind={chipKind}
+      dir="ltr"
+      render={<button type="button" />}
+      aria-label={gt("File options for {label}", { label })}
+      aria-haspopup="menu"
+      className={cn(MARKDOWN_FILE_LINK_CLASS_NAME, "select-text")}
+      data-markdown-copy={copyMarkdown}
+      onClick={handleContextMenu}
+      onContextMenu={handleContextMenu}
+      onKeyDown={openContextMenuFromKeyboard}
+    >
+      <FileTagChipContent
+        icon={
+          isAppBundle ? <AppBundleIcon environmentId={environmentId} path={iconPath} /> : undefined
+        }
+        path={iconPath}
+        environmentId={environmentId}
+        label={label}
+        theme={theme}
+      />
+    </ContextChip>
+  );
+  const tooltippedChip = sharedTooltip ? (
+    withSharedTooltip(chip, sharedTooltip)
+  ) : (
+    <Tooltip>
+      <TooltipTrigger render={chip} />
+      <TooltipPopup side="top" variant="code" className="pointer-events-auto">
+        {tooltipContent}
+      </TooltipPopup>
+    </Tooltip>
+  );
+  const optionsLabel = gt("View options for {basename}", { basename });
   return (
-    // Inline-level, not flex: triple-click selection stops at flex items, so a flex wrapper cut the
-    // line at the chip.
+    // FORK: the chip plus an in-DOM options menu (registry invariant 11). Inline-level, not
+    // flex: triple-click selection stops at flex items, so a flex wrapper cut the line at the chip.
     <span className="inline-block max-w-full whitespace-nowrap align-middle">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            hasPrimaryAction ? (
-              <ContextChip
-                {...nativeDrag}
-                kind={chipKind}
-                dir="ltr"
-                render={<a href={href} />}
-                className={MARKDOWN_FILE_LINK_CLASS_NAME}
-                data-markdown-copy={copyMarkdown}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  if (onOpen && shouldOpenMarkdownFileLinkInEditor(event)) {
-                    handleOpenInEditor();
-                    return;
-                  }
-                  if (useBrowserPrimaryAction) {
-                    handleOpenInBrowser();
-                    return;
-                  }
-                  handleOpenInFilePreview();
-                }}
-                onContextMenu={handleContextMenu}
-              >
-                <FileTagChipContent
-                  icon={
-                    isAppBundle ? (
-                      <AppBundleIcon environmentId={environmentId} path={iconPath} />
-                    ) : undefined
-                  }
-                  path={iconPath}
-                  environmentId={environmentId}
-                  label={label}
-                  theme={theme}
-                />
-              </ContextChip>
-            ) : (
-              <ContextChip
-                {...nativeDrag}
-                kind={chipKind}
-                dir="ltr"
-                render={<button type="button" />}
-                aria-label={gt("File options for {label}", { label })}
-                aria-haspopup="menu"
-                className={cn(MARKDOWN_FILE_LINK_CLASS_NAME, "select-text")}
-                data-markdown-copy={copyMarkdown}
-                onClick={handleContextMenu}
-                onContextMenu={handleContextMenu}
-              >
-                <FileTagChipContent
-                  icon={
-                    isAppBundle ? (
-                      <AppBundleIcon environmentId={environmentId} path={iconPath} />
-                    ) : undefined
-                  }
-                  path={iconPath}
-                  environmentId={environmentId}
-                  label={label}
-                  theme={theme}
-                />
-              </ContextChip>
-            )
-          }
-        />
-        <TooltipPopup side="top" variant="code">
-          <WorkspaceEntryTooltip path={iconPath} label={targetPath} environmentId={environmentId} />
-        </TooltipPopup>
-      </Tooltip>
+      {tooltippedChip}
       {/* A visible affordance for the actions the native context menu also offers,
           which on a chip with a primary action otherwise takes an undiscoverable
           right-click (and none at all on touch). */}
       <Menu>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <MenuTrigger
-                render={
-                  <button
-                    type="button"
-                    className="ml-0.5 inline-block size-4 shrink-0 rounded-sm p-0.5 align-middle leading-3 text-muted-foreground/70 hover:bg-accent/70 hover:text-foreground"
-                    aria-label={gt("View options for {basename}", { basename })}
-                    onClick={(event) => event.stopPropagation()}
-                  />
-                }
-              />
-            }
-          >
-            <ChevronDownIcon className="inline size-3 align-top" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">{gt("View options for {basename}", { basename })}</TooltipPopup>
-        </Tooltip>
+        <SharedTooltipTrigger
+          label={optionsLabel}
+          render={
+            <MenuTrigger
+              render={
+                <button
+                  type="button"
+                  className="ml-0.5 inline-block size-4 shrink-0 rounded-sm p-0.5 align-middle leading-3 text-muted-foreground/70 hover:bg-accent/70 hover:text-foreground"
+                  aria-label={optionsLabel}
+                  onClick={(event) => event.stopPropagation()}
+                />
+              }
+            />
+          }
+        >
+          <ChevronDownIcon className="inline size-3 align-top" />
+        </SharedTooltipTrigger>
         <MenuPopup align="end">
           <MenuItem onClick={handleOpenInFilePreview}>{gt("View in side panel")}</MenuItem>
           {/* Needs a machine to open against, or the tab resolves the path on the

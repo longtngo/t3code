@@ -118,7 +118,8 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        // FORK: realpath, or macOS reports /private/var paths against a /var fixture (invariant 9).
+        // macOS temp directories sit under /var, a link to /private/var, and the launcher
+        // reports the resolved path it runs from.
         const root = yield* fs.realPath(
           yield* fs.makeTempDirectoryScoped({ prefix: "t3-npm-launcher-test-" }),
         );

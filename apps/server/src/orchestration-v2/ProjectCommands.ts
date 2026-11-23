@@ -6,6 +6,7 @@ import {
   type ProjectIconOverride,
   ProjectId,
   type ProjectScript,
+  type ProjectTrackedFolder,
   SCRIPT_RUN_COMMAND_PATTERN,
   type ThreadEnvMode,
   type WorkspaceMember,
@@ -24,6 +25,7 @@ export interface ProjectCreateCommand {
   readonly title: string;
   readonly workspaceRoot: string;
   readonly scripts?: ReadonlyArray<ProjectScript>;
+  readonly trackedFolders?: ReadonlyArray<ProjectTrackedFolder>;
 }
 
 export interface ProjectMetaUpdateCommand {
@@ -40,6 +42,7 @@ export interface ProjectMetaUpdateCommand {
   readonly scripts?: ReadonlyArray<ProjectScript>;
   /** Already validated and normalized by ProjectService. */
   readonly members?: ReadonlyArray<WorkspaceMember>;
+  readonly trackedFolders?: ReadonlyArray<ProjectTrackedFolder>;
   readonly pinned?: boolean;
   readonly archived?: boolean;
 }
@@ -166,6 +169,9 @@ export function planProjectCommand(input: {
           faviconPath: null,
           projectIcon: null,
           scripts: command.scripts ?? [],
+          ...(command.trackedFolders === undefined || command.trackedFolders.length === 0
+            ? {}
+            : { trackedFolders: command.trackedFolders }),
           createdAt: occurredAt,
           updatedAt: occurredAt,
         },
@@ -214,6 +220,9 @@ export function planProjectCommand(input: {
           ...(command.projectIcon === undefined ? {} : { projectIcon: command.projectIcon }),
           ...(command.scripts === undefined ? {} : { scripts: command.scripts }),
           ...(command.members === undefined ? {} : { members: command.members }),
+          ...(command.trackedFolders === undefined
+            ? {}
+            : { trackedFolders: command.trackedFolders }),
           // Repeating a pin or archive keeps the original time.
           ...(command.pinned === undefined
             ? {}

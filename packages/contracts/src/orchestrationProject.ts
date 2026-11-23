@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
-import { ProjectScript, ReceivedProjectIcon } from "./project.ts";
+import { ProjectScript, ProjectTrackedFolders, ReceivedProjectIcon } from "./project.ts";
 import { WorkspaceMembers } from "./workspaceMember.ts";
 
 export const OrchestrationProjectShell = Schema.Struct({
@@ -24,6 +24,8 @@ export const OrchestrationProjectShell = Schema.Struct({
   // Fork: additional repositories this project's threads work in. Absent decodes
   // as [] so shells from servers without workspace members still decode.
   members: WorkspaceMembers,
+  // Absent from older servers; that means a single-folder project.
+  trackedFolders: Schema.optional(ProjectTrackedFolders),
   // Pinned projects lead project pickers; archived ones leave them. Optional so older servers decode.
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),

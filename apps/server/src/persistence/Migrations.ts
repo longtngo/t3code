@@ -220,6 +220,20 @@ import Migration0105 from "./Migrations/095_TurnItemInlineWorkOutput.ts";
 import Migration0106 from "./Migrations/096_RepairStaleTitleRegeneration.ts";
 import Migration0107 from "./Migrations/097_IssueTrackerBindings.ts";
 import Migration0108 from "./Migrations/098_ActiveShellIndexIndexes.ts";
+// Upstream's 099-110 arrive after the fork already deployed ids 33-108, so they take the next
+// free ids (109-120), a flat +10, rather than their filename numbers (registry section 1).
+import Migration0109 from "./Migrations/099_BackgroundRecoveryIndexes.ts";
+import Migration0110 from "./Migrations/100_TurnStartReadIndexes.ts";
+import Migration0111 from "./Migrations/101_DelegatedTaskReadIndexes.ts";
+import Migration0112 from "./Migrations/102_ThreadItemCounts.ts";
+import Migration0113 from "./Migrations/103_IssueTrackerAdditionalScopes.ts";
+import Migration0114 from "./Migrations/104_ProjectionProjectsTrackedFolders.ts";
+import Migration0115 from "./Migrations/105_TaskFolders.ts";
+import Migration0116 from "./Migrations/106_WorktreePathKeyIndex.ts";
+import Migration0117 from "./Migrations/107_DeferredSlashCommandIndex.ts";
+import Migration0118 from "./Migrations/108_AgentFeedback.ts";
+import Migration0119 from "./Migrations/109_IssueTrackerAccounts.ts";
+import Migration0120 from "./Migrations/110_Workflows.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -334,6 +348,18 @@ export const migrationEntries = [
   [106, "RepairStaleTitleRegeneration", Migration0106],
   [107, "IssueTrackerBindings", Migration0107],
   [108, "ActiveShellIndexIndexes", Migration0108],
+  [109, "BackgroundRecoveryIndexes", Migration0109],
+  [110, "TurnStartReadIndexes", Migration0110],
+  [111, "DelegatedTaskReadIndexes", Migration0111],
+  [112, "ThreadItemCounts", Migration0112],
+  [113, "IssueTrackerAdditionalScopes", Migration0113],
+  [114, "ProjectionProjectsTrackedFolders", Migration0114],
+  [115, "TaskFolders", Migration0115],
+  [116, "WorktreePathKeyIndex", Migration0116],
+  [117, "DeferredSlashCommandIndex", Migration0117],
+  [118, "AgentFeedback", Migration0118],
+  [119, "IssueTrackerAccounts", Migration0119],
+  [120, "Workflows", Migration0120],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

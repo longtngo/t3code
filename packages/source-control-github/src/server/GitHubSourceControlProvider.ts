@@ -68,6 +68,7 @@ import {
 } from "@t3tools/source-control-core/shared/definition";
 
 import * as GitHubClient from "../shared/definition.ts";
+import { makeGhProcess } from "./gitHubCliProcess.ts";
 import {
   PullRequestByNumber,
   PullRequestNode,
@@ -229,7 +230,7 @@ function environmentTokenVariable(environment: NodeJS.ProcessEnv): string | null
 export const makeDiscovery = Effect.gen(function* () {
   const api = yield* GitHubRest.GitHubRest;
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
-  const process = sourceControlHost.process;
+  const process = yield* makeGhProcess;
   const environment = yield* HostProcess.Environment;
   const appSignIn = yield* GitHubAppSignIn.GitHubAppSignIn;
   const offerAppSignIn = <A extends SourceControlProviderDiscoveryItem>(item: A): A =>
@@ -360,6 +361,14 @@ class GitHubFailure extends Schema.TaggedError<GitHubFailure>()("GitHubFailure",
   cause: Schema.Defect(),
 }) {}
 
+class GitHubRepositoryLookupError extends Schema.TaggedError<GitHubRepositoryLookupError>()(
+  "GitHubRepositoryLookupError",
+  {
+    userFacingDetail: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 const failure = (detail: string, cause?: unknown) => new GitHubFailure({ detail, cause });
 
 // A gh login confirms a GitHub Enterprise Server whose hostname does not identify its provider.
@@ -388,7 +397,7 @@ const refineRepositoryIdentity: NonNullable<
 
 const PULL_REQUEST_NOT_FOUND = "Pull request not found. Check the PR number or URL and try again.";
 const REPOSITORY_NOT_FOUND = "Repository not found. Check the owner and name and try again.";
-const isGitHubNotFound = Schema.is(GitHubRequestPolicy.GitHubApiNotFoundError);
+const isGitHubApiNotFoundError = Schema.is(GitHubRequestPolicy.GitHubApiNotFoundError);
 
 function fromGitHubApiError(
   error: GitHubRequestPolicy.GitHubApiError,
@@ -418,6 +427,7 @@ function fromGitHubApiError(
     case "GitHubApiNotFoundError":
       return failure(notFound, error);
     case "GitHubCliFailedError":
+    case "GitHubCliTimeoutError":
     case "GitHubAppSessionError":
     case "GitHubApiResponseError":
     case "GitHubApiRequestError":
@@ -664,9 +674,15 @@ export const make = Effect.gen(function* () {
     readonly limit: number;
     readonly context?: SourceControlProvider.SourceControlProviderContext | undefined;
     readonly host?: string | undefined;
+    readonly repository?: string | undefined;
     readonly allowReserve: boolean;
   }) {
-    const locator = yield* resolveRepository(input);
+    const base = yield* resolveRepository(input);
+    const locator =
+      input.repository === undefined
+        ? base
+        : parseGitHubRepositorySelector(input.repository, base.host);
+    if (locator === null) return yield* failure(`${input.repository} is not a GitHub repository.`);
     const limit = Math.min(Math.max(Math.trunc(input.limit), 1), 100);
     const ownerMatch = /^([^:/\s]+):(.+)$/u.exec(input.headSelector.trim());
     const headRefName = ownerMatch?.[2] ?? input.headSelector.trim();
@@ -1117,6 +1133,7 @@ export const make = Effect.gen(function* () {
               limit: input.limit ?? (input.state === "open" ? 1 : 20),
               host: contextHost(input.context),
               context: input.context,
+              repository: input.repository,
               allowReserve,
             }),
           ),
@@ -1135,6 +1152,7 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
+    createsDraftChangeRequests: true,
     createChangeRequest: Effect.fn("GitHubSourceControlProvider.createChangeRequest")(
       function* (input) {
         const locator = yield* resolveRepository(input);
@@ -1159,6 +1177,7 @@ export const make = Effect.gen(function* () {
             title: input.title,
             body,
             maintainer_can_modify: true,
+            ...(input.draft === true ? { draft: true } : {}),
           },
         });
       },
@@ -1189,7 +1208,24 @@ export const make = Effect.gen(function* () {
                 name: bareName,
               }
             : null);
-        if (locator === null) return yield* failure("Repositories are named owner/name.");
+        if (locator === null) {
+          const detail = "Repositories are named owner/name.";
+          return yield* failure(
+            detail,
+            new GitHubRepositoryLookupError({ userFacingDetail: detail }),
+          );
+        }
+        // Says which repository was not found, instead of the generic not-found message.
+        const explainNotFound = <E extends { readonly cause: unknown }>(error: E) => {
+          if (!isGitHubApiNotFoundError(error.cause)) return error;
+          const detail = SourceControlProvider.repositoryNotFoundDetail(
+            `${locator.owner}/${locator.name}`,
+          );
+          return failure(
+            detail,
+            new GitHubRepositoryLookupError({ userFacingDetail: detail, cause: error.cause }),
+          );
+        };
         const first = yield* readRepository(locator, cwd).pipe(Effect.result);
         if (Result.isSuccess(first)) return repositoryCloneUrls(first.success);
         // A clone only needs the repository's URLs, and git authenticates the clone through its own
@@ -1198,10 +1234,10 @@ export const make = Effect.gen(function* () {
         if (
           input.anyAccount !== true ||
           parseGitHubRepositorySelector(input.repository, fallbackHost) === null ||
-          !isGitHubNotFound(first.failure.cause) ||
+          !isGitHubApiNotFoundError(first.failure.cause) ||
           (yield* GitHubRequestPolicy.PinnedGitHubCredential) !== null
         ) {
-          return yield* first.failure;
+          return yield* explainNotFound(first.failure);
         }
         const others = yield* api.others(locator.host, cwd).pipe(Effect.orElseSucceed(() => []));
         for (const other of others) {
@@ -1215,7 +1251,7 @@ export const make = Effect.gen(function* () {
           );
           if (Result.isSuccess(retried)) return repositoryCloneUrls(retried.success);
         }
-        return yield* first.failure;
+        return yield* explainNotFound(first.failure);
       },
       (effect, input) =>
         effect.pipe(

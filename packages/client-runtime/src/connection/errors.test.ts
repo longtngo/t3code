@@ -7,6 +7,7 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  isHostCredentialRefusal,
   mapManagedRelayError,
   mapRemoteDpopEnvironmentError,
   mapRemoteEnvironmentError,
@@ -124,5 +125,19 @@ describe("mapRemoteDpopEnvironmentError", () => {
       _tag: "ConnectionTransientError",
       detail: `${error.message} ${NETWORK_BLOCKING_HINT}`,
     });
+  });
+
+  it("keeps a direct host's clock refusal apart from a refused pairing", () => {
+    const mapped = mapRemoteDpopEnvironmentError(
+      new EnvironmentAuthInvalidError({
+        code: "auth_invalid",
+        reason: "invalid_credential",
+        dpopFailureReason: "time_window",
+        traceId: "trace-clock",
+      }),
+      "direct",
+    );
+    expect(mapped).toMatchObject({ via: "direct", failureCause: "clock_skew" });
+    expect(isHostCredentialRefusal(mapped)).toBe(false);
   });
 });

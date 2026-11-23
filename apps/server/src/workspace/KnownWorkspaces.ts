@@ -23,7 +23,7 @@ export class UnknownWorkspaceError extends Schema.TaggedError<UnknownWorkspaceEr
   },
 ) {
   override get message(): string {
-    return `'${this.cwd}' is not a registered project, a managed worktree, or a thread's worktree.`;
+    return `'${this.cwd}' is not a registered project, a tracked folder, a managed worktree, or a thread's worktree.`;
   }
 }
 
@@ -92,6 +92,12 @@ export const make = Effect.gen(function* () {
         // FORK: a workspace member repository is the project's too (invariant 6).
         for (const member of project.members) {
           if (within(yield* resolveRoot(member.path))) return true;
+        }
+      }
+      // After every project folder: most tracked folders sit inside one and need no lookup.
+      for (const project of projects) {
+        for (const folder of project.trackedFolders ?? []) {
+          if (within(yield* resolveRoot(folder.path))) return true;
         }
       }
 

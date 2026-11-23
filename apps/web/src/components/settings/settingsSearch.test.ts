@@ -20,7 +20,7 @@ import {
   isSettingsSearchScopeAvailable,
   movedSettingsPath,
   searchSettings,
-  SETTINGS_NAV_GROUPS,
+  settingsNavGroups,
   SETTINGS_SEARCH_ITEMS,
   SETTINGS_SECTION_LABELS,
   sourceControlHostSearchItems,
@@ -28,11 +28,6 @@ import {
   type SettingsSearchItem,
 } from "./settingsSearch";
 import { SETTINGS_DEVICE_ONLY_PATHS } from "./SettingsScopeSentence";
-
-vi.mock("~/env", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("~/env")>()),
-  isSecretsFeatureEnabled: false,
-}));
 
 const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
@@ -87,9 +82,9 @@ describe("searchSettings", () => {
   // the fork's Notifications and Queue pages (reconcile 54). Every labelled page is in the nav
   // unless it is deliberately hidden.
   it("lists every labelled settings page in the nav except the deliberately hidden ones", () => {
-    // Secrets is listed only while its feature flag is on; this file mocks the flag off.
-    const hidden = new Set(["/settings/diagnostics", "/settings/secrets"]);
-    const navPaths = SETTINGS_NAV_GROUPS.flatMap((group) => group.paths);
+    // With secret providers enabled every group is listed, Secrets included.
+    const hidden = new Set(["/settings/diagnostics"]);
+    const navPaths = settingsNavGroups(true).flatMap((group) => group.paths);
     const missing = Object.keys(SETTINGS_SECTION_LABELS).filter(
       (path) => !hidden.has(path) && !navPaths.includes(path as (typeof navPaths)[number]),
     );
@@ -103,9 +98,35 @@ describe("searchSettings", () => {
     expect(SETTINGS_DEVICE_ONLY_PATHS.has("/settings/queue")).toBe(true);
   });
 
-  it("hides the Secrets page from nav and search while the secrets feature is disabled", () => {
-    expect(SETTINGS_NAV_GROUPS.flatMap((group) => group.paths)).not.toContain("/settings/secrets");
-    expect(searchSettings("1password").map((item) => item.to)).not.toContain("/settings/secrets");
+  it("shows the Secrets page in nav and search only when an environment enables secret providers", () => {
+    const availability = {
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+      hasAllowSpendingCredits: false,
+      hasJiraTicketLinks: false,
+    };
+    for (const enabled of [false, true]) {
+      const navPaths = settingsNavGroups(enabled).flatMap((group) => group.paths);
+      const searchPaths = searchSettings(
+        "1password",
+        filterAvailableSettingsSearchItems({
+          ...availability,
+          hasSecretProvidersEnvironment: enabled,
+        }),
+      ).map((item) => item.to);
+      expect(navPaths.includes("/settings/secrets")).toBe(enabled);
+      expect(searchPaths.includes("/settings/secrets")).toBe(enabled);
+    }
+  });
+
+  it("finds where subagents and side chats open by any of its names", () => {
+    for (const query of ["side panel", "subagent", "side chat", "linked thread", "middle click"]) {
+      expect(searchSettings(query).map((item) => item.id)).toContain("side-thread-open-target");
+    }
   });
 
   it("finds the Scheduled tasks page", () => {
@@ -178,6 +199,7 @@ describe("searchSettings", () => {
       "auto-settle-merged-threads",
       "days-before-auto-settle",
       "linked-environments",
+      "agent-feedback",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
   });

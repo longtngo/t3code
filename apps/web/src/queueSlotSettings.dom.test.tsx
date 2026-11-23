@@ -27,10 +27,11 @@ vi.mock("./state/session", async (importOriginal) => ({
 }));
 vi.mock("./state/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./state/server")>();
-  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const { Atom } = await import("effect/reactivity");
   const { DEFAULT_SERVER_SETTINGS } = await import("@t3tools/contracts");
   const primaryServerConfigAtom = Atom.make<{ settings: Record<string, unknown> } | null>(null);
-  const { Cause } = await import("effect");
+  const { Effect, Schema } = await import("effect");
+  class Offline extends Schema.TaggedError<Offline>()("Offline", {}) {}
   const label = actual.serverEnvironment.updateSettings.label;
   return {
     ...actual,
@@ -42,13 +43,18 @@ vi.mock("./state/server", async (importOriginal) => {
       ...actual.serverEnvironment,
       updateSettings: {
         label,
-        run: async (_registry: unknown, value: unknown) => {
-          fixture.calls.push({ label, value });
-          if (fixture.hold !== null) await fixture.hold;
-          return fixture.replyFails
-            ? AsyncResult.failure(Cause.fail(new Error("offline")))
-            : AsyncResult.success({ queueSlots: fixture.replyQueueSlots });
-        },
+        // A command's `run` returns an Effect; `runAtomCommand` settles it into an AsyncResult.
+        run: (_registry: unknown, value: unknown) =>
+          Effect.promise(async () => {
+            fixture.calls.push({ label, value });
+            if (fixture.hold !== null) await fixture.hold;
+          }).pipe(
+            Effect.flatMap(() =>
+              fixture.replyFails
+                ? Effect.fail(new Offline())
+                : Effect.succeed({ queueSlots: fixture.replyQueueSlots }),
+            ),
+          ),
       },
     },
   };

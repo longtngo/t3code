@@ -13,8 +13,8 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        // Fork ids: upstream's 055-080 apply as 64-89, then 90 is the Web Push repair and upstream's 081-098 are 91-108 (registry section 1).
-        Array.from({ length: 108 }, (_, index) => index + 1),
+        // Fork ids: upstream's 055-080 apply as 64-89, then 90 is the Web Push repair and upstream's 081-098 are 91-108, then upstream's 099-110 are 109-120 (registry section 1).
+        Array.from({ length: 120 }, (_, index) => index + 1),
       );
     }),
   );
@@ -72,6 +72,18 @@ layer("055_OrchestrationV2", (it) => {
         [106, "RepairStaleTitleRegeneration"],
         [107, "IssueTrackerBindings"],
         [108, "ActiveShellIndexIndexes"],
+        [109, "BackgroundRecoveryIndexes"],
+        [110, "TurnStartReadIndexes"],
+        [111, "DelegatedTaskReadIndexes"],
+        [112, "ThreadItemCounts"],
+        [113, "IssueTrackerAdditionalScopes"],
+        [114, "ProjectionProjectsTrackedFolders"],
+        [115, "TaskFolders"],
+        [116, "WorktreePathKeyIndex"],
+        [117, "DeferredSlashCommandIndex"],
+        [118, "AgentFeedback"],
+        [119, "IssueTrackerAccounts"],
+        [120, "Workflows"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -137,6 +149,18 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 106, name: "RepairStaleTitleRegeneration" },
         { migration_id: 107, name: "IssueTrackerBindings" },
         { migration_id: 108, name: "ActiveShellIndexIndexes" },
+        { migration_id: 109, name: "BackgroundRecoveryIndexes" },
+        { migration_id: 110, name: "TurnStartReadIndexes" },
+        { migration_id: 111, name: "DelegatedTaskReadIndexes" },
+        { migration_id: 112, name: "ThreadItemCounts" },
+        { migration_id: 113, name: "IssueTrackerAdditionalScopes" },
+        { migration_id: 114, name: "ProjectionProjectsTrackedFolders" },
+        { migration_id: 115, name: "TaskFolders" },
+        { migration_id: 116, name: "WorktreePathKeyIndex" },
+        { migration_id: 117, name: "DeferredSlashCommandIndex" },
+        { migration_id: 118, name: "AgentFeedback" },
+        { migration_id: 119, name: "IssueTrackerAccounts" },
+        { migration_id: 120, name: "Workflows" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

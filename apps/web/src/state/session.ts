@@ -7,6 +7,7 @@ import {
 import {
   type AuthEnvironmentScope,
   type AuthSessionState,
+  AuthRelayConfigureScope,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -62,6 +63,20 @@ export function readEnvironmentScopeDenied(
   );
 }
 
+export function useEnvironmentCanConfigureRelay(environmentId: EnvironmentId | null): boolean {
+  return useAtomValue(
+    environmentId === null
+      ? EMPTY_SESSION_STATE_ATOM
+      : environmentSession.sessionStateAtom(environmentId),
+    (result) => sessionHasScope(result, AuthRelayConfigureScope),
+  );
+}
+
+export function readEnvironmentCanConfigureRelay(environmentId: EnvironmentId): boolean {
+  const result = appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId));
+  return sessionHasScope(result, AuthRelayConfigureScope);
+}
+
 export function sessionHasScope(
   result: AsyncResult.AsyncResult<AuthSessionState, unknown>,
   scope: AuthEnvironmentScope,
@@ -111,6 +126,12 @@ export function usePreparedConnection(environmentId: EnvironmentId | null) {
       : environmentSession.preparedConnectionValueAtom(environmentId),
   );
 }
+
+/** Each environment's prepared connection, in the order of the ids. */
+export const preparedConnectionsAtom = environmentAtomList(
+  "web-prepared-connections",
+  environmentSession.preparedConnectionValueAtom,
+);
 
 export function readPreparedConnection(environmentId: EnvironmentId) {
   return Option.getOrNull(

@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { GitRefName, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { GitCommandError } from "./git.ts";
 import { VcsError } from "./vcs.ts";
 
@@ -8,7 +8,7 @@ import { VcsError } from "./vcs.ts";
  * file before git fails, making review RPCs a file-clobber primitive. Real refs never start with
  * `-`, so rejecting that shape costs nothing.
  */
-const GitRevision = TrimmedNonEmptyString.pipe(
+const GitRevision = GitRefName.pipe(
   Schema.check(
     Schema.makeFilter(
       (value: string) => !value.startsWith("-") || "a git revision cannot begin with '-'",
@@ -25,19 +25,39 @@ const GitPath = Schema.NonEmptyString.pipe(
   ),
 );
 
+// An object id or HEAD, never an option-looking ref, since it is passed to git as a revision.
+const ReviewMergeBase = Schema.String.check(
+  Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64}|HEAD)$/),
+);
+
+export const ReviewDiffChangeType = Schema.Literals([
+  "change",
+  "rename-pure",
+  "rename-changed",
+  "new",
+  "deleted",
+]);
+export type ReviewDiffChangeType = typeof ReviewDiffChangeType.Type;
+
 export const ReviewDiffPreviewInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   baseRef: Schema.optional(GitRevision),
+  // A branch-range file read reuses its preview's merge base instead of resolving it again.
+  mergeBase: Schema.optionalKey(ReviewMergeBase),
   commitSha: Schema.optional(GitRevision),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
   sourceKind: Schema.optionalKey(Schema.Literals(["working-tree", "branch-range"])),
   trackedOnly: Schema.optionalKey(Schema.Boolean),
+  /** From a trackedOnly result, so the complete read adds only the untracked files. */
+  completionToken: Schema.optionalKey(Schema.String),
   metadataOnly: Schema.optionalKey(Schema.Boolean),
   file: Schema.optionalKey(
     Schema.Struct({
       path: Schema.NonEmptyString,
       previousPath: Schema.NullOr(Schema.NonEmptyString),
       sourceKind: Schema.Literals(["working-tree", "branch-range", "commit"]),
+      // The preview's change type; the server still confirms a tracked path before relying on it.
+      changeType: Schema.optionalKey(ReviewDiffChangeType),
     }),
   ),
 });
@@ -68,15 +88,6 @@ export const ReviewDiffPreviewSourceKind = Schema.Literals([
 ]);
 export type ReviewDiffPreviewSourceKind = typeof ReviewDiffPreviewSourceKind.Type;
 
-export const ReviewDiffChangeType = Schema.Literals([
-  "change",
-  "rename-pure",
-  "rename-changed",
-  "new",
-  "deleted",
-]);
-export type ReviewDiffChangeType = typeof ReviewDiffChangeType.Type;
-
 export const ReviewDiffFileStat = Schema.Struct({
   path: Schema.String,
   previousPath: Schema.NullOr(Schema.String),
@@ -92,8 +103,10 @@ export const ReviewDiffPreviewSource = Schema.Struct({
   kind: ReviewDiffPreviewSourceKind,
   title: TrimmedNonEmptyString,
   commitSubject: Schema.optionalKey(TrimmedNonEmptyString),
-  baseRef: Schema.NullOr(TrimmedNonEmptyString),
-  headRef: Schema.NullOr(TrimmedNonEmptyString),
+  baseRef: Schema.NullOr(GitRefName),
+  headRef: Schema.NullOr(GitRefName),
+  // Branch-range only; older servers omit it.
+  mergeBase: Schema.optionalKey(ReviewMergeBase),
   diff: Schema.String,
   diffHash: TrimmedNonEmptyString,
   truncated: Schema.Boolean,
@@ -125,6 +138,7 @@ export const ReviewDiffPreviewResult = Schema.Struct({
   generatedAt: Schema.DateTimeUtc,
   sources: Schema.Array(ReviewDiffPreviewSource),
   incomplete: Schema.optionalKey(Schema.Boolean),
+  completionToken: Schema.optionalKey(Schema.String),
 });
 export type ReviewDiffPreviewResult = typeof ReviewDiffPreviewResult.Type;
 

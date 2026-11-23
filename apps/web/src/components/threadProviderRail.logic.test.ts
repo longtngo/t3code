@@ -170,7 +170,7 @@ describe("resolveThreadProviderPresentation", () => {
     ];
     const codex = resolveThreadProviderPresentation(codexId, bothNamedAlike);
     expect(codex?.displayName).toBe("PersonalSub (Codex)");
-    expect(codex?.initials).toBe("PE");
+    expect(codex?.initials).toBe("PS");
     expect(codex?.initials).not.toContain("(");
   });
 
@@ -180,7 +180,7 @@ describe("resolveThreadProviderPresentation", () => {
       { instanceId: uniSub, driver: claudeKind, displayName: "UniSub", accentColor: "#EA580C" },
       { instanceId: other, driver: codexKind, displayName: "Twin", accentColor: "#ea580c" },
     ];
-    expect(resolveThreadProviderPresentation(uniSub, cased)?.initials).toBe("UN");
+    expect(resolveThreadProviderPresentation(uniSub, cased)?.initials).toBe("US");
     expect(resolveThreadProviderPresentation(other, cased)?.initials).toBe("TW");
   });
 
