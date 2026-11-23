@@ -5506,67 +5506,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
-  // A workspace member's confirmed base lands in `branch.<name>.gh-merge-base`. Other tests
-  // write `main` there, the provider default, so they cannot tell the key is honoured; this one
-  // records an integration branch that is neither the default nor the branch's upstream.
-  it.effect("opens the pull request against the recorded base, not the default branch", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-member-pr-");
-      yield* initRepo(repoDir);
-      const remoteDir = yield* createBareRemote();
-      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
-      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
-      // The member's long-lived integration branch, which the user pinned the
-      // checkout to and which the pull request must compare against.
-      yield* runGit(repoDir, ["checkout", "-b", "pickup-v2"]);
-      NodeFS.writeFileSync(NodePath.join(repoDir, "integration.txt"), "integration\n");
-      yield* runGit(repoDir, ["add", "integration.txt"]);
-      yield* runGit(repoDir, ["commit", "-m", "Integration commit"]);
-      yield* runGit(repoDir, ["push", "-u", "origin", "pickup-v2"]);
-      // The branch the post-turn sweep cut for a thread, carrying both keys the
-      // sweep writes.
-      yield* runGit(repoDir, ["checkout", "-b", "t3code/member-work-1a2b3c4d"]);
-      NodeFS.writeFileSync(NodePath.join(repoDir, "member.txt"), "member\n");
-      yield* runGit(repoDir, ["add", "member.txt"]);
-      yield* runGit(repoDir, ["commit", "-m", "Member commit"]);
-      yield* runGit(repoDir, ["push", "-u", "origin", "t3code/member-work-1a2b3c4d"]);
-      yield* runGit(repoDir, [
-        "config",
-        "branch.t3code/member-work-1a2b3c4d.gh-merge-base",
-        "pickup-v2",
-      ]);
-      yield* runGit(repoDir, [
-        "config",
-        "branch.t3code/member-work-1a2b3c4d.t3code-thread",
-        "11111111-2222-3333-4444-555555555555",
-      ]);
-
-      let generatedBase: string | null = null;
-      const { manager, providerCalls } = yield* makeManager({
-        providerScenario: {
-          prListSequence: [[], []],
-          // What the provider would answer if the recorded base were ignored.
-          defaultBranch: "main",
-        },
-        textGeneration: {
-          generatePrContent: (input) => {
-            generatedBase = input.baseBranch;
-            return Effect.succeed({ title: "Member PR", body: "Member body" });
-          },
-        },
-      });
-
-      yield* runStackedAction(manager, { cwd: repoDir, action: "create_pr" });
-
-      expect(created(providerCalls)).toEqual([
-        { baseRefName: "pickup-v2", headSelector: "t3code/member-work-1a2b3c4d" },
-      ]);
-      // The generated title and body describe the same range the pull request
-      // opens, so a wrong base is not only a wrong target but a wrong summary.
-      expect(generatedBase).toBe("pickup-v2");
-    }),
-  );
-
   it.effect(
     "preserves a local worktree PR base that shadows a remote ref, including legacy bases",
     () =>

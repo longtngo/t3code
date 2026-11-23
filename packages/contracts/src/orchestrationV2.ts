@@ -88,7 +88,6 @@ import {
 } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
-import { CheckpointMemberState } from "./workspaceMember.ts";
 import { PROJECT_TRACKED_FOLDERS_MAX } from "./project.ts";
 import {
   TurnTokenUsage,
@@ -1636,12 +1635,6 @@ export const OrchestrationV2Checkpoint = Schema.Struct({
   ref: CheckpointRef,
   status: Schema.Literals(["ready", "missing", "error", "stale"]),
   files: Schema.Array(OrchestrationV2CheckpointFileSummary),
-  /**
-   * Fork: where each workspace member repository stood at capture. Absent when
-   * the project had no members (or the checkpoint predates members); a
-   * rollback then has nothing to compare and is treated as complete.
-   */
-  memberStates: Schema.optional(Schema.Array(CheckpointMemberState)),
   filesTotal: Schema.optionalKey(OrchestrationV2CheckpointFileTotals),
   capturedAt: Schema.DateTimeUtc,
 });

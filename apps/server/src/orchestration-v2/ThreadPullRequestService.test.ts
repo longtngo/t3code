@@ -98,7 +98,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         workspaceRoot: "/workspace/project",
         defaultModelSelection: null,
         scripts: [],
-        members: [],
         createdAt: "2026-08-01T00:00:00.000Z",
         updatedAt: "2026-08-01T00:00:00.000Z",
       };
@@ -270,7 +269,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         workspaceRoot: "/workspace/project",
         defaultModelSelection: null,
         scripts: [],
-        members: [],
         createdAt: "2026-08-01T00:00:00.000Z",
         updatedAt: "2026-08-01T00:00:00.000Z",
       };
@@ -434,7 +432,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           workspaceRoot: "/workspace/project",
           defaultModelSelection: null,
           scripts: [],
-          members: [],
           createdAt: "2026-08-01T00:00:00.000Z",
           updatedAt: "2026-08-01T00:00:00.000Z",
         };
@@ -534,7 +531,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             id: thread.projectId,
             title: "Wrapper",
             workspaceRoot: "/workspace/wrapper",
-            members: [],
             trackedFolders: ["api", "web", "docs"].map((name) => ({
               name,
               path: `/workspace/wrapper/${name}`,
@@ -701,7 +697,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         workspaceRoot: "/workspace/project",
         defaultModelSelection: null,
         scripts: [],
-        members: [],
         createdAt: "2026-08-01T00:00:00.000Z",
         updatedAt: "2026-08-01T00:00:00.000Z",
       };
@@ -827,7 +822,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         id: threads[0]!.projectId,
         title: "Project",
         workspaceRoot: "/workspace/project",
-        members: [],
         defaultModelSelection: null,
         scripts: [],
         createdAt: "2026-08-01T00:00:00.000Z",
@@ -946,7 +940,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           workspaceRoot: "/workspace/project",
           defaultModelSelection: null,
           scripts: [],
-          members: [],
           createdAt: "2026-08-01T00:00:00.000Z",
           updatedAt: "2026-08-01T00:00:00.000Z",
         };
@@ -1057,7 +1050,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           workspaceRoot: "/workspace/project",
           defaultModelSelection: null,
           scripts: [],
-          members: [],
           createdAt: "2026-08-01T00:00:00.000Z",
           updatedAt: "2026-08-01T00:00:00.000Z",
         };
@@ -1199,7 +1191,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         workspaceRoot: "/workspace/project",
         defaultModelSelection: null,
         scripts: [],
-        members: [],
         createdAt: "2026-08-01T00:00:00.000Z",
         updatedAt: "2026-08-01T00:00:00.000Z",
       };
@@ -1339,7 +1330,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         workspaceRoot: "/workspace/project",
         defaultModelSelection: null,
         scripts: [],
-        members: [],
         createdAt: "2026-08-01T00:00:00.000Z",
         updatedAt: "2026-08-01T00:00:00.000Z",
       };

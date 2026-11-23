@@ -90,7 +90,6 @@ function makeHarness(
               faviconPath: null,
               projectIcon: null,
               scripts: [],
-              members: [],
               trackedFolders: [],
               pinnedAt: null,
               archivedAt: null,

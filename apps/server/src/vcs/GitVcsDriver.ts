@@ -446,38 +446,6 @@ export class GitVcsDriver extends Context.Service<
       key: string,
     ) => Effect.Effect<string | null, GitCommandError>;
     /**
-     * Whether any file git already tracks differs from HEAD. Deliberately
-     * excludes untracked files, which say nothing about whether anything wrote
-     * to this repository.
-     */
-    readonly hasTrackedChanges: (cwd: string) => Effect.Effect<boolean, GitCommandError>;
-    /** The commit HEAD points at, or null when the repository has no commits. */
-    readonly readHeadSha: (cwd: string) => Effect.Effect<string | null, GitCommandError>;
-    /**
-     * A branch's raw reflog, empty when it has none. The reflog is local-only
-     * and expires under `gc.reflogExpire`, so absence is ordinary rather than
-     * an error.
-     */
-    readonly readBranchReflog: (
-      cwd: string,
-      branch: string,
-    ) => Effect.Effect<string, GitCommandError>;
-    /**
-     * Deletes a local branch, refusing when it holds commits that are not
-     * merged elsewhere. Used only to undo a branch this just created at HEAD,
-     * where nothing can be lost.
-     */
-    readonly deleteRef: (cwd: string, refName: string) => Effect.Effect<void, GitCommandError>;
-    /**
-     * Full refnames — `refs/heads/x`, `refs/remotes/origin/x` — whose tip is
-     * this commit. Full rather than short so local and remote-tracking refs
-     * stay distinguishable without knowing the remote's name.
-     */
-    readonly listBranchNamesPointingAt: (
-      cwd: string,
-      commit: string,
-    ) => Effect.Effect<ReadonlyArray<string>, GitCommandError>;
-    /**
      * The branch, named as on the host, that T3 recorded `branch` was cut from. Null when none
      * was recorded.
      */

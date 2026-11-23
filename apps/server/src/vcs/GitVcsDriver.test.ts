@@ -56,6 +56,18 @@ const runGit = (cwd: string, args: ReadonlyArray<string>) =>
     });
   });
 
+const readHeadSha = (cwd: string) =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const result = yield* driver.execute({
+      operation: "GitVcsDriver.contract.git",
+      cwd,
+      args: ["rev-parse", "HEAD"],
+      timeoutMs: 10_000,
+    });
+    return result.stdout.trim();
+  });
+
 const makeCaptureStore = Effect.fn("test.makeCaptureStore")(function* (
   driver: VcsDriver.VcsDriver["Service"],
   cwd: string,
@@ -137,7 +149,7 @@ it.live("an interrupted pull leaves no index.lock behind and does not move HEAD"
     yield* runGit(root, ["clone", "-q", `file://${upstream}`, clone]);
     yield* runGit(clone, ["config", "filter.slow.smudge", "sleep 0.1; cat"]);
     yield* runGit(clone, ["reset", "-q", "--hard", "HEAD~1"]);
-    const before = yield* driver.readHeadSha(clone);
+    const before = yield* readHeadSha(clone);
     assert.isString(before);
 
     const lockPath = path.join(clone, ".git", "index.lock");
@@ -158,7 +170,7 @@ it.live("an interrupted pull leaves no index.lock behind and does not move HEAD"
     assert.isFalse(yield* fileSystem.exists(lockPath), "index.lock was left behind");
     assert.isFalse(yield* fileSystem.exists(path.join(clone, ".git", "MERGE_HEAD")));
     // Unmoved HEAD is what separates "interrupted" from "left to finish on its own".
-    assert.strictEqual(yield* driver.readHeadSha(clone), before);
+    assert.strictEqual(yield* readHeadSha(clone), before);
   }).pipe(Effect.provide(layerGitContract)),
 );
 

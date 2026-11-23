@@ -45,7 +45,6 @@ import * as ProjectStore from "./ProjectStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
-import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 import { layerNoTaskFolders } from "./ProviderTurnStartService.testkit.ts";
 
 const unrelatedProject = Option.some({
@@ -101,7 +100,6 @@ it.effect.each(["initial", "waiting"])(
     const testLayer = layerCheckpointRollbackService.pipe(
       Layer.provide(
         Layer.mergeAll(
-          WorkspaceMemberHooks.inert,
           ThreadCommandExecutor.layer,
           Layer.mock(CheckpointService.CheckpointServiceV2)({
             restore,
@@ -236,7 +234,6 @@ it.effect.each([
     const testLayer = CheckpointRollbackService.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
-          WorkspaceMemberHooks.inert,
           ThreadCommandExecutor.layer,
           NodeServices.layer,
           layerNoTaskFolders,
@@ -458,7 +455,6 @@ it.effect.each([
       const testLayer = CheckpointRollbackService.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
-            WorkspaceMemberHooks.inert,
             ThreadCommandExecutor.layer,
             NodeServices.layer,
             Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as never),
@@ -801,7 +797,6 @@ const seedRollbackHistory = Effect.gen(function* () {
   const serviceLayer = layerCheckpointRollbackService.pipe(
     Layer.provide(
       Layer.mergeAll(
-        WorkspaceMemberHooks.inert,
         ThreadCommandExecutor.layer,
         IdAllocator.layer,
         Layer.mock(CheckpointService.CheckpointServiceV2)({

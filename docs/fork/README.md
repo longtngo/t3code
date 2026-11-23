@@ -47,7 +47,7 @@ The 55th reconcile (2026-11-04, 1,203 commits) brought Effect 4.1.2: `effect/Cry
 most 20 arguments, so long fork test layer pipes are split in two. Upstream's managed policy and
 secret providers are ported onto the fork's `serverSettings.ts` structure (raw-file cache, rescan,
 queue-slot guard); a test layer now needs `ManagedPolicy.layerTest()`. Upstream's pin/archive projects
-(migration id 85) sits beside the fork's `members`. Upstream's rm-safety deny for bypass mode in
+(migration id 85) sat beside the fork's `members` (retired at the 61st reconcile, invariant 42). Upstream's rm-safety deny for bypass mode in
 `ClaudeAdapterV2.ts` is unreachable here: the fork's full-access grant (`8e23d07b0`) allows a forwarded
 ask first. Upstream's event compaction is gone for pruning, and with it the fork's section-set
 compaction rule. The Claude context window is the CLI's number, then the catalog's, then the window
@@ -91,7 +91,7 @@ The 52nd reconcile (2026-10-23, 196 commits) brought upstream's split of `ChatVi
 `ComposerControlsBar.tsx`, ...). The fork's code in those blocks moved with them: the offline outbox
 and the Queue slot release live in the two send hooks, `claimThreadRewind` and the discard count in
 `useTimelineRewind`, the model pick's `basis` in `useComposerSelection`. The Stop ladder, the member
-guard banner, the strip toggle and the task/background panels stay in `ChatView`. Upstream also
+guard banner (retired at the 61st reconcile), the strip toggle and the task/background panels stay in `ChatView`. Upstream also
 pinned Node to exactly 26.12.1 (invariant 46) and made two lint rules errors that fork code broke:
 `no-em-dash-copy` (fork copy reworded) and `no-polling-loop-in-tests` (invariant 72).
 
@@ -113,8 +113,8 @@ The 50th reconcile (2026-10-19, 861 commits) brought three cross-cutting upstrea
 comment prune (#19559) touched 3,139 files. Web React tests moved to a real-browser `browser`
 project (`*.browser.test.tsx`, no jsdom or react-test-renderer), beside the fork's `dom` project
 (invariant 36). Every web file must now compile under the React Compiler (invariant 68). Upstream
-also added a workspace write guard, `KnownWorkspaces`, which here also admits member repositories
-(invariant 69), and migrations 063/064 (ids 72/73).
+also added a workspace write guard, `KnownWorkspaces`, which here also admitted member repositories
+until the 61st reconcile (invariant 69), and migrations 063/064 (ids 72/73).
 
 The 47th reconcile (2026-10-12, 319 commits) moved source control into
 `packages/source-control-*` (host settings now live under `sourceControlHosts`, edited by
@@ -431,41 +431,15 @@ is `1` or more, `grep -c "export function useEnvironmentConnectionSummaries" app
 is `1`, and `grep -c "<MachineBlock" apps/web/src/components/chat/VitalsGauge.tsx`
 is `0`.
 
-### 6. The workspace-repositories editor lives in upstream's project settings page
+### 6. RETIRED at the 61st reconcile: the workspace-repositories editor
 
-**Consolidated 2026-09-06; this entry moved with it.** Upstream `#5768`/`#5923` replaced the
-sidebar's project-settings dialog with a `/projects/$projectKey` route. The fork's editor for
-**workspace member repositories** — attaching one, choosing its integration branch, removing it —
-had been mounted in that dialog, so the 8th reconcile restored the deleted dialog behind a second
-ellipsis button rather than porting the editor. That arrangement is over: the editor is now a
-`SettingsSection` titled **Workspace repositories** in
-`apps/web/src/components/settings/ProjectSettingsPanel.tsx`, and `Sidebar.tsx` carries only
-upstream's gear. Probe: `grep -c 'SettingsSection title={gt("Workspace repositories")}'` on that
-file is `1` (upstream's copy gives 0). Since the 60th reconcile upstream wraps settings copy in
-`gt()`, so the plain-string title no longer matches.
-
-**What a reconcile must protect.** `ProjectSettingsPanel.tsx` is upstream-owned and churns — 27
-commits on `origin/main` since it was created — and it now holds the fork's only multi-repo mount on the
-default sidebar. This is the FORK-LOSS direction: an upstream rewrite of that file drops the row
-silently, and nothing about the deletion shows up as a conflict. The tripwire is
-`ProjectSettingsPanel.dom.test.tsx`, whose tests fail if the row goes, is fed the group
-representative's member list instead of each checkout's own, or stops honouring the write's result.
-Do not delete that file to resolve a merge.
-
-**Changed at the 36th reconcile:** upstream's per-project scoped settings rewrite removed the
-checkout `Select` the fork's row used to hang off. The row is now rendered **once per checkout**,
-each labelled by its environment and workspace root, each with its own
-`WorkspaceMembersControl` keyed by `physicalProjectKey`. Same guarantee, no fork-only selector.
-Two consequences: the panel's children now read `useSettingsScope`, so any test mounting
-`ProjectSettingsPanel` must wrap it in `SettingsScopeProvider` or `ProjectActionsSettings` throws;
-and the old "does not resurrect an abandoned edit when the checkout is switched back" test is gone
-with the switching, replaced by one asserting a single open editor.
-
-Scope of the row: `members` is a field on the **physical project**, so each row writes to its own
-checkout and must never go through `updateAllMembers`.
-
-Per-member project **renaming** ended with the dialog on the default sidebar — upstream's Name is
-group-level by design, and the per-member inputs were upstream's own deleted code.
+The fork's **workspace members** (extra repositories attached to a project, each on its own
+integration branch) are gone, and with them the **Workspace repositories** section of
+`ProjectSettingsPanel.tsx`, `WorkspaceMembersControl`, `WorkspaceMemberEditor`, the file panel's
+repository bar and the composer's member guard banner. Upstream's multi-repository projects (#35925)
+replace them: `trackedFolders` on the project, edited in upstream's `ProjectRepositoriesSettings`,
+with task folders and per-repository checkpoints, diffs and git actions. `ProjectSettingsPanel.tsx`
+is byte-identical to upstream again.
 
 ### 7. Stop is two rungs: `run.interrupt` `mode: "cooperative"`, then `"hard"`
 
@@ -833,10 +807,8 @@ says so.
 and `WorkspaceBrowserPreview` (HTML/PDF in place) are adopted, and the fork's component is
 narrowed to `WorkspaceAudioPreview` — audio has no upstream branch at all. Upstream's browsable
 `FileBreadcrumbs` (#8910) replaced the fork's display-only crumb list. It takes the root label as
-`projectName`, and the fork passes **`fileRepoName`** — the repository the open file actually came
-from — not the project's name. The two differ exactly when a file is opened out of an attached
-workspace member, which is the wrong-root confusion the fork's label fix exists to prevent; the
-merge dropped the only call site and left the label disagreeing with the `cwd` beside it.
+`projectName`. Until the 61st reconcile the fork passed the name of the workspace member a file was
+opened from; with members retired it passes the project's name, as upstream does.
 
 ### 22. Claude adapter tests: real slugs with the bundled catalog where the model IS the subject
 
@@ -1226,17 +1198,15 @@ fork's `×N` repeat count (in the row text and its accessible name) is also lost
 was already gone before this unit, at the v2 merge base (`coalesceRepeatedWorkLogEntries` had
 no caller), and U6 did not restore it.
 
-### 42. Upstream's new test fixtures do not set `members`
+### 42. RETIRED at the 61st reconcile: the fork's required `members` field
 
-`OrchestrationProjectShell` and `Project` (contracts) carry a fork-only required `members` array
-(workspace members, `projection_projects.members_json`, migration id 39; decodes absent as `[]`).
-Every project fixture upstream adds needs `members: []` appended, and the only thing that names
-them is the **repo-wide** typecheck: they land in files that merge without a single conflict
-marker (five in the 34th reconcile; over twenty across server, client-runtime and web at the orchestrator-v2
-port). v2's project store (`orchestration-v2/ProjectStore.ts`) reads and writes the same column;
-`grep -c members_json` on it is non-zero (upstream's copy gives 0). Members live only in that column:
-the baseline project events migration 64 (`OrchestrationV2`) writes carry no members, so a future
-change that rebuilds projects from events would silently drop every project's members.
+Projects no longer carry `members` (contracts, the v2 `ProjectStore`, the project mutation and its
+event payload), so upstream's project fixtures merge as they are. Migrations 038/039 (ids 39/40) stay
+in the manifest (invariant 1); `projection_projects.members_json` is simply no longer read or
+written. Both live databases had no project with members, so nothing was migrated. Stored shells,
+`project.meta-updated` events and client caches that still hold `members` decode with the key
+dropped (`packages/contracts/src/project.test.ts`, "payloads written while workspace members
+existed"). Upstream's `trackedFolders` is the multi-repository field now.
 
 ### 43. The fork's revert prompt-restore is RETIRED; upstream's rewind owns it
 
@@ -1319,15 +1289,14 @@ fork's task panels pass.
 `followUpBehavior` (default `"queue"`), `thread.steerQueuedMessage` and `composer.sendAlternate`
 are upstream's v2 model and are adopted (invariant 5).
 
-### 53. Workspace member states live on the v2 checkpoint payload
+### 53. RETIRED at the 61st reconcile: member states on the v2 checkpoint
 
-Since the orchestrator-v2 port, checkpoints are v2's (`orchestration_v2_projection_checkpoints`,
-JSON payload), and the fork's optional `memberStates` is a field of `OrchestrationV2Checkpoint`
-(contracts), recorded by `CheckpointCaptureService` through `WorkspaceMemberHooks` and read by the
-rollback guard at admission (`Orchestrator`) and execution (`CheckpointRollbackService`). The V1
-`ProjectionCheckpointRepository` and `checkpoint_member_states_json` (id 40) are no longer read;
-v2 imports no V1 checkpoints. An upstream rewrite of the checkpoint schema must keep `memberStates`
-optional, or every checkpoint captured without members stops decoding.
+`OrchestrationV2Checkpoint` no longer has `memberStates`, and `WorkspaceMemberHooks` (capture,
+post-run branch sweep, the `workspace-members-moved` rollback refusal in `Orchestrator` and
+`CheckpointRollbackService`) is deleted along with the member branch service and its three
+`workspace.member*` RPCs. Upstream's per-repository checkpoint scopes cover a project's tracked
+folders instead. A stored checkpoint that still has `memberStates` decodes with it dropped (same test
+as invariant 42).
 
 ### 54. A folder opened from chat shows the fork's listing, not upstream's revealed tree
 
@@ -1574,14 +1543,16 @@ the test red until its entry is deleted. Upstream-owned files (`Sidebar.tsx`, `S
 `ChatView.tsx`) are never listed: fork code inside them was made compliant. Fix a listed file, then
 delete its entry; never add an upstream file.
 
-### 69. Upstream's workspace write guard also admits member repositories
+### 69. RETIRED at the 61st reconcile: the write guard's member loop
 
-`workspace/KnownWorkspaces.ts` (upstream #20449) refuses file writes outside a registered project,
-a managed worktree or a thread worktree. A fork workspace member (`members[].path`, invariant 42) is an
-arbitrary path, so the guard also accepts any path inside a project's member. Test:
-`KnownWorkspaces.test.ts`, seen red with the member loop removed. Probe:
-`grep -c 'resolveRoot(member.path)' apps/server/src/workspace/KnownWorkspaces.ts` is `1`.
-Upstream's review folder check from the same commit stays rejected (`ReviewService.ts`).
+`workspace/KnownWorkspaces.ts` is byte-identical to upstream again. Its tracked-folder check already
+admits every folder of a multi-repository project, which is what the fork's member loop did for
+members. The fork-only `KnownWorkspaces.test.ts` went with the loop.
+
+**Still rejected:** upstream's review folder check from the same commit (#20449). Review reads are not
+bound to known workspaces, because the server's cwd is often no project's and every diff failed;
+`filesystem:read`, which the review RPCs require, is what authorizes them (`ReviewService.ts` module
+doc, `server.ts` `layerReview`).
 
 ### 70. Three upstream features from the 51st reconcile stay rejected
 

@@ -9,7 +9,6 @@ import {
   ThreadId,
   VcsProcessExitError,
 } from "@t3tools/contracts";
-import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -42,7 +41,6 @@ import * as ProjectStore from "./ProjectStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyAboveCeilingError, RuntimePolicyV2 } from "./RuntimePolicy.ts";
-import { WorkspaceMemberHooks } from "./WorkspaceMemberHooks.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
 export const ROLLBACK_FAILED_MESSAGE =
@@ -57,13 +55,10 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
       "provider-turn-unavailable",
       "unexpected-failure",
       "shared-workspace",
-      "workspace-members-moved",
     ]),
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
     checkpointId: CheckpointId,
-    /** Fork: names the moved workspace members for "workspace-members-moved". */
-    detail: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -77,11 +72,6 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
         return `Provider turn for rollback target ${this.checkpointId} is unavailable on provider thread ${this.providerThreadId}.`;
       case "shared-workspace":
         return SHARED_WORKSPACE_RESTORE_MESSAGE;
-      case "workspace-members-moved":
-        return (
-          this.detail ??
-          `Rollback target ${this.checkpointId} on thread ${this.threadId} would leave workspace member repositories out of step.`
-        );
       case "unexpected-failure":
         return ROLLBACK_FAILED_MESSAGE;
     }
@@ -105,22 +95,6 @@ export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionE
     ? GIT_INDEX_LOCKED_DETAIL
     : ROLLBACK_FAILED_MESSAGE;
 }
-
-/**
- * What a client is told when a rollback fails for good: a workspace-member
- * refusal names the members that moved; anything else gets
- * `rollbackFailureClientMessage`.
- */
-export const rollbackFailureMessage = (cause: Cause.Cause<unknown>): string =>
-  Option.match(Cause.findErrorOption(cause), {
-    onNone: () => ROLLBACK_FAILED_MESSAGE,
-    onSome: (error) =>
-      isCheckpointRollbackExecutionError(error) && error.reason === "workspace-members-moved"
-        ? error.message
-        : isCheckpointRollbackExecutionError(error)
-          ? rollbackFailureClientMessage(error)
-          : ROLLBACK_FAILED_MESSAGE,
-  });
 
 export interface CheckpointRollbackServiceV2Shape {
   readonly execute: (input: {
@@ -152,7 +126,6 @@ export const layer: Layer.Layer<
   | FileSystem.FileSystem
   | Path.Path
   | ProjectStore.ProjectStoreV2
-  | WorkspaceMemberHooks
   | ServerConfig.ServerConfig
   | ServerSettings.ServerSettingsService
   | TaskFolders.TaskFolders
@@ -170,7 +143,6 @@ export const layer: Layer.Layer<
     const fileSystem = yield* FileSystem.FileSystem;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const path = yield* Path.Path;
-    const workspaceMembers = yield* WorkspaceMemberHooks;
     const taskFolders = yield* TaskFolders.TaskFolders;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
@@ -360,26 +332,6 @@ export const layer: Layer.Layer<
           }
         }
       }
-      // Fork: re-check for a member that moved while the rollback waited in the lane. A move
-      // between this read and the file restore is not caught: members are read, never locked.
-      const memberRefusal =
-        input.restoreFiles === false
-          ? null
-          : yield* workspaceMembers.rollbackRefusal({
-              threadId: input.threadId,
-              projectId: context.thread.projectId,
-              checkpoint,
-            });
-      if (memberRefusal !== null) {
-        return yield* new CheckpointRollbackExecutionError({
-          reason: "workspace-members-moved",
-          threadId: input.threadId,
-          providerThreadId: input.providerThreadId,
-          checkpointId: input.checkpointId,
-          detail: memberRefusal,
-        });
-      }
-
       if (restoreFiles && !(yield* isolated)) return yield* sharedWorkspace();
 
       // Before the provider conversation changes: a rewind with nothing to restore is refused.

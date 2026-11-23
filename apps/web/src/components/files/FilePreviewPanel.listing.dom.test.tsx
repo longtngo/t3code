@@ -52,10 +52,6 @@ vi.mock("~/state/filesystem", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/filesystem")>()),
   useFilesystemReadAccess: () => ({ canReadFiles: true, isPending: false, error: null }),
 }));
-vi.mock("~/hooks/useWorkspaceRepos", () => ({
-  useWorkspaceRepos: () => [],
-  resolveActiveRepo: () => null,
-}));
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("~/state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/session")>()),

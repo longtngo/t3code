@@ -70,7 +70,6 @@ import * as TurnItemPositionStore from "../TurnItemPositionStore.ts";
 import * as RuntimeRequestService from "../RuntimeRequestService.ts";
 import * as ThreadCommandExecutor from "../ThreadCommandExecutor.ts";
 import * as ThreadForkService from "../ThreadForkService.ts";
-import * as WorkspaceMemberHooks from "../WorkspaceMemberHooks.ts";
 import {
   runOrchestratorV2Scenario,
   type OrchestratorV2ScenarioStepError,
@@ -519,7 +518,6 @@ export function layerWithRegistry<Error>(
         layerProviderSessionManagerProvided,
         ThreadCommandExecutor.layer,
         layerRuntime,
-        WorkspaceMemberHooks.inert,
         layerServerConfig,
         layerServerSettings,
       ),
@@ -537,13 +535,7 @@ export function layerWithRegistry<Error>(
     ),
   );
   const layerRunFinalizationServiceProvided = RunFinalizationService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        layerCheckpointCaptureServiceProvided,
-        layerStores,
-        WorkspaceMemberHooks.inert,
-      ),
-    ),
+    Layer.provide(Layer.merge(layerCheckpointCaptureServiceProvided, layerStores)),
   );
   const layerThreadTitleRegenerationTest = Layer.succeed(
     ThreadTitleRegenerationService.ThreadTitleRegenerationService,
@@ -569,7 +561,6 @@ export function layerWithRegistry<Error>(
         layerServerSettings,
         TaskFolderStore.layer.pipe(Layer.provide(layerDatabase)),
         ThreadForkService.layer,
-        WorkspaceMemberHooks.inert,
       ),
     ),
   );

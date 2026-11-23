@@ -959,8 +959,8 @@ export function branchMismatchKey(
 
 // A banner about what *sending* will do shows only with draft content, the intent signal: composer
 // focus is useless because ChatView autofocuses it. `wasShownForCurrentCondition` keeps it mounted
-// once revealed so it does not flicker away when the draft clears. Shared by the branch-mismatch
-// banner and the workspace-member guard.
+// once revealed so it does not flicker away when the draft clears. Used by the branch-mismatch
+// banner.
 export function shouldShowComposerIntentBanner(input: {
   hasCondition: boolean;
   isDismissed: boolean;

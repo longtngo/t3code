@@ -408,34 +408,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.isUndefined(options.extraArgs?.["dangerously-skip-permissions"]);
   });
 
-  // Fork: workspace members.
-  it("grants workspace member repositories beyond cwd and reopens the query when they change", () => {
-    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
-      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-      nativeThreadId: "native-thread-members",
-      resume: false,
-      cwd: "/workspace",
-      attachmentsDir: "/attachments",
-      memberDirectories: ["/repos/warehouse", "/repos/api"],
-    });
-    assert.deepEqual(options.additionalDirectories, [
-      "/workspace",
-      "/attachments",
-      "/repos/warehouse",
-      "/repos/api",
-    ]);
-
-    const policy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
-      CLAUDE_TEST_RUNTIME_POLICY,
-    );
-    const keyFor = (members: ReadonlyArray<string>) =>
-      ClaudeAdapterV2.claudeLiveQueryKey(policy, {}, members);
-    assert.equal(keyFor([]), ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(policy, {}));
-    assert.equal(keyFor(["/repos/warehouse"]), keyFor(["/repos/warehouse"]));
-    assert.notEqual(keyFor(["/repos/warehouse"]), keyFor([]));
-    assert.notEqual(keyFor(["/repos/warehouse"]), keyFor(["/repos/warehouse", "/repos/api"]));
-  });
-
   it("passes the thread's other folders and every --add-dir and --plugin-dir launch directory to Claude", () => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,

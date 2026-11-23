@@ -37,7 +37,6 @@ const checkouts = environmentIds.map((environmentId) => ({
   physicalProjectKey: `${environmentId}:proj-${environmentId}`,
   environmentLabel: environmentId,
   title: "web",
-  members: [],
   scripts: [],
   workspaceRoot: `/srv/${environmentId}/web`,
 }));

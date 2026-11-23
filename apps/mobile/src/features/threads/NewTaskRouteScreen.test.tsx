@@ -19,7 +19,6 @@ function project(id: string, workspaceRoot: string): EnvironmentProject {
     defaultModelSelection: null,
     defaultThreadEnvMode: "worktree",
     scripts: [],
-    members: [],
     createdAt: "2026-10-26T00:00:00Z",
     updatedAt: "2026-10-26T00:00:00Z",
   };

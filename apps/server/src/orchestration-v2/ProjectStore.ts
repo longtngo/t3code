@@ -8,7 +8,6 @@ import {
   ProjectScript,
   ProjectTrackedFolders,
   ThreadEnvMode,
-  WorkspaceMember,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -42,8 +41,6 @@ export const ProjectRow = Schema.Struct({
   faviconPath: Schema.NullOr(Schema.String),
   projectIcon: Schema.NullOr(StoredProjectIcon),
   scripts: Schema.Array(ProjectScript),
-  /** Fork: workspace member repositories (`members_json`, migration id 39). */
-  members: Schema.Array(WorkspaceMember),
   trackedFolders: ProjectTrackedFolders,
   pinnedAt: Schema.NullOr(IsoDateTime),
   archivedAt: Schema.NullOr(IsoDateTime),
@@ -60,7 +57,6 @@ const ProjectDbRow = Schema.Struct({
   autoPull: Schema.BooleanFromBit,
   projectIcon: Schema.NullOr(Schema.fromJsonString(StoredProjectIcon)),
   scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
-  members: Schema.fromJsonString(Schema.Array(WorkspaceMember)),
   trackedFolders: Schema.fromJsonString(ProjectTrackedFolders),
 });
 
@@ -77,7 +73,6 @@ function toShell(row: ProjectRow): OrchestrationProjectShell {
     faviconPath: row.faviconPath,
     projectIcon: row.projectIcon,
     scripts: row.scripts,
-    members: row.members,
     trackedFolders: row.trackedFolders,
     pinnedAt: row.pinnedAt,
     archivedAt: row.archivedAt,
@@ -137,7 +132,6 @@ export const make = Effect.gen(function* () {
         favicon_path AS "faviconPath",
         project_icon_json AS "projectIcon",
         scripts_json AS "scripts",
-        members_json AS "members",
         tracked_folders_json AS "trackedFolders",
         pinned_at AS "pinnedAt",
         archived_at AS "archivedAt",
@@ -172,7 +166,6 @@ export const make = Effect.gen(function* () {
             favicon_path,
             project_icon_json,
             scripts_json,
-            members_json,
             tracked_folders_json,
             pinned_at,
             archived_at,
@@ -191,7 +184,6 @@ export const make = Effect.gen(function* () {
             ${encoded.faviconPath},
             ${encoded.projectIcon},
             ${encoded.scripts},
-            ${encoded.members},
             ${encoded.trackedFolders},
             ${encoded.pinnedAt},
             ${encoded.archivedAt},
@@ -214,7 +206,6 @@ export const make = Effect.gen(function* () {
             favicon_path = excluded.favicon_path,
             project_icon_json = excluded.project_icon_json,
             scripts_json = excluded.scripts_json,
-            members_json = excluded.members_json,
             tracked_folders_json = excluded.tracked_folders_json,
             pinned_at = excluded.pinned_at,
             archived_at = excluded.archived_at,
@@ -267,7 +258,6 @@ export const make = Effect.gen(function* () {
           faviconPath: payload.faviconPath ?? null,
           projectIcon: payload.projectIcon ?? null,
           scripts: payload.scripts,
-          members: [],
           trackedFolders: payload.trackedFolders ?? [],
           pinnedAt: null,
           archivedAt: null,
@@ -301,7 +291,6 @@ export const make = Effect.gen(function* () {
         ...(payload.faviconPath === undefined ? {} : { faviconPath: payload.faviconPath }),
         ...(payload.projectIcon === undefined ? {} : { projectIcon: payload.projectIcon }),
         ...(payload.scripts === undefined ? {} : { scripts: payload.scripts }),
-        ...(payload.members === undefined ? {} : { members: payload.members }),
         ...(payload.trackedFolders === undefined ? {} : { trackedFolders: payload.trackedFolders }),
         ...(payload.pinnedAt === undefined ? {} : { pinnedAt: payload.pinnedAt }),
         ...(payload.archivedAt === undefined ? {} : { archivedAt: payload.archivedAt }),

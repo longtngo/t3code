@@ -144,7 +144,6 @@ import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
-import * as WorkspaceMemberBranches from "./workspace/WorkspaceMemberBranches.ts";
 import * as WorkspaceFolders from "./workspace/WorkspaceFolders.ts";
 import * as TaskFolders from "./workspace/TaskFolders.ts";
 import * as TaskFolderStore from "./workspace/TaskFolderStore.ts";
@@ -540,12 +539,6 @@ const layerVcs = Layer.empty.pipe(
       // consumes the broadcaster (run finalization), so the policy cannot read
       // the store from the runtime's output.
       Layer.provide(layerVcsAutoPullPolicy),
-    ),
-  ),
-  Layer.provideMerge(
-    WorkspaceMemberBranches.layer.pipe(
-      Layer.provide(layerVcsDriverRegistry),
-      Layer.provide(GitVcsDriver.layer),
     ),
   ),
 );

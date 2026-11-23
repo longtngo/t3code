@@ -498,14 +498,6 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
-import {
-  WorkspaceMemberActionPrepareInput,
-  WorkspaceMemberActionPrepareResult,
-  WorkspaceMemberBranchesInput,
-  WorkspaceMemberBranchesResult,
-  WorkspaceMemberPrBaseWriteInput,
-  WorkspaceMemberPrBaseWriteResult,
-} from "./workspaceMember.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
@@ -566,9 +558,6 @@ export const WS_METHODS = {
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsRefreshLocalStatus: "vcs.refreshLocalStatus",
-  workspaceMemberBranches: "workspace.memberBranches",
-  workspaceMemberActionPrepare: "workspace.memberActionPrepare",
-  workspaceMemberPrBaseWrite: "workspace.memberPrBaseWrite",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
@@ -1964,41 +1953,11 @@ const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
 
 /**
  * Recomputes a repository's local status without touching its remote. Watchers only
- * refresh a thread's own cwd, so a workspace member's badge would otherwise never update.
+ * refresh a thread's own cwd, so another repository's badge would otherwise never update.
  */
 export const WsVcsRefreshLocalStatusRpc = Rpc.make(WS_METHODS.vcsRefreshLocalStatus, {
   payload: VcsStatusInput,
   success: VcsStatusLocalResult,
-  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
-});
-
-/**
- * Per-member branch state from one thread's view. Members share one checkout, so showing
- * which repository another thread is in is the only protection against collisions.
- */
-export const WsWorkspaceMemberBranchesRpc = Rpc.make(WS_METHODS.workspaceMemberBranches, {
-  payload: WorkspaceMemberBranchesInput,
-  success: WorkspaceMemberBranchesResult,
-  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
-});
-
-/**
- * Puts a member repository on its feature branch before the user's action runs,
- * and reports the pull-request base that action would use.
- *
- * Separate from `workspace.memberBranches`, which only reads: this one writes,
- * and it is the git panel's half of the same cut the post-run sweep performs.
- */
-export const WsWorkspaceMemberActionPrepareRpc = Rpc.make(WS_METHODS.workspaceMemberActionPrepare, {
-  payload: WorkspaceMemberActionPrepareInput,
-  success: WorkspaceMemberActionPrepareResult,
-  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
-});
-
-/** Records a pull-request base the user confirmed. */
-export const WsWorkspaceMemberPrBaseWriteRpc = Rpc.make(WS_METHODS.workspaceMemberPrBaseWrite, {
-  payload: WorkspaceMemberPrBaseWriteInput,
-  success: WorkspaceMemberPrBaseWriteResult,
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
@@ -2823,9 +2782,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsWorktreeSetupCancelRpc,
   WsVcsPullRpc,
   WsVcsRefreshLocalStatusRpc,
-  WsWorkspaceMemberBranchesRpc,
-  WsWorkspaceMemberActionPrepareRpc,
-  WsWorkspaceMemberPrBaseWriteRpc,
   WsVcsRefreshStatusRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,

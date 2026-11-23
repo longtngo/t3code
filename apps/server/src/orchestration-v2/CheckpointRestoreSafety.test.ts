@@ -26,7 +26,6 @@ import { ProjectionStoreV2, type ProjectionCheckpointRollbackContext } from "./P
 import * as ProjectStore from "./ProjectStore.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
-import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 import { layerNoTaskFolders } from "./ProviderTurnStartService.testkit.ts";
 
 it.effect.each([
@@ -102,7 +101,6 @@ it.effect.each([
           ServerSettings.layerTest(),
           ThreadCommandExecutor.layer,
           IdAllocator.layer,
-          WorkspaceMemberHooks.inert,
           layerNoTaskFolders,
           Layer.mock(GitWorkflowService.GitWorkflowService)({}),
           Layer.mock(ProjectStore.ProjectStoreV2)({

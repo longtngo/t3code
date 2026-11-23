@@ -442,33 +442,6 @@ afterAll(() => {
   if (repoTemplate) NodeFS.rmSync(repoTemplate, { recursive: true, force: true });
 });
 
-// `git rev-parse HEAD` with no commits prints "HEAD" and exits 128; reading stdout regardless
-// made two unborn members compare EQUAL at revert time, reading as "nothing moved".
-it.effect("reports no head sha for a repository with no commits", () =>
-  Effect.gen(function* () {
-    const driver = yield* GitVcsDriver.GitVcsDriver;
-    const cwd = yield* makeTmpDir();
-    yield* driver.initRepo({ cwd });
-
-    const head = yield* driver.readHeadSha(cwd);
-    assert.isNull(head);
-  }).pipe(Effect.provide(layerTest)),
-);
-
-// The control: a real head still comes back, so the fix above cannot be "return
-// null always", which would pass the assertion by making the reader blind.
-it.effect("still reports the head sha once a commit exists", () =>
-  Effect.gen(function* () {
-    const driver = yield* GitVcsDriver.GitVcsDriver;
-    const cwd = yield* makeTmpDir();
-    yield* initRepoWithCommit(cwd);
-
-    const head = yield* driver.readHeadSha(cwd);
-    assert.isNotNull(head);
-    assert.match(head ?? "", /^[0-9a-f]{40}$/);
-  }).pipe(Effect.provide(layerTest)),
-);
-
 it.effect.each(["root", "nested", "worktree"] as const)(
   "skips clean filters while the %s index is locked and resumes after unlock",
   (location) =>

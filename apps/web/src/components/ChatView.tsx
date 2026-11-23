@@ -223,7 +223,6 @@ import { isEditableFocused } from "../lib/editableFocus";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { shortcutLabelForCommand } from "../keybindings";
 import { cn } from "~/lib/utils";
-import { CircleHelpIcon, TriangleAlertIcon } from "lucide-react";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { toastManager } from "./ui/toast";
 import { projectScriptIdFromCommand } from "~/projectScripts";
@@ -277,7 +276,7 @@ import { type TerminalContextDraft } from "../lib/terminalContext";
 import { collectInlineContextIds } from "../lib/composerContextReferences";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
-import { useEnvironmentQuery, useEnvironmentQueryRefresh } from "../state/query";
+import { useEnvironmentQueryRefresh } from "../state/query";
 import { revisionedQuery } from "../state/revisionedQuery";
 import { useEnvironmentScope } from "~/state/session";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "../state/server";
@@ -371,16 +370,6 @@ import { useIncrementalTimelineEntries } from "../hooks/useIncrementalTimelineEn
 import { useRightPanelSurfaceClose } from "../hooks/useRightPanelSurfaceClose";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { modelFallbackBannerItem } from "./chat/ComposerUsageLimits";
-import {
-  contestedMembersKey,
-  describeContestedMembers,
-  describeUnknownMemberGuard,
-  dismissContestedMembersForSession,
-  resolveMemberGuardState,
-  selectContestedMembers,
-  withoutDismissedContestedMembers,
-} from "./chat/composerMemberGuard";
-import { resolveWorkspaceRepos } from "../hooks/useWorkspaceRepos.logic";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { resolveThreadSyncPhase } from "../threadSync";
 import { hasAvailableCompactionProvider } from "./chat/compaction.logic";
@@ -403,7 +392,6 @@ import {
   outboxTimelineMessages,
   recallLatestQueuedMessage,
   serverHeldMessageIds,
-  shouldShowComposerIntentBanner,
   shouldRenderPreviewMiniPlayer,
   deriveLockedProvider,
   resolveFileAttachmentUrl,
@@ -2968,133 +2956,7 @@ export default function ChatView(props: ChatViewProps) {
       : null,
     messages,
   );
-  // FORK: the pre-turn workspace member guard. Threads share one checkout per attached repo, so
-  // showing the collision before the send is the only protection. Derived from the project, not
-  // `useWorkspaceRepos` (the entity store), because a draft is not in that store yet and its first
-  // turn is when a member most likely sits on somebody else's branch.
-  const composerHasDraftContent = useComposerDraftStore((store) =>
-    composerDraftHasUserContent(store.getComposerDraft(composerDraftTarget)),
-  );
-  const workspaceRepos = resolveWorkspaceRepos({
-    project: activeProject ?? null,
-    threadWorktreePath: activeThread?.worktreePath ?? null,
-  });
-  const workspaceHasMembers = workspaceRepos.some((repo) => repo.kind === "member");
-  const memberBranchesQuery = useEnvironmentQuery(
-    workspaceHasMembers && activeThread
-      ? vcsEnvironment.memberBranches({
-          environmentId: activeThread.environmentId,
-          input: { projectId: activeThread.projectId, threadId: activeThread.id },
-        })
-      : null,
-  );
-  const memberPathsById = new Map(
-    (activeProject?.members ?? []).map((member) => [member.id, member.path]),
-  );
-  // Dismissals live in a module-level set so they survive a remount; this tick
-  // is what re-derives the list after one. The compiler cannot see the set, so the
-  // tick is read in the expression itself to make it an input of the cached value.
-  const [contestedMembersDismissTick, setContestedMembersDismissTick] = useState(0);
-  const contestedMembers = withoutDismissedContestedMembers(
-    contestedMembersDismissTick >= 0 ? (activeThread?.id ?? null) : null,
-    selectContestedMembers({
-      reports: memberBranchesQuery.data?.reports ?? [],
-      repos: workspaceRepos,
-      pathsByMemberId: memberPathsById,
-    }),
-  );
-  // A check that could not run must never read as a check that came back clean
-  // — that is the exact shape of the bug this feature was built around.
-  const memberGuardState = resolveMemberGuardState({
-    hasMembers: workspaceHasMembers,
-    hasAnswer: memberBranchesQuery.data !== null,
-    hasError: memberBranchesQuery.error !== null,
-    isEnvironmentUnavailable: activeEnvironmentUnavailableState !== null,
-    contested: contestedMembers,
-  });
-  const activeContestedMembersKey = contestedMembersKey(activeThread?.id ?? null, contestedMembers);
-  // The banner's identity has to cover the unknown states too, or moving from
-  // "checking" to a warning would inherit the hysteresis of the wrong thing.
-  const memberGuardKey =
-    memberGuardState.kind === "contested"
-      ? activeContestedMembersKey
-      : memberGuardState.kind === "unknown"
-        ? `${activeThread?.id ?? "none"}:unknown:${memberGuardState.reason}`
-        : null;
-  const [revealedContestedMembersKey, setRevealedContestedMembersKey] = useState<string | null>(
-    null,
-  );
-  const showContestedMembersBanner = shouldShowComposerIntentBanner({
-    hasCondition: memberGuardKey !== null,
-    isDismissed: false,
-    composerHasContent: composerHasDraftContent,
-    wasShownForCurrentCondition:
-      revealedContestedMembersKey !== null && revealedContestedMembersKey === memberGuardKey,
-  });
-  const nextRevealedContestedMembersKey = showContestedMembersBanner
-    ? memberGuardKey
-    : revealedContestedMembersKey !== memberGuardKey
-      ? null
-      : revealedContestedMembersKey;
-  if (nextRevealedContestedMembersKey !== revealedContestedMembersKey) {
-    setRevealedContestedMembersKey(nextRevealedContestedMembersKey);
-  }
-  // Re-read the moment there is intent to send. The query is otherwise on a
-  // 60 second timer, which is long enough for another thread's post-run sweep
-  // to have moved a branch since the last poll — and this banner's whole job is
-  // to be right at the moment the user is about to write there.
-  const refreshMemberBranches = memberBranchesQuery.refresh;
-  const hadDraftContentRef = useRef(false);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- refreshes the member-branch query when the draft first gains content
-  useEffect(() => {
-    const hadContent = hadDraftContentRef.current;
-    hadDraftContentRef.current = composerHasDraftContent;
-    if (!composerHasDraftContent || hadContent || !workspaceHasMembers) return;
-    refreshMemberBranches();
-  }, [composerHasDraftContent, refreshMemberBranches, workspaceHasMembers]);
-  const contestedMembersBannerItem = ((): ComposerBannerStackItem | null => {
-    if (!showContestedMembersBanner || memberGuardKey === null) return null;
-    if (memberGuardState.kind === "unknown") {
-      return {
-        id: `workspace-members-unknown:${memberGuardKey}`,
-        variant: "default",
-        icon: <CircleHelpIcon />,
-        title: describeUnknownMemberGuard(memberGuardState.reason),
-        description: gt(
-          "Until it comes back, there is no telling whether another thread is working in one of them.",
-        ),
-      };
-    }
-    const described = describeContestedMembers(contestedMembers);
-    const threadId = activeThread?.id ?? null;
-    // Unreachable: `contested` requires a key, and the key requires both.
-    if (described === null || threadId === null) return null;
-    return {
-      id: `workspace-members-contested:${memberGuardKey}`,
-      variant: "warning",
-      icon: <TriangleAlertIcon />,
-      title: described.title,
-      description:
-        described.kind === "one" ? (
-          <span className="min-w-0">
-            {described.beforeBranch}
-            <code className="font-medium text-foreground">{described.branch}</code>
-            {described.afterBranch}
-          </span>
-        ) : (
-          described.description
-        ),
-      dismissLabel: gt("Dismiss branch warning"),
-      onDismiss: () => {
-        dismissContestedMembersForSession(threadId, contestedMembers);
-        setContestedMembersDismissTick((tick) => tick + 1);
-      },
-    };
-  })();
   const composerBannerItems = ((): ComposerBannerStackItem[] => {
-    // FORK: first in the stack on purpose: a turn about to write into another thread's
-    // branch outranks every routine notice.
-    const contestedItems = contestedMembersBannerItem === null ? [] : [contestedMembersBannerItem];
     const fallbackSelection = draftFallback?.selection;
     const defaultSelection =
       draftDefaultModelSelection ??
@@ -3165,7 +3027,6 @@ export default function ChatView(props: ChatViewProps) {
       : [];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
-        ...contestedItems,
         ...feedbackBannerItems,
         ...fallbackItems,
         ...limitRecoveryItems,
@@ -3178,7 +3039,6 @@ export default function ChatView(props: ChatViewProps) {
       ];
     }
     return [
-      ...contestedItems,
       ...feedbackBannerItems,
       ...fallbackItems,
       ...limitRecoveryItems,

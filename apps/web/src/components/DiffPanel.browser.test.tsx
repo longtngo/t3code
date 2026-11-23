@@ -70,9 +70,6 @@ vi.mock("~/state/vcs", () => ({
 }));
 vi.mock("~/state/entities", () => ({
   useQuietThreadShell: () => state.thread,
-  // Fork: the workspace repo bar (useWorkspaceRepos, WorkspaceRepoBar) reads these.
-  useThreadShell: () => state.thread,
-  useEnvironmentSupportsLocalOnlyStatus: () => false,
   useProject: () => state.project,
   useThreadCheckpointSummaries: () => state.checkpoints,
   useQuietThreadVisibleTurnItems: () => [],

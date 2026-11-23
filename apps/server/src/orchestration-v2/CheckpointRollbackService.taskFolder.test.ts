@@ -47,7 +47,6 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
-import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 
 const threadId = ThreadId.make("thread:task-folder-rewind");
 const providerThreadId = ProviderThreadId.make("provider-thread:task-folder-rewind");
@@ -184,7 +183,6 @@ const layerFor = (state: State, options: Options) => {
               } as never),
           }),
           Layer.mock(RuntimePolicy.RuntimePolicyV2)({ resolve: () => Effect.succeed({} as never) }),
-          WorkspaceMemberHooks.inert,
         ),
       ),
     ),

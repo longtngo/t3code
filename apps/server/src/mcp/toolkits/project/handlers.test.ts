@@ -1124,7 +1124,6 @@ const deletedProject = (id: ProjectId) => ({
   autoPull: false,
   projectIcon: null,
   scripts: [],
-  members: [],
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   deletedAt: "2026-01-01T00:00:00.000Z",
@@ -1221,7 +1220,6 @@ it.effect("reading a project shows the default model and actions saved in Settin
             id: projectId,
             title: "Client target",
             workspaceRoot: "/projects/client-target",
-            members: [],
             defaultModelSelection: null,
             scripts: [
               {

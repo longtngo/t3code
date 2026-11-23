@@ -1638,7 +1638,6 @@ it.effect(
                   workspaceRoot: "/repo",
                   defaultModelSelection: null,
                   scripts: [],
-                  members: [],
                   createdAt: "2026-10-18T00:00:00.000Z",
                   updatedAt: "2026-10-18T00:00:00.000Z",
                   deletedAt: null,

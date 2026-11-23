@@ -272,7 +272,6 @@ function fanoutSetup() {
     workspaceRoot: "/workspace/project",
     defaultModelSelection: null,
     scripts: [],
-    members: [],
     createdAt: "2026-11-10T01:00:00.000Z",
     updatedAt: "2026-11-10T01:00:00.000Z",
   }));

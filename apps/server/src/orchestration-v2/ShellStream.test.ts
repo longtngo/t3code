@@ -100,7 +100,6 @@ it.effect("coalesces a slow shell subscriber by identity and location in sequenc
       id: ProjectId.make("same"),
       title: "Before",
       workspaceRoot: "/workspace/same",
-      members: [],
       repositoryIdentity: null,
       defaultModelSelection: null,
       scripts: [],
@@ -522,7 +521,6 @@ describe("dedupeShellEnrichment", () => {
     repositoryIdentity: null,
     defaultModelSelection: null,
     scripts: [],
-    members: [],
     createdAt: "2026-09-01T00:00:00Z",
     updatedAt: "2026-09-01T00:00:00Z",
   };

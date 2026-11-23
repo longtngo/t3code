@@ -140,8 +140,6 @@ import { useRightPanelStore } from "~/rightPanelStore";
 
 import { DirectoryListingView } from "./DirectoryListingView";
 import { listedFileTarget, workspaceListingPath } from "./directoryListing.logic";
-import { resolveActiveRepo, useWorkspaceRepos } from "~/hooks/useWorkspaceRepos";
-import WorkspaceRepoBar from "../WorkspaceRepoBar";
 
 import { setMarkdownTaskChecked } from "@t3tools/shared/markdownTaskEdits";
 import { changeFileSaveSession, useFileSaveSession } from "./fileSaveSessions";
@@ -163,12 +161,6 @@ interface FilePreviewPanelProps {
   projectName: string;
   projectId?: ProjectId | undefined;
   relativePath: string | null;
-  /**
-   * The repository `relativePath` belongs to, when it is not the project's own.
-   * The open file keeps the root it was opened from; the browser's own root
-   * selector moves only the tree.
-   */
-  fileRepoCwd?: string | undefined;
   attachment?: ChatFileAttachment;
   threadRef: ScopedThreadRef;
   composerDraftTarget: ScopedThreadRef | DraftId;
@@ -177,7 +169,7 @@ interface FilePreviewPanelProps {
   openInShortcutEnabled: boolean;
   revealLine: number | null;
   revealRequestId: number;
-  onOpenFile: (relativePath: string, repoCwd?: string) => void;
+  onOpenFile: (relativePath: string) => void;
   onNavigateFolder: (relativePath: string, folderTrail: string, keepSource: boolean) => void;
   /** Retained descendant breadcrumb path after navigating up; see navigateFolder. */
   folderTrail: string | undefined;
@@ -1247,11 +1239,10 @@ function initialExplorerOpen(): boolean {
 
 export default function FilePreviewPanel({
   environmentId,
-  cwd: projectCwd,
+  cwd,
   projectName,
   projectId,
   relativePath: requestedPath,
-  fileRepoCwd,
   attachment,
   threadRef,
   composerDraftTarget,
@@ -1267,40 +1258,9 @@ export default function FilePreviewPanel({
   selectedFilePending,
   workspaceMutationId,
 }: FilePreviewPanelProps) {
-  const workspaceRepos = useWorkspaceRepos(threadRef);
-  // Keyed by thread: two threads in the same project share this component
-  // instance when neither uses a worktree, and a root chosen on one of them
-  // must not silently repoint the other's file browser.
-  const threadKey = `${threadRef.environmentId}:${threadRef.threadId}`;
-  const [treeSelection, setTreeSelection] = useState<{
-    readonly threadKey: string;
-    readonly repoId: string;
-  } | null>(null);
-  const activeRepo = resolveActiveRepo(
-    workspaceRepos,
-    treeSelection?.threadKey === threadKey ? treeSelection.repoId : null,
-  );
-  // Only an explicitly selected member moves the tree's root. Everything else
-  // keeps the cwd the caller passed, so an ordinary project is untouched.
-  const treeCwd = activeRepo?.kind === "member" ? activeRepo.cwd : projectCwd;
-  // The open file resolves against the repository it was opened from, not
-  // against whatever the tree is showing. That is what lets the two move
-  // independently without either of them reading the wrong file.
-  const cwd = fileRepoCwd ?? projectCwd;
   // A link to the workspace root opens the explorer rather than a file surface.
   const relativePath =
     attachment === undefined ? resolveFilePreviewPath(requestedPath, cwd) : requestedPath;
-  // The breadcrumb names the repository the open file actually came from. It
-  // said "pickup-v2" over a file read out of an attached member, which is the
-  // same wrong-root confusion the surface root exists to prevent, just in words.
-  const fileRepoName =
-    workspaceRepos.find((repo) => repo.cwd === fileRepoCwd)?.title ?? projectName;
-  const openFileFromTree = (nextRelativePath: string) => {
-    onOpenFile(nextRelativePath, activeRepo?.kind === "member" ? activeRepo.cwd : undefined);
-  };
-  const selectRepo = (repoId: string) => {
-    setTreeSelection({ threadKey, repoId });
-  };
   const draft = typeof composerDraftTarget === "string";
   const gt = useGT();
   const m = useMessages();
@@ -1663,10 +1623,7 @@ export default function FilePreviewPanel({
                 environmentId={environmentId}
                 onNavigateFolder={navigateToFolder}
                 onOpenFile={onOpenFile}
-                // The root label names the repository `cwd` points at, which for a
-                // file opened out of an attached member is that member, not the
-                // project. Upstream's browsable breadcrumbs take it as `projectName`.
-                projectName={fileRepoName}
+                projectName={projectName}
                 relativePath={breadcrumbPath}
                 trail={breadcrumbTrail}
                 workspaceMutationId={workspaceMutationId}
@@ -1857,7 +1814,7 @@ export default function FilePreviewPanel({
               onOpenListedFile={(absolutePath: string) => {
                 const target = listedFileTarget(cwd, absolutePath);
                 if (target.kind === "workspace") {
-                  onOpenFile(target.relativePath, fileRepoCwd);
+                  onOpenFile(target.relativePath);
                   return;
                 }
                 useRightPanelStore.getState().openTrustedFile(threadRef, target.absolutePath);
@@ -1988,47 +1945,35 @@ export default function FilePreviewPanel({
         </div>
         {showExplorer ? (
           <FileExplorerPane resizable={Boolean(relativePath)}>
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              {activeRepo ? (
-                <WorkspaceRepoBar
-                  environmentId={environmentId}
-                  onSelect={selectRepo}
-                  repos={workspaceRepos}
-                  selectedId={activeRepo.id}
-                  threadRef={threadRef}
-                />
-              ) : null}
-              <div
-                className="contents"
-                onClick={focusEditorOnTreeRowClickOrEnter}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") focusEditorOnTreeRowClickOrEnter(event);
-                }}
-              >
-                <FileBrowserPanel
-                  key={`${environmentId}:${treeCwd}`}
-                  environmentId={environmentId}
-                  cwd={treeCwd}
-                  projectName={activeRepo?.title ?? projectName}
-                  // Only highlight the open file in the tree that actually contains it.
-                  selectedPath={treeCwd === cwd ? relativePath : null}
-                  selectedPathRevealId={revealRequestId}
-                  onOpenFile={openFileFromTree}
-                  // The tree answers Cmd+F only when no file is open beside it.
-                  answersPanelFind={relativePath === null || isFolder}
-                  workspaceMutationId={workspaceMutationId}
-                  {...(relativePath && !isAssetPreview
-                    ? {
-                        onRefreshSelectedFile: () => {
-                          if (!isDocument) file.refresh();
-                          setFileRefreshRevision((value) => value + 1);
-                          // A directory's read stays failed, so only this reaches the listing.
-                          if (listing.data !== null) listing.refresh();
-                        },
-                      }
-                    : {})}
-                />
-              </div>
+            <div
+              className="contents"
+              onClick={focusEditorOnTreeRowClickOrEnter}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") focusEditorOnTreeRowClickOrEnter(event);
+              }}
+            >
+              <FileBrowserPanel
+                key={`${environmentId}:${cwd}`}
+                environmentId={environmentId}
+                cwd={cwd}
+                projectName={projectName}
+                selectedPath={relativePath}
+                selectedPathRevealId={revealRequestId}
+                onOpenFile={onOpenFile}
+                // The tree answers Cmd+F only when no file is open beside it.
+                answersPanelFind={relativePath === null || isFolder}
+                workspaceMutationId={workspaceMutationId}
+                {...(relativePath && !isAssetPreview
+                  ? {
+                      onRefreshSelectedFile: () => {
+                        if (!isDocument) file.refresh();
+                        setFileRefreshRevision((value) => value + 1);
+                        // A directory's read stays failed, so only this reaches the listing.
+                        if (listing.data !== null) listing.refresh();
+                      },
+                    }
+                  : {})}
+              />
             </div>
           </FileExplorerPane>
         ) : null}

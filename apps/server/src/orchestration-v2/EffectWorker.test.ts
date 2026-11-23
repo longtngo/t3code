@@ -740,16 +740,10 @@ it.effect("settles background work after a hard Stop, never after the cooperativ
   }),
 );
 
-// Fork: the last failed rollback attempt tells the client why. A refusal over
-// moved workspace members names them; any other failure, a defect included,
-// gets the fixed message and never the cause or a stack.
+// Fork: the last failed rollback attempt tells the client why. A typed failure
+// or a defect gets the fixed message and never the cause or a stack.
 it.effect.each([
-  {
-    name: "member refusal",
-    failure: "members",
-    expected: "api has changed since this checkpoint.",
-  },
-  { name: "other typed failure", failure: "typed", expected: undefined },
+  { name: "typed failure", failure: "typed", expected: undefined },
   { name: "defect", failure: "defect", expected: undefined },
 ] as const)("reports a terminal rollback failure to the client: $name", ({ failure, expected }) =>
   Effect.gen(function* () {
@@ -757,28 +751,20 @@ it.effect.each([
     const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
     const rollbackThreadId = ThreadId.make("thread:effect-worker-rollback-message");
     const checkpointId = CheckpointId.make("checkpoint:effect-worker-rollback-message");
-    const rollbackError = (
-      reason: "workspace-members-moved" | "provider-turn-unavailable",
-      detail?: string,
-    ) =>
+    const rollbackError = (reason: "provider-turn-unavailable") =>
       new CheckpointRollbackService.CheckpointRollbackExecutionError({
         reason,
         threadId: rollbackThreadId,
         providerThreadId,
         checkpointId,
-        ...(detail === undefined ? {} : { detail }),
       });
     const layer = layerExecutorFor({
       events,
       dispatched,
       rollback: () =>
-        failure === "members"
-          ? Effect.fail(
-              rollbackError("workspace-members-moved", "api has changed since this checkpoint."),
-            )
-          : failure === "typed"
-            ? Effect.fail(rollbackError("provider-turn-unavailable"))
-            : Effect.die(new Error("secret stack detail")),
+        failure === "typed"
+          ? Effect.fail(rollbackError("provider-turn-unavailable"))
+          : Effect.die(new Error("secret stack detail")),
     });
     const timestamp = DateTime.formatIso(yield* DateTime.now);
     const commandId = CommandId.make("command:effect-worker-rollback-message");

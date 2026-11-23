@@ -68,12 +68,6 @@ export type RightPanelSurface =
       id: `file:${string}` | `attachment:${string}`;
       kind: "file";
       relativePath: string;
-      /**
-       * The repository root the path is relative to, when not the project's own: a file opened from
-       * a workspace member keeps its root instead of resolving against the panel's. Absent means the
-       * project root, including surfaces persisted before workspace members existed.
-       */
-      repoCwd?: string;
       revealLine: number | null;
       revealRequestId: number;
       attachment?: ChatFileAttachment;
@@ -220,8 +214,7 @@ interface RightPanelStoreState {
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
-  /** `repoCwd` is the workspace member the path is relative to; omit it for the project's repo. */
-  openFile: (ref: ScopedThreadRef, relativePath: string, line?: number, repoCwd?: string) => void;
+  openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   /** Open a read-only view of an absolute path outside the workspace. */
   openTrustedFile: (ref: ScopedThreadRef, absolutePath: string) => void;
   /** Moves in place; "" opens the root explorer. folderTrail keeps the return path; keepSource opens beside the source. */
@@ -345,22 +338,13 @@ const fileSurface = (
   relativePath: string,
   revealLine: number | null,
   revealRequestId: number,
-  repoCwd?: string,
 ): RightPanelSurface => ({
-  id: fileSurfaceId(relativePath, repoCwd),
+  id: `file:${relativePath}`,
   kind: "file",
   relativePath,
-  ...(repoCwd === undefined ? {} : { repoCwd }),
   revealLine,
   revealRequestId,
 });
-
-/**
- * The same relative path in two repositories is two different files, so the
- * root is part of the surface identity rather than only its payload.
- */
-const fileSurfaceId = (relativePath: string, repoCwd?: string): `file:${string}` =>
-  repoCwd === undefined ? `file:${relativePath}` : `file:${repoCwd}\u0000${relativePath}`;
 
 const attachmentSurface = (attachment: ChatFileAttachment): RightPanelSurface => ({
   id: `attachment:${attachment.id}`,
@@ -1060,7 +1044,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             ),
           }));
         }),
-      openFile: (ref, requestedPath, line, repoCwd) =>
+      openFile: (ref, requestedPath, line) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {
             if (requestedPath === ".") {
@@ -1073,7 +1057,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const withoutStandaloneExplorer = current.surfaces.filter(
               (surface) => surface.kind !== "files",
             );
-            const surfaceId = fileSurfaceId(relativePath, repoCwd);
+            const surfaceId = `file:${relativePath}` as const;
             const existing = withoutStandaloneExplorer.find(
               (surface): surface is Extract<RightPanelSurface, { kind: "file" }> =>
                 surface.id === surfaceId && surface.kind === "file",
@@ -1082,7 +1066,6 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               relativePath,
               normalizeRevealLine(line),
               (existing?.revealRequestId ?? 0) + 1,
-              repoCwd,
             );
             return {
               ...current,

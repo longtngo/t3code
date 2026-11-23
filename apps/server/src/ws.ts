@@ -115,9 +115,6 @@ import {
   WsAttachmentsUploadRpc,
   WsProjectsReadTrustedFileRpc,
   WsVcsRefreshLocalStatusRpc,
-  WsWorkspaceMemberBranchesRpc,
-  WsWorkspaceMemberActionPrepareRpc,
-  WsWorkspaceMemberPrBaseWriteRpc,
   WsSubscribeHostMetricsRpc,
   WsServerSubscribeThreadQueueRpc,
 } from "@t3tools/contracts";
@@ -248,8 +245,6 @@ import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
-import * as WorkspaceMemberBranches from "./workspace/WorkspaceMemberBranches.ts";
-import * as WorkspaceMemberRpc from "./workspace/WorkspaceMemberRpc.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
 import { registerPushSubscription } from "./push/register.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
@@ -263,7 +258,7 @@ import * as ProjectService from "./project/ProjectService.ts";
 import { threadWorkspaceRoot } from "./project/threadWorkspaceRoot.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
-import { mutateProjectWithClone, projectMutationErrorMessage } from "./project/ProjectMutation.ts";
+import { mutateProjectWithClone } from "./project/ProjectMutation.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
@@ -801,9 +796,6 @@ const ForkServerWsRpcGroup = RpcGroup.make(
   WsAttachmentsUploadRpc,
   WsProjectsReadTrustedFileRpc,
   WsVcsRefreshLocalStatusRpc,
-  WsWorkspaceMemberBranchesRpc,
-  WsWorkspaceMemberActionPrepareRpc,
-  WsWorkspaceMemberPrBaseWriteRpc,
   WsSubscribeHostMetricsRpc,
   WsServerSubscribeThreadQueueRpc,
 ).middleware(RpcInstrumentation);
@@ -815,9 +807,6 @@ const UpstreamServerWsRpcGroup = ServerWsRpcGroup.omit(
   WS_METHODS.attachmentsUpload,
   WS_METHODS.projectsReadTrustedFile,
   WS_METHODS.vcsRefreshLocalStatus,
-  WS_METHODS.workspaceMemberBranches,
-  WS_METHODS.workspaceMemberActionPrepare,
-  WS_METHODS.workspaceMemberPrBaseWrite,
   WS_METHODS.subscribeHostMetrics,
   WS_METHODS.serverSubscribeThreadQueue,
 );
@@ -934,18 +923,6 @@ function hasCompatibleOrchestrationProtocol(url: URL): boolean {
     url.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM) ===
     String(ORCHESTRATION_PROTOCOL_VERSION)
   );
-}
-
-/** The error a failed `projectsMutate` sends to the client. */
-export function toProjectMutationError(
-  commandId: CommandId,
-  cause: { readonly _tag: string; readonly message: string },
-): ProjectMutationError {
-  return new ProjectMutationError({
-    commandId,
-    message: projectMutationErrorMessage(cause),
-    cause,
-  });
 }
 
 function readSettingsClient(url: URL) {
@@ -1702,17 +1679,6 @@ export const layerWsRpc = (
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
-      // Fork: workspace member repositories. See WorkspaceMemberRpc for the rules.
-      const workspaceMemberRpc = WorkspaceMemberRpc.makeWorkspaceMemberRpc({
-        readMembers: (projectId) =>
-          projectStore
-            .get(projectId)
-            .pipe(Effect.map((project) => Option.getOrUndefined(project)?.members)),
-        readThread: (threadId) => threadManagement.getThreadShell(threadId),
-        branches: yield* WorkspaceMemberBranches.WorkspaceMemberBranches,
-        refreshLocalStatus: (cwd) =>
-          vcsStatusBroadcaster.refreshLocalStatus(cwd).pipe(Effect.ignoreCause({ log: true })),
-      });
       const terminalManager = yield* TerminalManager.TerminalManager;
       const prepareTerminalLaunch = yield* makePrepareTerminalLaunch(
         threadManagement.getThreadShell,
@@ -3277,9 +3243,19 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.projectsMutate]: (mutation) =>
-          startup
-            .enqueueCommand(mutateProject(mutation))
-            .pipe(Effect.mapError((cause) => toProjectMutationError(mutation.commandId, cause))),
+          startup.enqueueCommand(mutateProject(mutation)).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProjectMutationError({
+                  commandId: mutation.commandId,
+                  message:
+                    cause._tag === "ProjectNotEmptyError" || cause._tag === "ProjectInvalidError"
+                      ? cause.message
+                      : "Failed to mutate project.",
+                  cause,
+                }),
+            ),
+          ),
         [WS_METHODS.shellOpenInEditor]: (input) => externalLauncher.launchEditor(input),
         [WS_METHODS.filesystemGetMetadata]: (input) => workspaceFileSystem.getMetadata(input),
         [WS_METHODS.filesystemBrowse]: (input) =>
@@ -3919,10 +3895,6 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.vcsRefreshLocalStatus]: (input) =>
           vcsStatusBroadcaster.refreshLocalStatus(input.cwd),
-        [WS_METHODS.workspaceMemberBranches]: (input) => workspaceMemberRpc.branches(input),
-        [WS_METHODS.workspaceMemberActionPrepare]: (input) =>
-          workspaceMemberRpc.actionPrepare(input),
-        [WS_METHODS.workspaceMemberPrBaseWrite]: (input) => workspaceMemberRpc.prBaseWrite(input),
         [WS_METHODS.subscribeHostMetrics]: (input) => hostMetrics.stream(input.intervalMs),
         [WS_METHODS.serverSubscribeThreadQueue]: (_input) => threadQueue.changes,
       });

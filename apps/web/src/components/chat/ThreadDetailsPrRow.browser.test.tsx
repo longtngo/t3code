@@ -152,7 +152,6 @@ const repositoryProject = {
   createdAt: "2026-11-18T00:00:00.000Z",
   updatedAt: "2026-11-18T00:00:00.000Z",
   scripts: [],
-  members: [],
   repositoryIdentity: {
     canonicalKey: "github.com/owner/repo",
     locator: {

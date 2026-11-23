@@ -69,12 +69,6 @@ export const ProviderAdapterV2RuntimePolicy = Schema.Struct({
   approvalPolicy: Schema.optional(Schema.Unknown),
   sandboxPolicy: Schema.optional(Schema.Unknown),
   /**
-   * Fork: the project's workspace member repositories, granted beyond `cwd`.
-   * Absent when the project has none. Adapters that cannot grant extra
-   * directories ignore it; see `claudeEffectiveQueryPolicyKey` for the one that does.
-   */
-  additionalDirectories: Schema.optional(Schema.Array(Schema.String)),
-  /**
    * The administrator's ceiling, when a managed policy sets one. `runtimeMode` is already under
    * it; adapters use it to refuse native mode choices a user makes beside T3 Code's own.
    */

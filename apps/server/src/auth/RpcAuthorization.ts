@@ -21,7 +21,6 @@ import {
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
   AuthRelayReadScope,
-  AuthSourceControlWriteScope,
   AuthRelayWriteScope,
   AuthTerminalOperateScope,
   ORCHESTRATION_V2_WS_METHODS,
@@ -213,12 +212,6 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeResourceTelemetry]: AuthDiagnosticsReadScope,
   [WS_METHODS.vcsRefreshStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsRefreshLocalStatus]: AuthOrchestrationReadScope,
-  [WS_METHODS.workspaceMemberBranches]: AuthOrchestrationReadScope,
-  // Both write to the user's own checkouts — moving a branch and recording a
-  // pull-request base — so they take the source-control write scope, like
-  // upstream's vcs and git write methods (CLIENT_GUARDED_RPC_SCOPES).
-  [WS_METHODS.workspaceMemberActionPrepare]: AuthSourceControlWriteScope,
-  [WS_METHODS.workspaceMemberPrBaseWrite]: AuthSourceControlWriteScope,
   [WS_METHODS.gitResolvePullRequest]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsListRefs]: AuthOrchestrationReadScope,
   [WS_METHODS.reviewGetBranchCommits]: AuthFilesystemReadScope,

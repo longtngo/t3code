@@ -83,9 +83,6 @@ function project(input: {
       : {}),
     defaultModelSelection: null,
     scripts: [],
-    members: [],
-    // Fork: workspace member repositories are a required part of a project
-    // shell. These fixtures are single-repo projects, so the list is empty.
     createdAt: "2026-07-01T00:00:00Z",
     updatedAt: "2026-07-01T00:00:00Z",
   };

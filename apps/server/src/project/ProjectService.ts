@@ -9,7 +9,6 @@ import {
   type ProjectUpdatePayload,
   type ProjectSnapshot,
   type ThreadId,
-  type WorkspaceMember,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -107,19 +106,6 @@ export class ProjectNotEmptyError extends Schema.TaggedError<ProjectNotEmptyErro
   }
 }
 
-/**
- * A workspace member the client asked to attach is not a usable directory, or is
- * attached twice. Its message is shown to the user as-is.
- */
-export class ProjectMemberInvalidError extends Schema.TaggedError<ProjectMemberInvalidError>()(
-  "ProjectMemberInvalidError",
-  { projectId: ProjectId, detail: Schema.String },
-) {
-  override get message(): string {
-    return this.detail;
-  }
-}
-
 /** A change the project's rules refuse, such as an invalid script ID: the caller's input is wrong, nothing failed. */
 export class ProjectInvalidError extends Schema.TaggedError<ProjectInvalidError>()(
   "ProjectInvalidError",
@@ -152,7 +138,6 @@ export class ProjectOperationError extends Schema.TaggedError<ProjectOperationEr
 }
 
 export type ProjectServiceError =
-  | ProjectMemberInvalidError
   | ProjectNotFoundError
   | ProjectConflictError
   | ProjectNotEmptyError
@@ -241,7 +226,6 @@ export const make = Effect.gen(function* () {
     autoPull: row.autoPull,
     projectIcon: row.projectIcon,
     scripts: row.scripts,
-    members: row.members,
     trackedFolders: row.trackedFolders,
     pinnedAt: row.pinnedAt,
     archivedAt: row.archivedAt,
@@ -323,43 +307,6 @@ export const make = Effect.gen(function* () {
             }),
         ),
       );
-
-  /**
-   * Member paths widen the agent's directory grant, so the SERVER validates them with the
-   * same normalization as `workspaceRoot` (expand `~`, canonicalize, require an existing
-   * directory): any authenticated client can send a project update directly.
-   */
-  const normalizeMembers = Effect.fn("ProjectService.normalizeMembers")(function* (
-    projectId: ProjectId,
-    members: ReadonlyArray<WorkspaceMember>,
-  ) {
-    const normalized = yield* Effect.forEach(
-      members,
-      (member) =>
-        workspacePaths.normalizeWorkspaceRoot(member.path).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProjectMemberInvalidError({
-                projectId,
-                detail: `Workspace member '${member.title}': ${cause.message}`,
-              }),
-          ),
-          Effect.map((path) => ({ ...member, path })),
-        ),
-      { concurrency: 1 },
-    );
-    const seenPaths = new Set<string>();
-    for (const member of normalized) {
-      if (seenPaths.has(member.path)) {
-        return yield* new ProjectMemberInvalidError({
-          projectId,
-          detail: `Workspace member path '${member.path}' is attached more than once.`,
-        });
-      }
-      seenPaths.add(member.path);
-    }
-    return normalized;
-  });
 
   const rejectWorktreeContainer = Effect.fn("ProjectService.rejectWorktreeContainer")(function* (
     projectId: ProjectId,
@@ -635,10 +582,6 @@ export const make = Effect.gen(function* () {
       if (workspaceRoot !== previousRoot) {
         yield* rejectWorktreeContainer(input.projectId, workspaceRoot);
       }
-      const members =
-        input.members === undefined
-          ? undefined
-          : yield* normalizeMembers(input.projectId, input.members);
       const command = {
         type: "project.meta.update",
         commandId: input.commandId,
@@ -655,7 +598,6 @@ export const make = Effect.gen(function* () {
           ? {}
           : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
         ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
-        ...(members === undefined ? {} : { members }),
         ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
         ...(input.archived === undefined ? {} : { archived: input.archived }),
       } as const;

@@ -7,11 +7,7 @@ import { useEnvironmentsWithScope } from "../../state/session";
 import { mapAtomCommandResult, settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
-import {
-  type EnvironmentId,
-  type SidebarProjectGroupingMode,
-  type WorkspaceMember,
-} from "@t3tools/contracts";
+import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import {
   checkProjectAccess,
   reportProjectFailure,
@@ -39,7 +35,6 @@ import { useThreadShells, waitForProjectRemoval } from "../../state/entities";
 import { refreshProjectFaviconUrl } from "../../state/assets";
 import { projectEnvironment } from "../../state/projects";
 import { ProjectFavicon } from "../ProjectFavicon";
-import WorkspaceMembersControl from "../WorkspaceMembersControl";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -293,10 +288,6 @@ function ProjectDetail({
   const deleteProject = useOrchestrationCommand(projectEnvironment.delete, {
     reportFailure: false,
   });
-  // FORK: workspace members are written per checkout, outside `updateProjectGroup`.
-  const updateWorkspaceProject = useOrchestrationCommand(projectEnvironment.update, {
-    reportFailure: false,
-  });
   const projectNameEditedRef = useRef(false);
 
   const faviconPath = group.faviconPath ?? null;
@@ -362,29 +353,6 @@ function ProjectDetail({
   const canResetScratchTitle =
     group.memberProjects.every((member) => member.isScratch) &&
     group.memberProjects.some((member) => member.title !== SCRATCH_PROJECT_TITLE);
-
-  // FORK: workspace members belong to the physical project, not the group, so this
-  // writes to one checkout only - never through `updateAllMembers`. Returns whether
-  // the write landed: `WorkspaceMembersControl` clears its editor on true, and
-  // keeping it open on false is what stops a failed save discarding what was typed.
-  const updateWorkspaceMembers = async (
-    member: SidebarProjectGroupMember,
-    members: ReadonlyArray<WorkspaceMember>,
-  ): Promise<boolean> => {
-    const result = mapAtomCommandResult(
-      await updateWorkspaceProject({
-        environmentId: member.environmentId,
-        input: { projectId: member.id, members },
-      }),
-      () => undefined,
-    );
-    if (result._tag === "Failure") {
-      // Silent on an interrupted command, which `reportProjectFailure` already skips.
-      reportProjectFailure(gt("Failed to update workspace repositories"), result);
-      return false;
-    }
-    return true;
-  };
 
   const removeMembers = async (members: ReadonlyArray<SidebarProjectGroupMember>) => {
     if (checkProjectAccess(members, gt("Failed to remove project"))) return;
@@ -725,38 +693,6 @@ function ProjectDetail({
         </SettingsSection>
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
-        {/* FORK: the multi-repo workspace editor. It is per checkout, so with more than
-            one checkout each gets its own row labelled by its workspace root. */}
-        <SettingsSection title={gt("Workspace repositories")}>
-          {group.memberProjects.map((member) => (
-            <SettingsRow
-              key={member.physicalProjectKey}
-              title={
-                hasMultipleCheckouts
-                  ? (member.environmentLabel ??
-                    gt("Checkout", { $context: "noun, a project checkout" }))
-                  : gt("Repositories")
-              }
-              description={
-                hasMultipleCheckouts
-                  ? member.workspaceRoot
-                  : gt(
-                      "Extra repositories this checkout's threads can read and write, each on its own integration branch.",
-                    )
-              }
-            >
-              <WorkspaceMembersControl
-                // One control per checkout, keyed by it: the editor state
-                // (`editingId`) belongs to the checkout whose list it resolves
-                // against, and must never be shared across rows.
-                key={member.physicalProjectKey}
-                environmentId={member.environmentId}
-                members={member.members}
-                onMembersChange={(next) => updateWorkspaceMembers(member, next)}
-              />
-            </SettingsRow>
-          ))}
-        </SettingsSection>
         <ProjectRepositoriesSettings members={group.memberProjects} />
         {checkoutChoices}
         <SettingsSection title={gt("Danger")}>

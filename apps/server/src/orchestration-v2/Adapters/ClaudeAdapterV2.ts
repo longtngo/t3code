@@ -2504,8 +2504,6 @@ export function makeClaudeQueryOptions(input: {
   /** The thread's other folders: listed in the system prompt and granted as directories. */
   readonly workspace?: ProviderAdapter.ProviderAdapterV2RuntimePolicy["workspace"];
   readonly attachmentsDir?: string;
-  /** Fork: workspace member repositories granted beyond `cwd`. */
-  readonly memberDirectories?: ReadonlyArray<string>;
   readonly settings?: ClaudeSettings;
   readonly promptSuggestions?: boolean;
   readonly sdkSettings?: string | ClaudeSdkSettings;
@@ -2721,7 +2719,6 @@ export function makeClaudeQueryOptions(input: {
     ...(input.cwd === null ? [] : [input.cwd]),
     ...(input.workspace?.extraRoots ?? []),
     ...(input.attachmentsDir === undefined ? [] : [input.attachmentsDir]),
-    ...(input.memberDirectories ?? []),
     ...claudeLaunchArgDirectories(input.settings?.launchArgs),
   ];
   const withDirectories =
@@ -3942,20 +3939,6 @@ export function claudeEffectiveQueryPolicyKey(
     }),
     mcpServers: mcpOverrides.mcpServers,
   });
-}
-
-/**
- * Fork: the live-query reuse key including the workspace member grant. The directory grant
- * is fixed at CLI start, so a member change must reopen the query, or the first tool call
- * in the new repository asks for approval. Without members this is upstream's key.
- */
-export function claudeLiveQueryKey(
-  queryPolicy: ClaudeRuntimeQueryPolicy,
-  mcpOverrides: Parameters<typeof claudeEffectiveQueryPolicyKey>[1],
-  memberDirectories: ReadonlyArray<string>,
-): string {
-  const key = claudeEffectiveQueryPolicyKey(queryPolicy, mcpOverrides);
-  return memberDirectories.length === 0 ? key : `${key}\0${memberDirectories.join("\0")}`;
 }
 
 type ClaudeToolItemType = Extract<
@@ -13624,7 +13607,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),
           });
-          const memberDirectories = turnInput.runtimePolicy.additionalDirectories ?? [];
           const queryPolicyKey = claudeEffectiveQueryPolicyKey(
             queryPolicy,
             mcpOverrides,
@@ -13812,7 +13794,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { workspace: turnInput.runtimePolicy.workspace }),
             attachmentsDir,
-            memberDirectories,
             settings: adapterOptions.settings,
             // Delegated threads have no one typing, so they never ask for suggestions.
             promptSuggestions:

@@ -61,8 +61,7 @@ interface RightPanelFileProps {
   readonly workspaceRoot: string | undefined;
   readonly availableEditors: ReadonlyArray<EditorId>;
   readonly pendingSurfaceIds: ReadonlySet<string>;
-  /** FORK: `repoCwd` names the workspace member repository the path is relative to. */
-  readonly onOpenFile: (relativePath: string, repoCwd?: string) => void;
+  readonly onOpenFile: (relativePath: string) => void;
   readonly onPendingChange: (relativePath: string, pending: boolean) => void;
 }
 
@@ -307,7 +306,6 @@ export function RightPanelSurfaceContent(props: {
             {...(attachment ? { attachment } : {})}
             revealLine={surface.kind === "file" ? (surface.revealLine ?? null) : null}
             revealRequestId={surface.kind === "file" ? surface.revealRequestId : 0}
-            fileRepoCwd={surface.kind === "file" ? surface.repoCwd : undefined}
             onOpenFile={files.onOpenFile}
             onNavigateFolder={(relativePath, folderTrail, keepSource) =>
               useRightPanelStore

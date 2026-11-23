@@ -7,7 +7,6 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
-  CommandId,
   AuthAccessReadScope,
   type AuthEnvironmentScope,
   AuthOrchestrationOperateScope,
@@ -192,7 +191,6 @@ import * as ProjectEnrichment from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import {
   refreshProvidersForRequest,
-  toProjectMutationError,
   layerWsRpc,
   resolveOpenDiscoveryForConfig,
   subscribeOrchestrationV2Shell,
@@ -200,7 +198,6 @@ import {
   WS_RPC_SERVER_OPTIONS,
   withLateConfigDiscovery,
 } from "./ws.ts";
-import { ProjectMemberInvalidError, ProjectOperationError } from "./project/ProjectService.ts";
 import * as HostMetrics from "./diagnostics/HostMetrics.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
 import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts";
@@ -209,23 +206,6 @@ import { CreditSpendGuard } from "./provider/Services/CreditSpendGuard.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
 import * as ThreadQueue from "./threadQueue.ts";
 import { MarkdownHtmlRenderer } from "./workspace/markdownHtmlRenderer.ts";
-import * as WorkspaceMemberBranches from "./workspace/WorkspaceMemberBranches.ts";
-
-it("sends a refused workspace member's reason to the client, and nothing internal", () => {
-  const commandId = CommandId.make("command:ws-members");
-  const projectId = ProjectId.make("project:ws-members");
-  const refused = toProjectMutationError(
-    commandId,
-    new ProjectMemberInvalidError({ projectId, detail: "warehouse is attached twice." }),
-  );
-  assert.equal(refused.message, "warehouse is attached twice.");
-  assert.equal(refused.commandId, commandId);
-  const internal = toProjectMutationError(
-    commandId,
-    new ProjectOperationError({ operation: "read-project", projectId, cause: "disk" }),
-  );
-  assert.equal(internal.message, "Failed to mutate project.");
-});
 
 it.effect("passes `fresh` through to every targeted provider refresh", () =>
   Effect.gen(function* () {
@@ -373,7 +353,6 @@ const resumeSkipsUnknownTypes = (scope: "thread" | "shell") =>
       workspaceRoot: "/tmp/replay",
       defaultModelSelection: null,
       scripts: [],
-      members: [],
       createdAt: now,
       updatedAt: now,
     } satisfies OrchestrationProjectShell;
@@ -979,7 +958,6 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ResourceQueue.ResourceQueue)({}),
   Layer.mock(ThreadQueue.ThreadQueueService)({}),
   Layer.mock(WebPushRelay.WebPushRelay)({ vapidPublicKey: "" }),
-  Layer.mock(WorkspaceMemberBranches.WorkspaceMemberBranches)({}),
   FeatureFlags.layerTest(),
 );
 
@@ -1855,7 +1833,6 @@ it.effect("a missing thread worktree gets its project's skills in the cwd snapsh
       workspaceRoot,
       defaultModelSelection: null,
       scripts: [],
-      members: [],
       createdAt: "2026-11-07T00:00:00.000Z",
       updatedAt: "2026-11-07T00:00:00.000Z",
     } satisfies OrchestrationProjectShell;
@@ -2368,7 +2345,6 @@ it.effect.each([
         workspaceRoot: "/tmp/idle",
         defaultModelSelection: null,
         scripts: [],
-        members: [],
         createdAt: now,
         updatedAt: now,
       } satisfies OrchestrationProjectShell;
@@ -2616,7 +2592,6 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
             workspaceRoot: "/workspace/acp",
             defaultModelSelection: null,
             scripts: [],
-            members: [],
             createdAt: "2026-10-23T00:00:00.000Z",
             updatedAt: "2026-10-23T00:00:00.000Z",
             deletedAt: null,

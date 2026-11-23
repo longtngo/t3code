@@ -13,12 +13,6 @@ interface OpenDiffFilePrimaryActionInput {
   readonly threadRef: ScopedThreadRef | null;
   readonly filePath: string;
   readonly activeCwd: string | undefined;
-  /**
-   * Set when the diff being read belongs to a workspace member, so the file
-   * surface records which repository the path is relative to instead of being
-   * re-resolved against the project root.
-   */
-  readonly repoCwd?: string | undefined;
   readonly repositoryRoot?: string | undefined;
   readonly openInEditor: (targetPath: string) => void;
 }
@@ -106,7 +100,6 @@ export function openDiffFilePrimaryAction({
   threadRef,
   filePath,
   activeCwd,
-  repoCwd,
   repositoryRoot,
   openInEditor,
 }: OpenDiffFilePrimaryActionInput): void {
@@ -118,10 +111,7 @@ export function openDiffFilePrimaryAction({
   if (!workspaceFilePath) return;
 
   if (threadRef) {
-    // Both halves are needed: `workspaceFilePath` resolves a repository-relative diff path when
-    // the project root is nested inside the repository, and `repoCwd` records WHICH repository
-    // the surface belongs to in a multi-repo workspace. Dropping either reintroduces its bug.
-    useRightPanelStore.getState().openFile(threadRef, workspaceFilePath, undefined, repoCwd);
+    useRightPanelStore.getState().openFile(threadRef, workspaceFilePath);
     return;
   }
 

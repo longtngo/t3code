@@ -5292,54 +5292,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
     );
 
-  const hasTrackedChanges: GitVcsDriver.GitVcsDriver["Service"]["hasTrackedChanges"] = (cwd) =>
-    runGitStdout(
-      "GitVcsDriver.hasTrackedChanges",
-      cwd,
-      ["status", "--porcelain", "--untracked-files=no"],
-      true,
-    ).pipe(Effect.map((stdout) => stdout.trim().length > 0));
-
-  const deleteRef: GitVcsDriver.GitVcsDriver["Service"]["deleteRef"] = (cwd, refName) =>
-    runGit("GitVcsDriver.deleteRef", cwd, ["branch", "-d", refName]);
-
-  const readHeadSha: GitVcsDriver.GitVcsDriver["Service"]["readHeadSha"] = (cwd) =>
-    // A repository with no commits exits non-zero here: an absent head, not a failure. `--verify`
-    // is load-bearing: without it `rev-parse HEAD` prints "HEAD" before exiting 128, and two unborn
-    // members compared EQUAL at revert time. With it, stdout is empty and this returns null.
-    runGitStdout("GitVcsDriver.readHeadSha", cwd, ["rev-parse", "--verify", "HEAD"], true).pipe(
-      Effect.map((stdout) => stdout.trim()),
-      Effect.map((sha) => (sha.length > 0 ? sha : null)),
-    );
-
-  const readBranchReflog: GitVcsDriver.GitVcsDriver["Service"]["readBranchReflog"] = (
-    cwd,
-    branch,
-  ) =>
-    // A branch with no reflog exits non-zero. That is an absent record rather
-    // than a failure, so the non-zero exit is allowed and yields empty output.
-    runGitStdout("GitVcsDriver.readBranchReflog", cwd, ["reflog", "show", branch], true);
-
-  const listBranchNamesPointingAt: GitVcsDriver.GitVcsDriver["Service"]["listBranchNamesPointingAt"] =
-    (cwd, commit) =>
-      runGitStdout("GitVcsDriver.listBranchNamesPointingAt", cwd, [
-        "branch",
-        "--all",
-        "--no-column",
-        "--points-at",
-        commit,
-        // Full refnames, not `%(refname:short)`: the short form prints a remote
-        // branch as `origin/main` and a local one as `feat/thing`, so the only
-        // thing that tells them apart is knowing the remote's name.
-        "--format=%(refname)",
-      ]).pipe(
-        Effect.map((stdout) =>
-          stdout
-            .split("\n")
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0),
-        ),
-      );
   // Git never waits for .git/config.lock, and git run outside T3, such as an agent's, can hold it.
   // Only writes that are safe to repeat retry.
   const retryWhileConfigLocked = <A>(effect: Effect.Effect<A, GitCommandError>) =>
@@ -7211,11 +7163,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     getReviewDiffPreview,
     getReviewDiffFileContents,
     readConfigValue,
-    deleteRef,
-    hasTrackedChanges,
-    readHeadSha,
-    readBranchReflog,
-    listBranchNamesPointingAt,
     readBranchBase,
     resolveBranchName,
     listRefs,

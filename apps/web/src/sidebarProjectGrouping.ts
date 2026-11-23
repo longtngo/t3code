@@ -217,31 +217,6 @@ export function buildSidebarProjectSnapshots(
   });
 }
 
-/** Identifies one physical project (its environment plus its id). */
-export interface SidebarProjectRef {
-  readonly environmentId: EnvironmentId;
-  readonly projectId: string;
-}
-
-/**
- * A dialog must never hold the snapshot it opened with: snapshots are rebuilt on every derivation,
- * so a held copy makes a second edit silently discard the first. Matches by physical project
- * (environment + id), not group key, so regrouping from the dialog follows the project.
- */
-export function resolveSidebarProjectGroupByRef(
-  groups: ReadonlyArray<SidebarProjectSnapshot>,
-  target: SidebarProjectRef | null,
-): SidebarProjectSnapshot | null {
-  if (!target) return null;
-  return (
-    groups.find((group) =>
-      group.memberProjects.some(
-        (member) => member.environmentId === target.environmentId && member.id === target.projectId,
-      ),
-    ) ?? null
-  );
-}
-
 export function buildSidebarProjectPickerEntries(input: {
   groups: ReadonlyArray<SidebarProjectSnapshot>;
   preferredProjectRef: ScopedProjectRef | null;

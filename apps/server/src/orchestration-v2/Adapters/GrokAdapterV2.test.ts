@@ -350,9 +350,7 @@ describe("Grok launch permission mode", () => {
             ),
             Layer.provide(
               Layer.mock(ProjectStore.ProjectStoreV2)({
-                // Fork: the policy reads the project for its workspace members even
-                // for a worktree thread; a missing row still resolves from the worktree.
-                get: () => Effect.succeedNone,
+                get: () => Effect.die("the thread has a worktree"),
               }),
             ),
             Layer.provide(

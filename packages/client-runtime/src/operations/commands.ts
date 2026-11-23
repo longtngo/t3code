@@ -29,7 +29,6 @@ import {
   type ThreadId,
   type ThreadEnvMode,
   type UploadChatAttachment,
-  type WorkspaceMember,
   type GuestMessageId,
 } from "@t3tools/contracts";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
@@ -77,8 +76,6 @@ export interface UpdateProjectInput extends CommandMetadata {
   readonly faviconPath?: string | null;
   readonly defaultThreadEnvMode?: ThreadEnvMode | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
-  /** Fork: replaces the project's workspace member repositories. */
-  readonly members?: ReadonlyArray<WorkspaceMember>;
   /** Replaces the whole list. Paths only mean something on the project's own environment. */
   readonly trackedFolders?: ReadonlyArray<ProjectTrackedFolder>;
   /** Added to, and removed by path from, the list as the server has it. */
@@ -435,7 +432,6 @@ const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
         readonly workspaceRoot?: string;
         readonly defaultModelSelection?: ModelSelection | null;
         readonly scripts?: ReadonlyArray<ProjectScript>;
-        readonly members?: ReadonlyArray<WorkspaceMember>;
         readonly trackedFolders?: ReadonlyArray<ProjectTrackedFolder>;
         readonly trackFolders?: ReadonlyArray<ProjectTrackedFolder>;
         readonly untrackFolders?: ReadonlyArray<string>;
@@ -489,7 +485,6 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
       ? {}
       : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
     ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
-    ...(input.members === undefined ? {} : { members: input.members }),
     ...(input.trackedFolders === undefined ? {} : { trackedFolders: input.trackedFolders }),
     ...(input.trackFolders === undefined ? {} : { trackFolders: input.trackFolders }),
     ...(input.untrackFolders === undefined ? {} : { untrackFolders: input.untrackFolders }),

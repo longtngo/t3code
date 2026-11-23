@@ -30,48 +30,6 @@ import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
 import * as CheckpointCapture from "./CheckpointCaptureService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as RunFinalization from "./RunFinalizationService.ts";
-import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
-
-// Fork: member branches move only after the checkpoint has recorded where the
-// members stood, and before the workspace refresh reads status.
-it.effect("sweeps workspace members between checkpoint capture and workspace refresh", () => {
-  const threadId = ThreadId.make("thread_finalize_members");
-  const runId = RunId.make("run_finalize_members");
-  const scopeId = CheckpointScopeId.make("scope_finalize_members");
-  const order: Array<string> = [];
-  const layer = RunFinalization.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.mock(CheckpointCapture.CheckpointCaptureServiceV2)({
-          execute: () => Effect.sync(() => order.push("capture")),
-        }),
-        Layer.mock(ProjectionStore.ProjectionStoreV2)({
-          getCheckpointContext: () =>
-            Effect.succeed({
-              runs: [],
-              checkpointScopes: [{ id: scopeId, runId, kind: "root_run" as const, cwd: "/repo" }],
-              checkpoints: [],
-            }),
-        }),
-        Layer.succeed(RunFinalization.RunFinalizationObserver, {
-          refresh: () => Effect.sync(() => order.push("refresh")),
-          refreshAfterTurn: () => Effect.void,
-          refreshRepositories: () => Effect.void,
-        }),
-        Layer.succeed(WorkspaceMemberHooks.WorkspaceMemberHooks, {
-          checkpointStates: () => Effect.undefined,
-          sweep: (input) => Effect.sync(() => order.push(`sweep:${input.threadId}`)),
-          rollbackRefusal: () => Effect.succeed(null),
-        }),
-      ),
-    ),
-  );
-  return Effect.gen(function* () {
-    const service = yield* RunFinalization.RunFinalizationService;
-    yield* service.finalize({ threadId, runId, scopeId });
-    assert.deepEqual(order, ["capture", `sweep:${threadId}`, "refresh"]);
-  }).pipe(Effect.provide(layer));
-});
 
 // Without a project the observer never touches enrichment, so its methods stay unimplemented.
 const layerNoProject = Layer.mergeAll(
@@ -98,7 +56,6 @@ const finalizationLayer = (
   return RunFinalization.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
-        WorkspaceMemberHooks.inert,
         Layer.mock(CheckpointCapture.CheckpointCaptureServiceV2)({
           execute: () =>
             Effect.sync(() => {

@@ -51,7 +51,6 @@ import {
   resumeThreadQueue,
   setThreadSidebarSection,
   startThreadTurn,
-  updateProject,
 } from "./commands.ts";
 
 const layerTestRandom = Layer.succeed(
@@ -1016,28 +1015,6 @@ describe("V2 environment commands", () => {
           type: "thread.stop",
           commandId: "stop-outside-history-window",
           threadId: v2ThreadId,
-        },
-      ]);
-    }).pipe(Effect.provide(layerTestRandom)),
-  );
-
-  // FORK: workspace members travel on a project update.
-  it.effect("sends workspace members on a project update", () =>
-    Effect.gen(function* () {
-      const projects: ProjectMutation[] = [];
-      const supervisor = yield* makeSupervisor({ commands: [], projects });
-      const projectId = ProjectId.make("project-1");
-      const member = { id: "m-1", path: "/work/api", title: "api", integrationBranch: "main" };
-      yield* updateProject({ projectId, members: [member] }).pipe(
-        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-      );
-
-      expect(projects).toEqual([
-        {
-          type: "project.update",
-          commandId: "00000000-0000-4000-8000-000000000000",
-          projectId,
-          members: [member],
         },
       ]);
     }).pipe(Effect.provide(layerTestRandom)),

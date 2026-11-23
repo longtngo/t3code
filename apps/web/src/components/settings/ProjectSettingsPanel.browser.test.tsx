@@ -200,8 +200,6 @@ function setup() {
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     scripts: [],
-    // FORK: workspace member repositories (registry invariant 42).
-    members: [],
   }));
   state.update.mockImplementation(async ({ environmentId, input }) => {
     const { projectId, ...updates } = input;

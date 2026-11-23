@@ -248,7 +248,6 @@ const makeImporter = Effect.fn(function* (
                 id: projectId,
                 title: "Project",
                 workspaceRoot: realScan?.workspaceRoot ?? "/workspace/project",
-                members: [],
                 defaultModelSelection: null,
                 scripts: [],
                 createdAt: timestamp,

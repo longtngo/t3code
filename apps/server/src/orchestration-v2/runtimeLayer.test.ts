@@ -115,7 +115,6 @@ import * as TerminalManager from "../terminal/Manager.ts";
 import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
-import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 import * as DelegatedTaskQuestionReactor from "./DelegatedTaskQuestionReactor.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
@@ -362,7 +361,6 @@ const layerProjectionReplayTest = ProjectionReplay.layer.pipe(
 );
 
 const makeLayerTest = (
-  workspaceMemberHooks: Layer.Layer<WorkspaceMemberHooks.WorkspaceMemberHooks>,
   creditSpendGuard: Layer.Layer<CreditSpendGuard> = creditSpendGuardAllowAll,
 ) =>
   Layer.mergeAll(
@@ -374,7 +372,6 @@ const makeLayerTest = (
     EffectOutbox.layer,
     ThreadCommandExecutor.layer,
   ).pipe(
-    Layer.provide(workspaceMemberHooks),
     Layer.provide(McpSessionRegistryTestkit.layer),
     Layer.provide(McpProviderSessions.layer),
     Layer.provide(SqlitePersistence.layerMemory),
@@ -388,7 +385,7 @@ const makeLayerTest = (
     Layer.provide(layerPlatformTest),
   );
 
-const layerTest = makeLayerTest(WorkspaceMemberHooks.inert);
+const layerTest = makeLayerTest();
 
 // "Allow to spend credits": a gate the test flips once the active run is underway.
 const CREDIT_REFUSAL = 'Codex has used 100% of Weekly and "Allow to spend credits" is off.';
@@ -398,7 +395,6 @@ const creditGateForTest = (instanceId: ProviderInstanceId) =>
     creditBlocked && instanceId === modelSelection.instanceId ? CREDIT_REFUSAL : null,
   );
 const layerCreditGateTest = makeLayerTest(
-  WorkspaceMemberHooks.inert,
   Layer.succeed(
     CreditSpendGuard,
     CreditSpendGuard.of({
@@ -521,7 +517,6 @@ it.layer(layerCreditGateTest)("credit spend gate", (it) => {
 });
 
 const layerLegacyImportTest = Layer.merge(RuntimeLayer.layer, layerProjectionReplayTest).pipe(
-  Layer.provide(WorkspaceMemberHooks.inert),
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provide(McpProviderSessions.layer),
   Layer.provideMerge(SqlitePersistence.layerMemory),
@@ -627,7 +622,6 @@ const layerProjectDeletionTest = Layer.mergeAll(
   ProjectionStore.layer,
   ThreadCommandExecutor.layer,
 ).pipe(
-  Layer.provide(WorkspaceMemberHooks.inert),
   Layer.provide(
     Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
       peek: () =>
@@ -1507,7 +1501,6 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
   RuntimeLayer.layerEventSink,
   RuntimeLayer.layerEventInfrastructure,
 ).pipe(
-  Layer.provide(WorkspaceMemberHooks.inert),
   Layer.provide(
     Layer.mock(WorkspacePaths.WorkspacePaths)({
       normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
@@ -2080,118 +2073,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
       }
     }).pipe(Effect.provide(Layer.fresh(layerTest))),
   );
-
-  // Fork: restoring files while a workspace member moved since the checkpoint is
-  // refused at admission with the member names, before anything is persisted; a
-  // conversation-only rewind restores no files and is still admitted.
-  it.effect("refuses a file-restoring rollback while workspace members have moved", () => {
-    const refusals: Array<string> = [];
-    const refusal = "api has changed since this checkpoint.";
-    // Fresh, so the suite's shared build (with inert hooks) is not reused.
-    const layer = Layer.fresh(
-      makeLayerTest(
-        Layer.succeed(WorkspaceMemberHooks.WorkspaceMemberHooks, {
-          checkpointStates: () => Effect.undefined,
-          sweep: () => Effect.void,
-          rollbackRefusal: ({ checkpoint }) =>
-            Effect.sync(() => {
-              refusals.push(String(checkpoint.memberStates?.[0]?.memberId));
-              return refusal;
-            }),
-        }),
-      ),
-    );
-    return Effect.gen(function* () {
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      const eventSink = yield* EventSink.EventSinkV2;
-      const outbox = yield* EffectOutbox.EffectOutboxV2;
-      const threadId = ThreadId.make("runtime-rollback-members");
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make("runtime-rollback-members-create"),
-        threadId,
-        projectId: ProjectId.make("runtime-rollback-members-project"),
-        title: "Rollback with members",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: process.cwd(),
-      });
-      yield* orchestrator.dispatch({
-        type: "message.dispatch",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make("runtime-rollback-members-message"),
-        threadId,
-        messageId: MessageId.make("runtime-rollback-members-message"),
-        text: "Create the provider thread and checkpoint scope.",
-        attachments: [],
-        dispatchMode: { type: "start_immediately" },
-      });
-      const scope = (yield* orchestrator.getThreadProjection(threadId)).checkpointScopes[0]!;
-      const now = yield* DateTime.now;
-      const checkpointId = CheckpointId.make("runtime-rollback-members-checkpoint");
-      yield* eventSink.write({
-        commandId: CommandId.make("runtime-rollback-members-seed"),
-        events: [
-          {
-            id: EventId.make("runtime-rollback-members-event"),
-            type: "checkpoint.captured",
-            threadId,
-            occurredAt: now,
-            payload: {
-              id: checkpointId,
-              threadId,
-              scopeId: scope.id,
-              runId: null,
-              nodeId: scope.nodeId,
-              parentCheckpointId: null,
-              ordinalWithinScope: 0,
-              appRunOrdinal: null,
-              ref: CheckpointRef.make("refs/t3/runtime-rollback-members"),
-              status: "ready",
-              files: [],
-              memberStates: [{ memberId: "m-api", headSha: "abc", isDirty: false }],
-              capturedAt: now,
-            },
-          },
-        ],
-      });
-      const sequence = yield* orchestrator.getThreadEventSequence(threadId);
-      const commandId = CommandId.make("runtime-rollback-members-restore");
-      const error = yield* orchestrator
-        .dispatch({
-          type: "checkpoint.rollback",
-          commandId,
-          threadId,
-          checkpointId,
-          scopeId: scope.id,
-        })
-        .pipe(Effect.flip);
-      assert.equal(String(error.cause), refusal);
-      // The guard read the checkpoint as projected, member states included.
-      assert.deepEqual(refusals, ["m-api"]);
-      assert.equal(yield* orchestrator.getThreadEventSequence(threadId), sequence);
-      assert.deepEqual(yield* outbox.listByCommandId(commandId), []);
-
-      const conversationOnly = yield* orchestrator.dispatch({
-        type: "checkpoint.rollback",
-        commandId: CommandId.make("runtime-rollback-members-conversation"),
-        threadId,
-        checkpointId,
-        scopeId: scope.id,
-        restoreFiles: false,
-      });
-      assert.deepEqual(
-        conversationOnly.storedEvents.map((stored) => stored.event.type),
-        ["thread.metadata-updated", "checkpoint.rollback-requested"],
-      );
-      assert.deepEqual(refusals, ["m-api"]);
-    }).pipe(Effect.provide(layer));
-  });
 
   it.effect("resolves delivery intent against the active run and starts after it completes", () =>
     Effect.gen(function* () {
@@ -15085,7 +14966,6 @@ const CreditGateSqlLayer = (creditSpendGuard: Layer.Layer<CreditSpendGuard>) =>
     EffectOutbox.layer,
     ThreadCommandExecutor.layer,
   ).pipe(
-    Layer.provide(WorkspaceMemberHooks.inert),
     Layer.provide(McpSessionRegistryTestkit.layer),
     Layer.provide(McpProviderSessions.layer),
     Layer.provide(layerCheckpointStoreTest),
@@ -15331,7 +15211,6 @@ const layerQueueResumeDisabledInstanceTest = Layer.mergeAll(
   EffectOutbox.layer,
   ThreadCommandExecutor.layer,
 ).pipe(
-  Layer.provide(WorkspaceMemberHooks.inert),
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provide(McpProviderSessions.layer),
   Layer.provide(SqlitePersistence.layerMemory),

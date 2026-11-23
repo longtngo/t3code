@@ -89,10 +89,6 @@ export const make = Effect.gen(function* () {
       const projects = yield* projectStore.listShells().pipe(Effect.orElseSucceed(() => []));
       for (const project of projects) {
         if (within(yield* resolveRoot(project.workspaceRoot))) return true;
-        // FORK: a workspace member repository is the project's too (invariant 6).
-        for (const member of project.members) {
-          if (within(yield* resolveRoot(member.path))) return true;
-        }
       }
       // After every project folder: most tracked folders sit inside one and need no lookup.
       for (const project of projects) {

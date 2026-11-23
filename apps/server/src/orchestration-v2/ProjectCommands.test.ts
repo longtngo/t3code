@@ -24,7 +24,6 @@ const row = (overrides: Partial<ProjectRow> = {}): ProjectRow => ({
   faviconPath: null,
   projectIcon: null,
   scripts: [],
-  members: [],
   trackedFolders: [],
   pinnedAt: null,
   archivedAt: null,

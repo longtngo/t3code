@@ -60,7 +60,6 @@ const project: OrchestrationProjectShell = {
   workspaceRoot: "/workspace/project",
   defaultModelSelection: null,
   scripts: [],
-  members: [],
   repositoryIdentity: {
     canonicalKey: "github.com/t3tools/t3code",
     locator: {

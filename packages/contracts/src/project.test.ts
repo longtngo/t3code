@@ -4,6 +4,8 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
+import { ApplicationProjectMetaUpdatedPayload } from "./applicationEvent.ts";
+import { OrchestrationV2CheckpointJson } from "./orchestrationV2.ts";
 
 import {
   ProjectFaviconPath,
@@ -243,7 +245,6 @@ effectIt.effect("an icon kind from a newer server shows the default icon", () =>
       workspaceRoot: "/tmp/project",
       defaultModelSelection: null,
       scripts: [],
-      members: [],
       projectIcon: { kind: "image", url: "https://example.com/a.png" },
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -253,3 +254,59 @@ effectIt.effect("an icon kind from a newer server shows the default icon", () =>
     assert.strictEqual(broken._tag, "Failure");
   }),
 );
+
+// The fork's workspace members were retired at the 61st reconcile. Stored project rows, project
+// events, checkpoints and client caches written before then can still carry `members` or
+// `memberStates`; decoding ignores those keys rather than failing.
+const decodeStoredShell = Schema.decodeUnknownEffect(OrchestrationProjectShell);
+const decodeStoredMetaUpdated = Schema.decodeUnknownEffect(ApplicationProjectMetaUpdatedPayload);
+// As the projection store reads a checkpoint row: JSON text.
+const decodeStoredCheckpoint = Schema.decodeEffect(
+  Schema.fromJsonString(OrchestrationV2CheckpointJson),
+);
+
+describe("payloads written while workspace members existed", () => {
+  const member = { id: "m-1", path: "/work/api", title: "api", integrationBranch: "main" };
+
+  effectIt.effect("still decode, dropping the retired keys", () =>
+    Effect.gen(function* () {
+      const shell = yield* decodeStoredShell({
+        id: "project-1",
+        title: "Project",
+        workspaceRoot: "/tmp/project",
+        defaultModelSelection: null,
+        scripts: [],
+        members: [member],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      assert.notProperty(shell, "members");
+
+      const metaUpdated = yield* decodeStoredMetaUpdated({
+        projectId: "project-1",
+        members: [member],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      assert.notProperty(metaUpdated, "members");
+
+      const checkpoint = yield* decodeStoredCheckpoint(
+        JSON.stringify({
+          id: "checkpoint-1",
+          threadId: "thread-1",
+          scopeId: "scope-1",
+          runId: null,
+          nodeId: "node-1",
+          parentCheckpointId: null,
+          ordinalWithinScope: 0,
+          appRunOrdinal: null,
+          ref: "refs/t3/checkpoint-1",
+          status: "ready",
+          files: [],
+          memberStates: [{ memberId: "m-1", headSha: "abc", isDirty: false }],
+          capturedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      assert.notProperty(checkpoint, "memberStates");
+    }),
+  );
+});
