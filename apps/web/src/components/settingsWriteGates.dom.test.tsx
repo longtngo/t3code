@@ -18,8 +18,9 @@ const fixture = vi.hoisted(() => ({ grant: null as unknown }));
 
 // Every grant check reads the fixture through the real rules.
 vi.mock("~/state/session", async (importOriginal) => {
-  const { sessionResultDeniesScope, sessionResultGrantsScope } =
-    await import("@t3tools/client-runtime/state/sessionScope");
+  const { sessionResultGrantsScope } = await import("@t3tools/client-runtime/state/sessionScope");
+  const { sessionDeniesScope: sessionResultDeniesScope } =
+    await import("@t3tools/client-runtime/state/session");
   const grants = (_id: unknown, scope: never) =>
     sessionResultGrantsScope(fixture.grant as Grant, scope);
   const denied = (_id: unknown, scope: never) =>
@@ -39,6 +40,7 @@ vi.mock("./ui/tooltip", async () => {
   return {
     Tooltip: Pass,
     TooltipPopup: () => null,
+    useTooltipScrollTracker: () => null,
     TooltipTrigger: ({
       render,
       children,

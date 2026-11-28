@@ -51,6 +51,12 @@ describe("remarkGithubAlerts", () => {
     expect(html).toContain('data-alert="important"');
   });
 
+  it("recognizes an alert whose marker line ends in a lone CR", () => {
+    expect(renderMarkdown("> [!NOTE]\r> **Bold** body.")).toBe(
+      '<blockquote data-alert="note">\n<p><strong>Bold</strong> body.</p>\n</blockquote>',
+    );
+  });
+
   it("leaves a quote alone when the marker shares its line with anything else", () => {
     const html = renderMarkdown("> [!NOTE] an ordinary quote");
 

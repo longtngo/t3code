@@ -62,7 +62,11 @@ vi.mock("~/state/environments", async (importOriginal) => ({
   usePrimaryEnvironmentId: () => null,
   useEnvironmentHttpBaseUrl: () => null,
 }));
-vi.mock("~/remoteOpen", () => ({ useRemoteOpenState: () => ({ mode: "local-exec" }) }));
+vi.mock("~/remoteOpen", () => ({
+  useRemoteOpenState: () => ({ mode: "local-exec" }),
+  useRemoteOpenResolution: () => ({ state: { mode: "local-exec" }, isResolved: true }),
+  useRemoteCapableEditors: () => [],
+}));
 vi.mock("~/browser/previewRuntime", () => ({ usePreviewAvailable: () => false }));
 vi.mock("~/state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));

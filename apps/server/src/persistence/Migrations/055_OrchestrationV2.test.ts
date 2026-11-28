@@ -13,8 +13,8 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        // Fork ids: upstream's 055-080 apply as 64-89, then 90 is the Web Push repair and upstream's 081-098 are 91-108, then upstream's 099-110 are 109-120 (registry section 1).
-        Array.from({ length: 120 }, (_, index) => index + 1),
+        // Fork ids: upstream's 055-080 apply as 64-89, then 90 is the Web Push repair and upstream's 081-098 are 91-108, then upstream's 099-119 are 109-129 (registry section 1).
+        Array.from({ length: 129 }, (_, index) => index + 1),
       );
     }),
   );
@@ -84,6 +84,15 @@ layer("055_OrchestrationV2", (it) => {
         [118, "AgentFeedback"],
         [119, "IssueTrackerAccounts"],
         [120, "Workflows"],
+        [121, "SupersededRunAttemptIndex"],
+        [122, "LayoutCommandApprovals"],
+        [123, "WorkflowSkippedRuns"],
+        [124, "WorkflowRunIndexes"],
+        [125, "WorkflowRunTags"],
+        [126, "ForkHistoryMembership"],
+        [127, "WorkflowMailSender"],
+        [128, "WorkflowPools"],
+        [129, "WorkflowRunSubject"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -161,6 +170,15 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 118, name: "AgentFeedback" },
         { migration_id: 119, name: "IssueTrackerAccounts" },
         { migration_id: 120, name: "Workflows" },
+        { migration_id: 121, name: "SupersededRunAttemptIndex" },
+        { migration_id: 122, name: "LayoutCommandApprovals" },
+        { migration_id: 123, name: "WorkflowSkippedRuns" },
+        { migration_id: 124, name: "WorkflowRunIndexes" },
+        { migration_id: 125, name: "WorkflowRunTags" },
+        { migration_id: 126, name: "ForkHistoryMembership" },
+        { migration_id: 127, name: "WorkflowMailSender" },
+        { migration_id: 128, name: "WorkflowPools" },
+        { migration_id: 129, name: "WorkflowRunSubject" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

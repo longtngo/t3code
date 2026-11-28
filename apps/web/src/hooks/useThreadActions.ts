@@ -87,7 +87,7 @@ import { whileLeavingThreadQueue } from "../threadQueueLeaving";
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./showThreadUndoNotice";
 import { useAtomCommand } from "../state/use-atom-command";
-import { useOrchestrationCommand } from "../state/use-orchestration-command";
+import { threadTriagePermitted, useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 
 export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveBlockedError>()(
@@ -356,12 +356,16 @@ export function useThreadActions() {
   const deleteThreadMutation = useOrchestrationCommand(threadEnvironment.delete, {
     reportFailure: false,
   });
-  const settleThreadMutation = useOrchestrationCommand(threadEnvironment.settle, {
-    reportFailure: false,
-  });
-  const unsettleThreadMutation = useOrchestrationCommand(threadEnvironment.unsettle, {
-    reportFailure: false,
-  });
+  const settleThreadMutation = useOrchestrationCommand(
+    threadEnvironment.settle,
+    { reportFailure: false },
+    threadTriagePermitted,
+  );
+  const unsettleThreadMutation = useOrchestrationCommand(
+    threadEnvironment.unsettle,
+    { reportFailure: false },
+    threadTriagePermitted,
+  );
   const pinThreadMutation = useOrchestrationCommand(threadEnvironment.pin, {
     reportFailure: false,
   });
@@ -380,12 +384,16 @@ export function useThreadActions() {
   const setThreadSidebarSectionMutation = useOrchestrationCommand(threadEnvironment.setSection, {
     reportFailure: false,
   });
-  const snoozeThreadMutation = useOrchestrationCommand(threadEnvironment.snooze, {
-    reportFailure: false,
-  });
-  const unsnoozeThreadMutation = useOrchestrationCommand(threadEnvironment.unsnooze, {
-    reportFailure: false,
-  });
+  const snoozeThreadMutation = useOrchestrationCommand(
+    threadEnvironment.snooze,
+    { reportFailure: false },
+    threadTriagePermitted,
+  );
+  const unsnoozeThreadMutation = useOrchestrationCommand(
+    threadEnvironment.unsnooze,
+    { reportFailure: false },
+    threadTriagePermitted,
+  );
   const markThreadUnread = useMarkThreadUnread();
   const createProjectFromThread = useAtomCommand(projectEnvironment.createFromThread, {
     reportFailure: false,
@@ -944,14 +952,13 @@ export function useThreadActions() {
       );
     }
     const resolved = resolveThreadTarget(target);
-    // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
-    const now = new Date().toISOString();
-    const wokeAt = resolved ? threadWokeAt(resolved.thread, { now }) : null;
+    const nowIso = new Date().toISOString();
+    const wokeAt = resolved ? threadWokeAt(resolved.thread, { now: nowIso }) : null;
     // The server's settle drops the pin but keeps the snooze, so a snoozed thread would stay
     // on the Snoozed shelf: it is woken below once the settle landed, as a drop from Snoozed
     // to Settled does. Undo puts both back.
     const undoPlan = ThreadUndo.planThreadUndo("settle", resolved?.thread);
-    const wakeAfterSettle = resolved !== null && effectiveSnoozed(resolved.thread, { now });
+    const wakeAfterSettle = resolved !== null && effectiveSnoozed(resolved.thread, { now: nowIso });
     // An older unpin/snooze Undo would re-pin or re-snooze, and the server
     // treats either as a promotion that un-settles; settling supersedes them.
     ThreadUndo.invalidate("pin", scopedThreadKey(target));
@@ -1130,7 +1137,6 @@ export function useThreadActions() {
       );
     }
     const resolved = resolveThreadTarget(target);
-    // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
     if (resolved && !canSnooze(resolved.thread, { now: new Date().toISOString() })) {
       return AsyncResult.failure(
         Cause.fail(
@@ -1183,13 +1189,24 @@ export function useThreadActions() {
     return result;
   };
 
-  const runUndoPlan = (target: ScopedThreadRef, plan: ThreadUndo.ThreadUndoPlan) =>
-    ThreadUndo.executeThreadUndo(
+  const runUndoPlan = (target: ScopedThreadRef, plan: ThreadUndo.ThreadUndoPlan) => {
+    let cancelledOnDevice = false;
+    return ThreadUndo.executeThreadUndo(
       plan,
       async (step) => {
+        if (
+          cancelledOnDevice &&
+          !ThreadUndo.restoresAfterDeviceCancel(step, readThreadShell(target))
+        ) {
+          return AsyncResult.success(undefined);
+        }
         switch (step.action) {
-          case "unsettle":
-            return unsettleThread(target, step.restoreUnsettledAt);
+          case "unsettle": {
+            const result = await unsettleThread(target, step.restoreUnsettledAt);
+            cancelledOnDevice =
+              result._tag === "Success" && ThreadUndo.cancelledOnDevice(result.value);
+            return result;
+          }
           case "unsnooze":
             return unsnoozeThread(target);
           case "pin":
@@ -1205,6 +1222,7 @@ export function useThreadActions() {
       },
       (result) => result._tag === "Success",
     );
+  };
 
   const confirmAndDeleteThread = async (target: ScopedThreadRef, knownTitle?: string) => {
     const permissionFailure = threadOperationFailure(target);

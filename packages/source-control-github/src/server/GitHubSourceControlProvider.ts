@@ -286,10 +286,12 @@ export const makeDiscovery = Effect.gen(function* () {
       if (tokenSource === null || settings.hosts["github.com"]?.enabled === false) {
         return offerAppSignIn(cli);
       }
-      const viewer = yield* api
-        // Settings shows one account per host, not a project's.
-        .rest({ host: "github.com", cwd: null, operation: "discovery", path: "user" })
-        .pipe(Effect.result);
+      const viewer = yield* (
+        api
+          // Settings shows one account per host, not a project's.
+          .rest({ host: "github.com", cwd: null, operation: "discovery", path: "user" })
+          .pipe(Effect.result)
+      );
       const login = Result.isSuccess(viewer)
         ? Option.getOrUndefined(decodeViewer(viewer.success.body))?.login
         : undefined;

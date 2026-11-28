@@ -1,4 +1,5 @@
 import { useNativeFileDrag } from "../../useNativeFileDrag";
+import { useFileMetadata } from "../../hooks/useFileMetadata";
 import { useAssetUrlState } from "../../assets/assetUrls";
 import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import {
@@ -27,7 +28,6 @@ import { ContextChip } from "../ContextChip";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SharedTooltipTrigger, useSharedTooltip, withSharedTooltip } from "../ui/shared-tooltip";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { FileTagChipContent } from "./FileTagChip";
 import {
   hasMarkdownFilePrimaryAction,
@@ -73,6 +73,8 @@ interface MarkdownFileLinkProps {
     | ((fileLink: MarkdownFileLinkMeta) => Promise<AtomCommandResult<unknown, unknown>>)
     | undefined;
   revealLabel?: string | undefined;
+  /** Takes the link, like the other handlers, so its identity holds across stream deltas. */
+  onDownload?: ((fileLink: MarkdownFileLinkMeta) => void) | undefined;
 }
 
 const MARKDOWN_FILE_LINK_CLASS_NAME = "chat-markdown-file-link";
@@ -98,11 +100,13 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   onOpenMedia,
   onReveal,
   revealLabel,
+  onDownload,
   resolveCopyPaths,
   resolveDragPath,
 }: MarkdownFileLinkProps) {
   const gt = useGT();
   const nativeDrag = useNativeFileDrag(environmentId, () => resolveDragPath(fileLink));
+  const isDirectory = useFileMetadata(environmentId, iconPath)?.kind === "directory";
   const handleOpenInEditor = () => {
     if (!onOpen) {
       return;
@@ -311,6 +315,15 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
     ...(onReveal && revealLabel
       ? ([{ id: "reveal", label: revealLabel, run: handleRevealInFileManager }] as const)
       : []),
+    ...(onDownload && !isDirectory
+      ? ([
+          {
+            id: "download",
+            label: gt("Download", { $context: "verb, saves a file" }),
+            run: () => onDownload(fileLink),
+          },
+        ] as const)
+      : []),
     ...markdownFileCopyMenuItems({ targetPath, workspaceRelativePath }).map(
       ({ id, label, title }) => ({ id, label, run: () => copyPath(id, title) }),
     ),
@@ -459,12 +472,12 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   const tooltippedChip = sharedTooltip ? (
     withSharedTooltip(chip, sharedTooltip)
   ) : (
-    <Tooltip>
-      <TooltipTrigger render={chip} />
-      <TooltipPopup side="top" variant="code" className="pointer-events-auto">
-        {tooltipContent}
-      </TooltipPopup>
-    </Tooltip>
+    <SharedTooltipTrigger
+      render={chip}
+      label={tooltipContent}
+      variant="code"
+      className="pointer-events-auto"
+    />
   );
   const optionsLabel = gt("View options for {basename}", { basename });
   return (
@@ -538,7 +551,8 @@ function areMarkdownFileLinkPropsEqual(
     previous.onReveal === next.onReveal &&
     previous.resolveCopyPaths === next.resolveCopyPaths &&
     previous.resolveDragPath === next.resolveDragPath &&
-    previous.revealLabel === next.revealLabel
+    previous.revealLabel === next.revealLabel &&
+    previous.onDownload === next.onDownload
   );
 }
 

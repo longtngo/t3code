@@ -20,6 +20,10 @@ vi.mock("@tanstack/react-router", () => ({
     const location = { pathname: "/settings/queue", hash: "", state: {} };
     return select ? select(location) : location;
   },
+  useMatches: ({ select }: { select?: (matches: unknown) => unknown } = {}) => {
+    const matches = [{ pathname: "/settings/queue" }];
+    return select ? select(matches) : matches;
+  },
 }));
 // A live scope picker: the Queue tab must not offer it, since writes always go to the primary.
 vi.mock("./SettingsScopeContext", () => ({

@@ -36,7 +36,7 @@ import {
   createInboxReturnTracker,
   isThreadWorking,
 } from "@t3tools/client-runtime/state/thread-inbox";
-import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
+import { activeThreadSortKey, sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
   nextShownOrder,
   threadSearchMatchKey,
@@ -111,10 +111,12 @@ import { configuredHostedAppUrl } from "../hostedPairing";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { SidebarFolderDrop } from "./sidebar/SidebarFolderDrop";
 import {
+  groupIconFallbacks,
   pickableProjectGroups,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import {
+  buildSidebarProjectPickerEntries,
   projectGroupsSpanEnvironments,
   resolveSidebarProjectScopeKeys,
   getSidebarProjectSettingsKey,
@@ -136,7 +138,7 @@ import { useProjectPin } from "../hooks/useProjectGroupUpdate";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
-import { startNewThreadFromContext } from "../lib/chatThreadActions";
+import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -161,7 +163,7 @@ import { environmentProjects } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
 import { useThreadSearch } from "../state/queries";
-import { useOrchestrationCommand } from "../state/use-orchestration-command";
+import { threadTriagePermitted, useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
@@ -179,6 +181,8 @@ import {
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
   resolveSidebarSectionMoveAction,
+  canMarkLatestRunUnread,
+  isThreadTriageAction,
   threadActionRequiresOperate,
 } from "./threadActionMenu.logic";
 import {
@@ -324,7 +328,7 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
-import { TooltipProvider } from "./ui/tooltip";
+import { TooltipScrollDismissArea } from "./ui/tooltip";
 import {
   composerDraftHasUserContent,
   DraftId,
@@ -418,8 +422,11 @@ const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Ma
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 const EMPTY_DRAFT_IDS: readonly DraftId[] = [];
 
+const FOLDER_PREVIEW_COUNT = 6;
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
+const REVEAL_ROW_CLASS_NAME =
+  "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground aria-disabled:cursor-default";
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
@@ -576,6 +583,7 @@ function useSidebarThreads(input: {
   // Shared with the old per-project sidebar, so folders keep their open state.
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
+  const [showAllFolderKeys, setShowAllFolderKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [settledTail, setSettledTail] = useState({
     scopeKey: projectScopeKey,
     count: SETTLED_TAIL_INITIAL_COUNT,
@@ -690,16 +698,23 @@ function useSidebarThreads(input: {
             projectExpandedById,
             sidebarFolderExpansionKeys(folder.group),
           );
+          const showAll = !collapsed && showAllFolderKeys.has(folder.group.projectKey);
+          // A closed folder previews nothing; either way the open thread stays listed.
+          const previewCount = collapsed ? 0 : FOLDER_PREVIEW_COUNT;
+          const tail = folder.threads.slice(previewCount);
+          const hidden = tail.filter((thread) => threadShellKey(thread) !== routeRowThreadKey);
+          const listsAll = showAll || hidden.length === 0;
           return {
             group: folder.group,
             collapsed,
-            // A closed folder still shows the open thread, and hints at the rest.
-            threads: collapsed
-              ? routeThreadOnly(folder.threads, routeRowThreadKey)
-              : folder.threads,
-            hiddenThreads: collapsed
-              ? folder.threads.filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
-              : EMPTY_THREADS,
+            threads: listsAll
+              ? folder.threads
+              : [
+                  ...folder.threads.slice(0, previewCount),
+                  ...routeThreadOnly(tail, routeRowThreadKey),
+                ],
+            hiddenThreads: listsAll ? EMPTY_THREADS : hidden,
+            canShowLess: showAll && hidden.length > 0,
           };
         });
   const orderedThreads = [
@@ -773,6 +788,12 @@ function useSidebarThreads(input: {
       const keys = sidebarFolderExpansionKeys(group);
       setProjectExpanded(keys, !resolveProjectExpanded(projectExpandedById, keys));
     },
+    toggleProjectFolderShowAll: (projectKey: string) =>
+      setShowAllFolderKeys((current) => {
+        const next = new Set(current);
+        if (!next.delete(projectKey)) next.add(projectKey);
+        return next;
+      }),
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleQueuedThreads,
@@ -791,9 +812,12 @@ function useSidebarThreads(input: {
     pinnedKeysById: new Map(
       threads.map((thread) => [threadShellKey(thread), thread.pinOrderKey ?? null] as const),
     ),
-    activeKeysById: new Map(
-      threads.map((thread) => [threadShellKey(thread), thread.activeOrderKey ?? null] as const),
-    ),
+    activeKeysById: new Map([
+      ...threads.map((thread) => [threadShellKey(thread), thread.activeOrderKey ?? null] as const),
+      ...activeThreads.map(
+        (thread) => [threadShellKey(thread), activeThreadSortKey(thread)] as const,
+      ),
+    ]),
   };
 }
 
@@ -987,16 +1011,20 @@ function ProjectScopeRowIcon(props: { isSelected: boolean; children: ReactNode }
 
 function canOperateThreads(
   threads: ReadonlyArray<Pick<SidebarThreadSummary, "environmentId">>,
+  triage = false,
 ): boolean {
   return threads.every((thread) =>
-    readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope),
+    triage
+      ? threadTriagePermitted(thread.environmentId)
+      : readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope),
   );
 }
 
 function checkThreadOperations(
   threads: ReadonlyArray<Pick<SidebarThreadSummary, "environmentId">>,
+  triage = false,
 ): boolean {
-  if (canOperateThreads(threads)) return true;
+  if (canOperateThreads(threads, triage)) return true;
   toastManager.add({
     type: "error",
     title: m(msg("Thread action unavailable")),
@@ -1106,7 +1134,7 @@ function SidebarSettledShowMore(props: {
           if (props.loading) return;
           props.onClick();
         }}
-        className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground aria-disabled:cursor-default"
+        className={REVEAL_ROW_CLASS_NAME}
       >
         {/* Plus means "add", so revealing more uses a chevron. */}
         <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
@@ -1431,7 +1459,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const { handleNewThread } = newThreadContext;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
-  const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
   const acknowledgeWoke = useAcknowledgeThreadWoke();
@@ -1506,7 +1533,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   } | null>(null);
   const snoozingThreadKeysRef = useRef(new Set<string>());
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
-  const openAddProjectCommandPalette = () => openCommandPalette({ open: "add-project" });
+  const openAddProjectCommandPalette = () => {
+    if (isMobile) setOpenMobile(false);
+    openCommandPalette({ open: "add-project" });
+  };
   const routeThreadRef = resolveActiveThreadRouteRef(
     routeTarget,
     routeDraftThread,
@@ -1695,7 +1725,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const startThreadInProjectFolder = useStableCallback((group: SidebarProjectSnapshot) => {
     if (isMobile) setOpenMobile(false);
-    void handleNewThread(scopeProjectRef(group.environmentId, group.id));
+    const [entry] = buildSidebarProjectPickerEntries({
+      groups: [group],
+      preferredProjectRef: resolveThreadActionProjectRef({
+        ...newThreadContext,
+        activeThread: newThreadContext.activeThread ?? undefined,
+      }),
+    });
+    const target = entry?.targetProject ?? group;
+    void handleNewThread(scopeProjectRef(target.environmentId, target.id));
   });
   const handleProjectFolderContextMenu = useStableCallback(
     (
@@ -1817,6 +1855,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleCustomSection,
     projectFolders,
     toggleProjectFolder,
+    toggleProjectFolderShowAll,
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
@@ -1965,7 +2004,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
       clearSelection();
     }
-    setSelectionAnchor(scopedThreadKey(threadRef));
     if (isMobile) {
       setOpenMobile(false);
     }
@@ -2016,7 +2054,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
     );
     const query = threadSearch.query;
-    clearThreadSearch();
     navigateToThread(ref);
     if (match) openThreadFindOnQuery(scopedThreadKey(ref), findForMessageMatch(match, query));
   };
@@ -2088,14 +2125,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const isMac = isMacPlatform(navigator.platform);
     const isModClick = isMac ? event.metaKey : event.ctrlKey;
     const threadKey = scopedThreadKey(threadRef);
+    const openThreadKey =
+      routeRowThreadKey !== null && orderedThreadKeysRef.current.includes(routeRowThreadKey)
+        ? routeRowThreadKey
+        : null;
     if (isModClick) {
       event.preventDefault();
-      toggleThreadSelection(threadKey);
+      toggleThreadSelection(threadKey, openThreadKey);
       return;
     }
     if (event.shiftKey) {
       event.preventDefault();
-      rangeSelectTo(threadKey, orderedThreadKeysRef.current);
+      rangeSelectTo(threadKey, orderedThreadKeysRef.current, openThreadKey);
       return;
     }
     // macOS keeps counting quick clicks across rows, so only the open row's trailing click is a double-click.
@@ -2458,6 +2499,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
     })();
   };
+  const attemptPinStable = useStableCallback(attemptPin);
   const attemptUnpin = (threadRef: ScopedThreadRef) => {
     void (async () => {
       const result = await confirmAndUnpinThread(threadRef);
@@ -2598,7 +2640,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const listMotionLayoutKey = [
     sidebarListItemsKey,
     projectFolders
-      ?.map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
+      ?.map(
+        (folder) =>
+          `${folder.group.projectKey}:${folder.canShowLess}:${folder.threads.map(threadShellKey).join(",")}`,
+      )
       .join("\n") ?? "",
     visibleDraftSessionCount,
     routeDraftIdForRows ?? "",
@@ -3093,7 +3138,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
       occurredAt: new Date().toISOString(),
       pinnedKeysById,
-      activeKeysById,
+      // Stored keys, not sort keys: an unpinned row gaining its implied key is not a foreign write.
+      activeKeysById: new Map(
+        [...threadByKey].map(([key, thread]) => [key, thread.activeOrderKey ?? null] as const),
+      ),
     });
     void holdSidebarDrop(holdOptimisticDrop, drop, plan, commands, unqueue);
   };
@@ -3137,6 +3185,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       const unpinMenuItem = buildBulkUnpinContextMenuItem({
         pinnedCount: pinnedSelectedThreads.length,
       });
+      // Same rule as the single-thread menu: only a settled, completed run can be marked unread.
+      const markUnreadThreads = selectedThreads.filter(
+        (thread) =>
+          canMarkLatestRunUnread(thread.latestRun) && threadRuntimeCanArchive(thread.runtime),
+      );
       // Presets sync across environments, so the first selected thread's stand for all.
       const menuOpenedAt = new Date();
       const snoozePresets = resolveSnoozePresets(
@@ -3152,27 +3205,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               : []),
             {
               id: "settle",
-              label: gt("Settle ({count})", { count }),
-              disabled: settlingThreads.length === 0 || !canOperateThreads(settlingThreads),
+              label: gt("Settle ({count})", { count: settlingThreads.length }),
+              disabled: settlingThreads.length === 0 || !canOperateThreads(settlingThreads, true),
             },
             ...(canSnoozeSelection
               ? [
                   {
                     id: "snooze",
                     label: gt("Snooze ({count})", { count }),
-                    disabled: !canOperateThreads(selectedThreads),
+                    disabled: !canOperateThreads(selectedThreads, true),
                     children: [
                       ...snoozePresets.map((preset) => ({
                         id: `snooze:${preset.id}`,
                         label: preset.label,
                         detail: preset.whenLabel,
-                        disabled: !canOperateThreads(selectedThreads),
+                        disabled: !canOperateThreads(selectedThreads, true),
                       })),
                       {
                         id: "snooze:custom",
                         label: gt("Custom…"),
                         separatorBefore: snoozePresets.length > 0,
-                        disabled: !canOperateThreads(selectedThreads),
+                        disabled: !canOperateThreads(selectedThreads, true),
                       },
                     ],
                   },
@@ -3188,7 +3241,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   },
                 ]
               : []),
-            { id: "mark-unread", label: gt("Mark unread ({count})", { count }) },
+            ...(markUnreadThreads.length > 0
+              ? [
+                  {
+                    id: "mark-unread" as const,
+                    label: gt("Mark unread ({count})", { count: markUnreadThreads.length }),
+                  },
+                ]
+              : []),
             {
               id: "delete",
               label: gt("Delete ({count})", { count }),
@@ -3215,7 +3275,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 })
               : selectedThreads;
       if (clicked.value === "settle" && actionTargets.length === 0) return;
-      if (clicked.value !== "mark-unread" && !checkThreadOperations(actionTargets)) return;
+      if (
+        clicked.value !== "mark-unread" &&
+        !checkThreadOperations(actionTargets, isThreadTriageAction(clicked.value))
+      )
+        return;
       if (clicked.value?.startsWith("snooze:")) {
         const preset =
           clicked.value === "snooze:custom"
@@ -3294,9 +3358,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         return;
       }
       if (clicked.value === "mark-unread") {
-        for (const threadKey of threadKeys) {
-          const thread = threadByKeyRef.current.get(threadKey);
-          if (thread) markThreadUnread(scopeThreadRef(thread.environmentId, thread.id));
+        for (const thread of markUnreadThreads) {
+          markThreadUnread(scopeThreadRef(thread.environmentId, thread.id));
         }
         clearSelection();
         return;
@@ -3504,6 +3567,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 threadRef.environmentId,
                 AuthOrchestrationOperateScope,
               ),
+              canTriage: threadTriagePermitted(threadRef.environmentId),
               branch: thread.branch ?? null,
               // An archived project is not a filter choice.
               projectFilter:
@@ -3522,7 +3586,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
               isRunning: !threadRuntimeCanArchive(thread.runtime),
-              hasCompletedRun: thread.latestRun?.completedAt != null,
+              hasCompletedRun: canMarkLatestRunUnread(thread.latestRun),
               canShareWithGuest: appAtomRegistry.get(
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
@@ -3542,7 +3606,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
-        if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;
+        if (
+          threadActionRequiresOperate(clicked.value) &&
+          !checkThreadOperations([thread], isThreadTriageAction(clicked.value))
+        )
+          return;
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
             clicked.value === "snooze:custom"
@@ -3579,6 +3647,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               });
             return;
           case "new-thread-on-branch": {
+            if (isMobile) setOpenMobile(false);
             const result = await settlePromise(() =>
               handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
                 branch: thread.branch,
@@ -3982,6 +4051,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             onUnsettle: attemptUnsettle,
             onSnooze: attemptSnooze,
             onUnsnooze: attemptUnsnooze,
+            onPin: attemptPinStable,
             onUnpin: attemptUnpin,
             onAcknowledgeWoke: acknowledgeWoke,
             onFileDropThreads: handleThreadFileDrop,
@@ -4146,6 +4216,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           }
           if (projectFolders !== null && item.marker === "active-placeholder") {
             for (const folder of projectFolders) {
+              const folderRow = sidebarFolderRowId(folder.group.projectKey);
+              const showMore = !folder.collapsed && folder.hiddenThreads.length > 0;
               items.push(
                 <SidebarProjectFolderHeader
                   key={`project-folder:${folder.group.projectKey}`}
@@ -4158,8 +4230,29 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 />,
               );
               for (const thread of folder.threads) {
+                items.push(renderThreadRow(thread, "active", folderRow));
+              }
+              if (showMore || folder.canShowLess) {
                 items.push(
-                  renderThreadRow(thread, "active", sidebarFolderRowId(folder.group.projectKey)),
+                  <li key={`project-folder-more:${folder.group.projectKey}`} className="list-none">
+                    <button
+                      type="button"
+                      data-sidebar-row={`${folderRow}:more`}
+                      data-sidebar-parent={folderRow}
+                      onClick={() => toggleProjectFolderShowAll(folder.group.projectKey)}
+                      className={REVEAL_ROW_CLASS_NAME}
+                    >
+                      <ChevronDownIcon
+                        aria-hidden
+                        className={cn("size-4 shrink-0", !showMore && "rotate-180")}
+                      />
+                      {showMore
+                        ? gt("{count, plural, one {Show {count} more} other {Show {count} more}}", {
+                            count: folder.hiddenThreads.length,
+                          })
+                        : gt("Show less")}
+                    </button>
+                  </li>,
                 );
               }
             }
@@ -4433,13 +4526,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 : "-ml-1 flex rounded-[25%] bg-sidebar ring-2 ring-sidebar"
                             }
                           >
-                            <ProjectFavicon project={project} className="size-3.5" />
+                            <ProjectFavicon
+                              project={project}
+                              fallbackProjects={groupIconFallbacks(project.memberProjects, project)}
+                              className="size-3.5"
+                            />
                           </span>
                         ))}
                       </span>
                     ) : scopedProjectGroups[0] ? (
                       <span className="flex shrink-0">
-                        <ProjectFavicon project={scopedProjectGroups[0]} className="size-4" />
+                        <ProjectFavicon
+                          project={scopedProjectGroups[0]}
+                          fallbackProjects={groupIconFallbacks(
+                            scopedProjectGroups[0].memberProjects,
+                            scopedProjectGroups[0],
+                          )}
+                          className="size-4"
+                        />
                       </span>
                     ) : (
                       <FolderIcon className="size-4" />
@@ -4451,6 +4555,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     collisionAvoidance={{ side: "flip", align: "shift" }}
                     className="w-[min(18rem,var(--available-width))] overflow-hidden"
                     finalFocus={(closeType) => closeType === "keyboard"}
+                    render={<TooltipScrollDismissArea holdPositionOnExit />}
                   >
                     <ComboboxSearchInput
                       aria-label={gt("Search projects")}
@@ -4532,7 +4637,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           >
                             <ProjectScopeRowIcon isSelected={isSelected}>
                               {project ? (
-                                <ProjectFavicon project={project} className="size-4 shrink-0" />
+                                <ProjectFavicon
+                                  project={project}
+                                  fallbackProjects={groupIconFallbacks(
+                                    project.memberProjects,
+                                    project,
+                                  )}
+                                  className="size-4 shrink-0"
+                                />
                               ) : (
                                 <FolderIcon className="size-4 shrink-0" />
                               )}
@@ -4621,74 +4733,67 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         <SidebarGroup className="flex-1" role="presentation">
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
-              <TooltipProvider
-                key="sidebar-thread-search-tooltips-150"
-                delay={150}
-                closeDelay={0}
-                timeout={400}
+              <DndContext
+                sensors={dndSensors}
+                autoScroll={false}
+                onDragStart={(event) => {
+                  contextDragKeyRef.current = String(event.active.id);
+                }}
               >
-                <DndContext
-                  sensors={dndSensors}
-                  autoScroll={false}
-                  onDragStart={(event) => {
-                    contextDragKeyRef.current = String(event.active.id);
-                  }}
+                <ul
+                  ref={searchResultsListRef}
+                  id="sidebar-thread-search-results"
+                  role="listbox"
+                  aria-label={gt("Thread search results")}
+                  className="flex flex-col gap-px"
                 >
-                  <ul
-                    ref={searchResultsListRef}
-                    id="sidebar-thread-search-results"
-                    role="listbox"
-                    aria-label={gt("Thread search results")}
-                    className="flex flex-col gap-px"
-                  >
-                    {threadSearchResults.map((thread, index) => {
-                      const threadKey = scopedThreadKey(
-                        scopeThreadRef(thread.environmentId, thread.id),
-                      );
-                      return (
-                        <SidebarSearchResultRow
-                          isSettled={settledThreadKeys.has(threadKey)}
-                          key={threadKey}
-                          thread={thread}
-                          project={
-                            projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
-                          }
-                          projectDisplayName={
-                            projectDisplayNameByKey.get(
-                              `${thread.environmentId}:${thread.projectId}`,
-                            ) ?? null
-                          }
-                          environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
-                          environmentMachine={
-                            environmentMachineById.get(thread.environmentId) ?? "server"
-                          }
-                          providerEntryByInstanceId={
-                            providerEntriesByEnvironment.get(thread.environmentId) ??
-                            EMPTY_PROVIDER_ENTRIES
-                          }
-                          isHighlighted={activeSearchResultIndex === index}
-                          isRouteActive={routeRowThreadKey === threadKey}
-                          resultId={threadSearchResultId(index)}
-                          searchMatch={
-                            threadSearchMatchByKey.get(
-                              threadSearchMatchKey({
-                                environmentId: thread.environmentId,
-                                threadId: thread.id,
-                              }),
-                            ) ?? null
-                          }
-                          searchQuery={threadSearchQuery}
-                          searchMatchQuery={threadSearch.query}
-                          onHighlight={() => setActiveSearchResultIndex(index)}
-                          onSelect={() => selectThreadSearchResult(thread)}
-                          onContextMenu={handleSearchResultContextMenu}
-                          onFileDropThreads={handleThreadFileDrop}
-                        />
-                      );
-                    })}
-                  </ul>
-                </DndContext>
-              </TooltipProvider>
+                  {threadSearchResults.map((thread, index) => {
+                    const threadKey = scopedThreadKey(
+                      scopeThreadRef(thread.environmentId, thread.id),
+                    );
+                    return (
+                      <SidebarSearchResultRow
+                        isSettled={settledThreadKeys.has(threadKey)}
+                        key={threadKey}
+                        thread={thread}
+                        project={
+                          projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+                        }
+                        projectDisplayName={
+                          projectDisplayNameByKey.get(
+                            `${thread.environmentId}:${thread.projectId}`,
+                          ) ?? null
+                        }
+                        environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
+                        environmentMachine={
+                          environmentMachineById.get(thread.environmentId) ?? "server"
+                        }
+                        providerEntryByInstanceId={
+                          providerEntriesByEnvironment.get(thread.environmentId) ??
+                          EMPTY_PROVIDER_ENTRIES
+                        }
+                        isHighlighted={activeSearchResultIndex === index}
+                        isRouteActive={routeRowThreadKey === threadKey}
+                        resultId={threadSearchResultId(index)}
+                        searchMatch={
+                          threadSearchMatchByKey.get(
+                            threadSearchMatchKey({
+                              environmentId: thread.environmentId,
+                              threadId: thread.id,
+                            }),
+                          ) ?? null
+                        }
+                        searchQuery={threadSearchQuery}
+                        searchMatchQuery={threadSearch.query}
+                        onHighlight={() => setActiveSearchResultIndex(index)}
+                        onSelect={() => selectThreadSearchResult(thread)}
+                        onContextMenu={handleSearchResultContextMenu}
+                        onFileDropThreads={handleThreadFileDrop}
+                      />
+                    );
+                  })}
+                </ul>
+              </DndContext>
             ) : (
               <p
                 role="status"
@@ -4756,58 +4861,51 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             </div>
           ) : null}
           {!isSearchingThreads ? (
-            <TooltipProvider
-              key="sidebar-thread-tooltips-150"
-              delay={150}
-              closeDelay={0}
-              timeout={400}
+            <DndContext
+              sensors={dndSensors}
+              autoScroll={isContextDrag ? false : SIDEBAR_AUTO_SCROLL}
+              collisionDetection={dndCollisionDetection}
+              modifiers={dndModifiers}
+              onDragStart={handleThreadDragStart}
+              onDragOver={handleThreadDragOver}
+              onDragEnd={handleThreadDragEnd}
             >
-              <DndContext
-                sensors={dndSensors}
-                autoScroll={isContextDrag ? false : SIDEBAR_AUTO_SCROLL}
-                collisionDetection={dndCollisionDetection}
-                modifiers={dndModifiers}
-                onDragStart={handleThreadDragStart}
-                onDragOver={handleThreadDragOver}
-                onDragEnd={handleThreadDragEnd}
-              >
-                <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
-                  {/* The drag overlay is position:fixed and must NOT live inside the list: as a
-                      child of role="list" its wrapper is announced as an extra empty item for the
-                      length of every drag. It is built with the list's children (`sidebarList`,
-                      above the return) and rendered below as the list's sibling. */}
-                  <ul
-                    ref={attachTreeRef}
-                    // Presentation flattens VoiceOver's list interaction boundary while preserving descendant
-                    // controls.
-                    role="presentation"
-                    className={cn(
-                      "relative flex flex-col gap-px",
-                      sidebarListItems.length > 0 && "flex-1",
-                      actionSweep !== null && "**:pointer-events-none",
-                      // Projected rows (two boundary labels, two hints) extend the scroll range; a range that
-                      // shrinks as the target changes clamps scrollTop and flips the target under a still pointer.
-                      dragState !== null &&
-                        "after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-30 after:h-px after:content-['']",
-                    )}
-                  >
-                    {sidebarList?.items}
-                    {settledShelfExpanded && hiddenSettledCount > 0 ? (
-                      <SidebarSettledShowMore
-                        count={Math.min(hiddenSettledCount, SETTLED_TAIL_PAGE_COUNT)}
-                        loading={olderSettledShelf.loading}
-                        failed={olderSettledShelf.failed}
-                        onClick={() => {
-                          olderSettledShelf.retry();
-                          showMoreSettled();
-                        }}
-                      />
-                    ) : null}
-                  </ul>
-                  {sidebarList?.dragOverlayNode}
-                </SortableContext>
-              </DndContext>
-            </TooltipProvider>
+              <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
+                {/* The drag overlay is position:fixed and must NOT live inside the list: as a
+                    child of role="list" its wrapper is announced as an extra empty item for the
+                    length of every drag. It is built with the list's children (`sidebarList`,
+                    above the return) and rendered below as the list's sibling. */}
+                <ul
+                  ref={attachTreeRef}
+                  // Presentation flattens VoiceOver's list interaction boundary while preserving descendant
+                  // controls.
+                  role="presentation"
+                  className={cn(
+                    "relative flex flex-col gap-px",
+                    sidebarListItems.length > 0 && "flex-1",
+                    actionSweep !== null && "**:pointer-events-none",
+                    // Projected rows (two boundary labels, two hints) extend the scroll range; a range that
+                    // shrinks as the target changes clamps scrollTop and flips the target under a still pointer.
+                    dragState !== null &&
+                      "after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-30 after:h-px after:content-['']",
+                  )}
+                >
+                  {sidebarList?.items}
+                  {settledShelfExpanded && hiddenSettledCount > 0 ? (
+                    <SidebarSettledShowMore
+                      count={Math.min(hiddenSettledCount, SETTLED_TAIL_PAGE_COUNT)}
+                      loading={olderSettledShelf.loading}
+                      failed={olderSettledShelf.failed}
+                      onClick={() => {
+                        olderSettledShelf.retry();
+                        showMoreSettled();
+                      }}
+                    />
+                  ) : null}
+                </ul>
+                {sidebarList?.dragOverlayNode}
+              </SortableContext>
+            </DndContext>
           ) : null}
         </SidebarGroup>
       </SidebarContent>

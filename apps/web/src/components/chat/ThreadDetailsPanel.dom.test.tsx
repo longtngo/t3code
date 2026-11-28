@@ -10,8 +10,12 @@ const testState = vi.hoisted(() => ({
 }));
 
 vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
-  useT3ProjectFileScripts: (...args: ReadonlyArray<unknown>) =>
-    testState.useT3ProjectFileScripts(...args),
+  useT3ProjectFileState: (...args: ReadonlyArray<unknown>) => ({
+    status: "valid",
+    file: null,
+    scripts: testState.useT3ProjectFileScripts(...args),
+    refresh: () => {},
+  }),
 }));
 vi.mock("../BranchToolbar", () => ({
   BranchToolbar: () => null,
@@ -83,6 +87,7 @@ function panelProps(overrides: Partial<ThreadDetailsPanelProps> = {}): ThreadDet
     onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
     taskListView: { primary: null, primaryKind: null, history: [] },
     taskListActive: false,
+    taskList: null,
     backgroundTasks: [],
     usage: {
       providerInstanceId: null,

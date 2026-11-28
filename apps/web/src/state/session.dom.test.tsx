@@ -12,7 +12,9 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 const fixture = vi.hoisted(() => ({ session: null as unknown }));
 
-vi.mock("@t3tools/client-runtime/state/session", () => ({
+vi.mock("@t3tools/client-runtime/state/session", async (importActual) => ({
+  sessionDeniesScope: (await importActual<typeof import("@t3tools/client-runtime/state/session")>())
+    .sessionDeniesScope,
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: () => fixture.session }),
 }));
 vi.mock("../connection/runtime", () => ({ connectionAtomRuntime: {} }));

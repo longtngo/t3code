@@ -36,13 +36,14 @@ function toT3ProjectFile(
 export async function readT3ProjectFile(
   environmentId: EnvironmentId,
   workspaceRoot: string,
+  signal?: AbortSignal,
 ): Promise<T3ProjectFile | null> {
   // FORK: a loaded grant without file reads is not asked; the refused read would say nothing.
   if (readEnvironmentScopeDenied(environmentId, AuthFilesystemReadScope)) return null;
   const result = await executeAtomQuery(
     appAtomRegistry,
     getProjectFileQueryAtom(environmentId, workspaceRoot, T3_PROJECT_FILE_NAME),
-    { reportDefect: false, reportFailure: false },
+    { reportDefect: false, reportFailure: false, signal },
   );
   return toT3ProjectFile(
     environmentId,

@@ -1,4 +1,5 @@
 import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
+import { stripAppImageRuntimeEnv } from "@t3tools/shared/appImageRuntimeEnv";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 
@@ -13,9 +14,11 @@ export const mergeProviderInstanceEnvironment = Effect.fn(function* (
   environment: ProviderInstanceEnvironment | undefined,
   baseEnv: NodeJS.ProcessEnv = process.env,
 ) {
+  // Commands the agent runs inherit this env; the AppImage mount's libraries would shadow the system's.
+  const hostEnv = stripAppImageRuntimeEnv(baseEnv);
   const home = yield* HostProcess.HomeDirectory;
   const windows = (yield* HostProcess.Platform) === "win32";
-  const next: NodeJS.ProcessEnv = { ...baseEnv };
+  const next: NodeJS.ProcessEnv = { ...hostEnv };
 
   // Windows env names are case-insensitive but this spread is a plain object.
   for (const name of Object.keys(next)) {

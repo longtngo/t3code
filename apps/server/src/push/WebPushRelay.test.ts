@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - fixtures need createECDH for real push keys.
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeCrypto from "node:crypto";
 
 import { assert, describe, it } from "@effect/vitest";
@@ -744,7 +745,10 @@ const databaseLayer = SqlitePersistenceMemory;
 const storesLayer = Layer.mergeAll(
   databaseLayer,
   EventStore.layer.pipe(Layer.provideMerge(databaseLayer)),
-  ProjectionStore.layer.pipe(Layer.provideMerge(databaseLayer)),
+  ProjectionStore.layer.pipe(
+    Layer.provideMerge(databaseLayer),
+    Layer.provide(PlatformNodeCrypto.layerDigest),
+  ),
 );
 const sinkLayer = Layer.mergeAll(storesLayer, EventSink.layer.pipe(Layer.provide(storesLayer)));
 

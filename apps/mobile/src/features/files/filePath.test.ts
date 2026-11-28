@@ -10,6 +10,7 @@ import {
   rendersFromAssetUrl,
   needsWorkspaceFileContents,
   resolveFileLinkPath,
+  resolveMarkdownFileLinkPath,
   resolveWorkspaceRelativeFilePath,
 } from "./filePath";
 
@@ -27,6 +28,15 @@ describe("resolveFileLinkPath", () => {
     expect(resolveFileLinkPath("/repo", "~/notes.md")).toBeNull();
     expect(resolveFileLinkPath(null, "~/notes.md")).toBeNull();
     expect(resolveFileLinkPath("/repo", "../notes.md")).toBeNull();
+  });
+});
+
+describe("resolveMarkdownFileLinkPath", () => {
+  it("resolves home links from home and other links from the Markdown folder", () => {
+    const resolve = (path: string) =>
+      resolveMarkdownFileLinkPath("/home/u/repo", "/home/u/repo/docs", path);
+    expect(resolve("~/notes.md")).toBe("/home/u/notes.md");
+    expect(resolve("other.md")).toBe("/home/u/repo/docs/other.md");
   });
 });
 

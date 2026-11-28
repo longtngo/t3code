@@ -27,7 +27,9 @@ const surfaces = [
   { id: "device" as const, kind: "device" as const, title: "Phone" },
 ];
 
-function renderTabs(onMoveSurface: (id: string, toIndex: number) => void = () => undefined) {
+function renderTabs(
+  onMoveSurfaces: (ids: readonly string[], targetId: string) => void = () => undefined,
+) {
   return renderDom(
     <RightPanelTabs
       mode="sheet"
@@ -52,7 +54,8 @@ function renderTabs(onMoveSurface: (id: string, toIndex: number) => void = () =>
       onCloseOtherSurfaces={() => undefined}
       onCloseSurfacesToRight={() => undefined}
       onCloseAllSurfaces={() => undefined}
-      onMoveSurface={onMoveSurface}
+      onMoveSurfaces={onMoveSurfaces}
+      onCloseSelectedSurfaces={() => undefined}
       onCopyFilePath={() => undefined}
       onAddBrowser={() => undefined}
       onAddBrowserInProfile={() => undefined}
@@ -113,7 +116,7 @@ afterEach(() => {
 });
 
 describe("RightPanelTabs drag to reorder", () => {
-  it("moves a tab dragged onto its neighbour to that index", async () => {
+  it("moves a tab dragged onto its neighbour to that tab", async () => {
     const onMoveSurface = vi.fn();
     const view = await renderTabs(onMoveSurface);
     const tabs = tabElements(view);
@@ -134,7 +137,7 @@ describe("RightPanelTabs drag to reorder", () => {
       new MouseEvent("mouseup", { bubbles: true, clientX: 40, clientY: 12 }),
     );
 
-    expect(onMoveSurface).toHaveBeenCalledWith("browser:tab-2", 0);
+    expect(onMoveSurface).toHaveBeenCalledWith(["browser:tab-2"], "browser:tab-1");
   });
 
   it("keeps a click a click", async () => {

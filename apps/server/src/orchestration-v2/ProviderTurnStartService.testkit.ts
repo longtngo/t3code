@@ -60,6 +60,9 @@ export const layerNoTaskFolders = Layer.mock(TaskFolders.TaskFolders)({
 
 /** Turn-start dependencies a harness does not exercise: worktree repair and the credit gate. */
 export const layer = Layer.mergeAll(
+  Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+    runForThread: () => Effect.succeed({ status: "no-script" }),
+  }),
   layerNoTaskFolders,
   Layer.mock(GitWorkflow.GitWorkflowService)({
     pruneWorktrees: () => Effect.void,

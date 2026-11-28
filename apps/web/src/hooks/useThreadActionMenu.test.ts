@@ -30,6 +30,7 @@ const state = vi.hoisted(() => ({
   archivedAt: null as string | null,
   sectionId: null as string | null,
   snoozedUntil: null as string | null,
+  latestRun: null as { readonly status: string; readonly completedAt: string | null } | null,
   completed: deferred<void>(),
   toasts: [] as string[],
   queue: {
@@ -61,6 +62,7 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("../state/session", () => ({
   readEnvironmentScope: (environmentId: string, scope: string) =>
     scope === AuthOrchestrationOperateScope && state.granted.has(environmentId),
+  readEnvironmentScopeDenied: (environmentId: string) => !state.granted.has(environmentId),
 }));
 vi.mock("../state/entities", () => ({
   readEnvironmentServerConfigLoaded: () => true,
@@ -74,7 +76,7 @@ vi.mock("../state/entities", () => ({
     branch: "main",
     worktreePath: null,
     runtime: null,
-    latestRun: null,
+    latestRun: state.latestRun,
     archivedAt: state.archivedAt,
     sidebarSectionId: state.sectionId,
     snoozedUntil: state.snoozedUntil,
@@ -202,6 +204,7 @@ beforeEach(() => {
   state.archivedAt = null;
   state.sectionId = null;
   state.snoozedUntil = null;
+  state.latestRun = null;
   state.completed = deferred<void>();
   state.toasts = [];
   state.queue = { entries: [], inFlight: null, readOnly: false };
@@ -336,5 +339,19 @@ describe("thread menu queue", () => {
     state.queue.readOnly = true;
     createMenu().openMenu(position);
     expect(item("queue")?.disabled).toBe(true);
+  });
+});
+
+describe("thread menu mark unread", () => {
+  it.each([
+    ["completed", true],
+    ["interrupted", false],
+    ["cancelled", false],
+  ] as const)("a %s latest run offers Mark unread: %s", (status, offered) => {
+    // A stopped run never shows Done, so marking it unread would change nothing.
+    state.latestRun = { status, completedAt: "2026-01-01T00:00:00.000Z" };
+    createMenu().openMenu(position);
+    const items = state.show.mock.calls[0]![0];
+    expect(items.some((item) => item.id === "mark-unread")).toBe(offered);
   });
 });

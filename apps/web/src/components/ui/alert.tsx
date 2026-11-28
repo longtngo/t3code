@@ -92,7 +92,7 @@ function Alert({
     >
       <div
         className={cn(
-          "flex gap-2",
+          "flex flex-wrap gap-2",
           controlAlignment === "first-line" ? "items-start" : "items-center",
           controlAlignment === "first-line" &&
             action.length > 0 &&
@@ -115,11 +115,9 @@ function Alert({
         {content.length > 0 && (
           <div
             className={cn(
-              "flex min-w-0 flex-1 flex-col gap-0.5",
-              // `flex-1` (basis 0%) never wraps; claiming 12rem on a phone drops only a control that
-              // cannot sit beside a readable message (>112px at the 338px composer row). Order-sensitive:
-              // relies on Tailwind emitting `.max-sm\:basis-48` after `.flex-1` (verified 4.2.1, 4.3.0);
-              // inverted, the basis stays 0 and the row silently stops wrapping.
+              "flex min-w-0 grow basis-[min(10rem,calc(100%-1.5rem))] flex-col gap-0.5",
+              // On a phone, claim 12rem so only a control that cannot sit beside a readable message
+              // (>112px at the 338px composer row) drops below it.
               stackControlOnNarrow && action.length > 0 && "max-sm:basis-48",
             )}
           >
@@ -129,7 +127,7 @@ function Alert({
         {action.length > 0 && (
           <div
             className={cn(
-              "flex shrink-0 items-center",
+              "ml-auto flex shrink-0 items-center",
               controlAlignment === "first-line" ? "h-lh self-start" : "self-center",
             )}
           >

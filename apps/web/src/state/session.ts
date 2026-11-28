@@ -1,9 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { createEnvironmentSessionAtoms } from "@t3tools/client-runtime/state/session";
 import {
-  sessionResultDeniesScope,
-  sessionResultGrantsScope,
-} from "@t3tools/client-runtime/state/sessionScope";
+  createEnvironmentSessionAtoms,
+  sessionDeniesScope,
+} from "@t3tools/client-runtime/state/session";
+import { sessionResultGrantsScope } from "@t3tools/client-runtime/state/sessionScope";
 import {
   type AuthEnvironmentScope,
   type AuthSessionState,
@@ -38,31 +38,6 @@ export function useEnvironmentScope(
   );
 }
 
-/** See `sessionResultDeniesScope`: only a current answer without `scope` is a denial, so
- *  this stays false while the grant loads or an offline cache is unconfirmed. */
-export function useEnvironmentScopeDenied(
-  environmentId: EnvironmentId | null,
-  scope: AuthEnvironmentScope,
-): boolean {
-  const result = useAtomValue(
-    environmentId === null
-      ? EMPTY_SESSION_STATE_ATOM
-      : environmentSession.sessionStateAtom(environmentId),
-  );
-  return sessionResultDeniesScope(result, scope);
-}
-
-/** See `sessionResultDeniesScope`: only a current answer without `scope` is a denial. */
-export function readEnvironmentScopeDenied(
-  environmentId: EnvironmentId,
-  scope: AuthEnvironmentScope,
-): boolean {
-  return sessionResultDeniesScope(
-    appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId)),
-    scope,
-  );
-}
-
 export function useEnvironmentCanConfigureRelay(environmentId: EnvironmentId | null): boolean {
   return useAtomValue(
     environmentId === null
@@ -75,6 +50,16 @@ export function useEnvironmentCanConfigureRelay(environmentId: EnvironmentId | n
 export function readEnvironmentCanConfigureRelay(environmentId: EnvironmentId): boolean {
   const result = appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId));
   return sessionHasScope(result, AuthRelayConfigureScope);
+}
+
+/** This client's own session on the environment, or null until the host has said. */
+export function useEnvironmentSessionId(environmentId: EnvironmentId | null): string | null {
+  return useAtomValue(
+    environmentId === null
+      ? EMPTY_SESSION_STATE_ATOM
+      : environmentSession.sessionStateAtom(environmentId),
+    (result) => AsyncResult.getOrElse(result, () => null)?.sessionId ?? null,
+  );
 }
 
 export function sessionHasScope(
@@ -110,6 +95,29 @@ export function readEnvironmentScope(
   scope: AuthEnvironmentScope,
 ): boolean {
   return sessionHasScope(
+    appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId)),
+    scope,
+  );
+}
+
+/** Unlike `!useEnvironmentScope`, stays false until the host has answered without the scope. */
+export function useEnvironmentScopeDenied(
+  environmentId: EnvironmentId | null,
+  scope: AuthEnvironmentScope,
+): boolean {
+  return useAtomValue(
+    environmentId === null
+      ? EMPTY_SESSION_STATE_ATOM
+      : environmentSession.sessionStateAtom(environmentId),
+    (result) => sessionDeniesScope(result, scope),
+  );
+}
+
+export function readEnvironmentScopeDenied(
+  environmentId: EnvironmentId,
+  scope: AuthEnvironmentScope,
+): boolean {
+  return sessionDeniesScope(
     appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId)),
     scope,
   );

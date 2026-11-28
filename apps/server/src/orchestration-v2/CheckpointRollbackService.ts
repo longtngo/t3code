@@ -260,6 +260,7 @@ export const layer: Layer.Layer<
         yield* taskFolders.restore({
           taskFolder,
           branch,
+          projectCommands: TaskFolders.projectCommandsForLink(context.thread.linkOrigin),
           // Fork (invariant 66): take over the checkout's stale registration instead of a
           // repo-wide `git worktree prune`.
           recreate: (checkout) =>

@@ -18,6 +18,8 @@ function terminal(
     target: { environmentId: "env-1" as never, threadId: "thread-1" as never, terminalId },
     state: {
       summary: null,
+      pid: null,
+      supportsConditionalWrites: false,
       grid: null,
       output: EMPTY_TERMINAL_OUTPUT_STATE,
       error: null,

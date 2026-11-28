@@ -14,6 +14,7 @@ import {
   describePendingOptionsVisibility,
   PENDING_OPTIONS_MAX_HEIGHT_CLASS,
 } from "./pendingUserInputPanelLayout";
+import { isEditableFocused } from "~/lib/editableFocus";
 import { isInSideChatPane } from "~/lib/sideChatPane";
 import ChatMarkdown from "../ChatMarkdown";
 
@@ -179,14 +180,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     const handler = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
-      if (isInSideChatPane(target)) return;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-        return;
-      }
+      if (isInSideChatPane(target) || isEditableFocused(target)) return;
       if (
         target instanceof HTMLElement &&
         target.closest(
-          'select, [contenteditable]:not([contenteditable="false"]), [role="dialog"], [aria-modal="true"], [role="menu"], [role="combobox"], [data-slot$="popup"]',
+          '[role="dialog"], [aria-modal="true"], [role="menu"], [role="combobox"], [data-slot$="popup"]',
         )
       ) {
         return;
@@ -227,7 +225,10 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     <div dir={promptDirection} className="px-4 py-3 sm:px-5">
       <div className="mb-2 flex items-center gap-3">
         <span
-          className="min-w-0 truncate text-secondary-label text-2xs font-semibold tracking-widest uppercase"
+          className={cn(
+            "min-w-0 text-secondary-label text-2xs font-semibold tracking-widest uppercase",
+            isCollapsed ? "truncate" : "wrap-anywhere",
+          )}
           dir={textDirection(activeQuestion.header)}
         >
           {activeQuestion.header}

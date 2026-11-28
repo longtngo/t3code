@@ -12,6 +12,10 @@ vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
 const atomReader = vi.hoisted(() => ({
   initialValues: (): Array<readonly [never, unknown]> => [],
 }));
+// The system-browser opener reads the environment catalog, which this stubbed atom reader cannot serve.
+vi.mock("../browser/useOpenInSystemBrowser", () => ({
+  useOpenInSystemBrowser: () => async () => undefined,
+}));
 vi.mock("@effect/atom-react", async () => {
   const { AtomRegistry } = await import("effect/reactivity");
   // ChatMarkdown derives its server-config fields in an atom of its own; evaluate that one for

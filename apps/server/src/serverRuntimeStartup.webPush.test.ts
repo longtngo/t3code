@@ -48,6 +48,7 @@ import { PushSubscriptionRepository } from "./persistence/Services/PushSubscript
 import * as WebPushRelay from "./push/WebPushRelay.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectService from "./project/ProjectService.ts";
+import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -238,6 +239,7 @@ it.live("the startup finalizer silences web push before shutdown cancels running
       Layer.succeed(ProviderRuntimeRecovery.ProviderRuntimeRecoveryService, recovery),
       Layer.succeed(ProviderSessionManager.ProviderSessionManagerV2, sessions),
       Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, stub()),
+      Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
       Layer.succeed(WebPushRelay.WebPushRelay, observedRelay),
       Layer.succeed(ServerLifecycleEvents.ServerLifecycleEvents, stub()),
       Layer.succeed(ServerSettings.ServerSettingsService, stub()),

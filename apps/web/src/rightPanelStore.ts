@@ -261,11 +261,13 @@ interface RightPanelStoreState {
   /** Agent-driven activation. Not a user action, so it does not move keyboard focus. */
   revealSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
+  closeSurfaces: (ref: ScopedThreadRef, surfaceIds: readonly string[]) => void;
   closeOtherSurfaces: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeSurfacesToRight: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeAllSurfaces: (ref: ScopedThreadRef) => void;
   /** Moves a tab to `toIndex` in the tab strip; a missing id or unchanged index is a no-op. */
   moveSurface: (ref: ScopedThreadRef, surfaceId: string, toIndex: number) => void;
+  moveSurfaces: (ref: ScopedThreadRef, surfaceIds: readonly string[], targetId: string) => void;
   reconcileBrowserSurfaces: (
     ref: ScopedThreadRef,
     tabIds: readonly string[],
@@ -814,6 +816,9 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
   return { byThreadKey, threadPanelVisibilityByThreadKey };
 }
 
+// One counter for every file tab, so a reopened tab never reuses a request a viewer already handled.
+let lastFileRevealRequestId = 0;
+
 export const useRightPanelStore = create<RightPanelStoreState>()(
   persist(
     (set, get) => ({
@@ -1065,7 +1070,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const surface = fileSurface(
               relativePath,
               normalizeRevealLine(line),
-              (existing?.revealRequestId ?? 0) + 1,
+              ++lastFileRevealRequestId,
             );
             return {
               ...current,
@@ -1198,7 +1203,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                       terminalIds,
                       activeTerminalId:
                         entry.activeTerminalId === terminalId
-                          ? (terminalIds.at(-1) ?? terminalIds[0]!)
+                          ? terminalIds[
+                              Math.min(
+                                entry.terminalIds.indexOf(terminalId),
+                                terminalIds.length - 1,
+                              )
+                            ]!
                           : entry.activeTerminalId,
                     }
                   : entry,
@@ -1214,27 +1224,32 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         set((state) =>
           automaticUpdate(state, scopedThreadKey(ref), (current) => activated(current, surfaceId)),
         ),
-      closeSurface: (ref, surfaceId) =>
+      closeSurface: (ref, surfaceId) => get().closeSurfaces(ref, [surfaceId]),
+      closeSurfaces: (ref, surfaceIds) => {
+        const closing = new Set(surfaceIds);
         set((state) =>
           closeAction(state, scopedThreadKey(ref), (current) => {
-            const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
-            if (index < 0) return current;
-            const surfaces = current.surfaces.filter((surface) => surface.id !== surfaceId);
-            const next = {
+            const surfaces = current.surfaces.filter((surface) => !closing.has(surface.id));
+            if (surfaces.length === current.surfaces.length) return current;
+            let activeSurfaceId = current.activeSurfaceId;
+            if (activeSurfaceId !== null && closing.has(activeSurfaceId)) {
+              const activeIndex = current.surfaces.findIndex(
+                (surface) => surface.id === activeSurfaceId,
+              );
+              const fallbackIndex = current.surfaces
+                .slice(0, activeIndex)
+                .filter((surface) => !closing.has(surface.id)).length;
+              activeSurfaceId = surfaces[Math.min(fallbackIndex, surfaces.length - 1)]?.id ?? null;
+            }
+            return {
               ...current,
               isOpen: surfaces.length > 0 && current.isOpen,
               surfaces,
-            };
-            if (current.activeSurfaceId !== surfaceId) {
-              return next;
-            }
-            const fallback = surfaces[Math.min(index, surfaces.length - 1)] ?? null;
-            return {
-              ...next,
-              activeSurfaceId: fallback?.id ?? null,
+              activeSurfaceId,
             };
           }),
-        ),
+        );
+      },
       closeOtherSurfaces: (ref, surfaceId) =>
         set((state) =>
           closeAction(state, scopedThreadKey(ref), (current) => {
@@ -1285,6 +1300,23 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               ? current
               : { ...current, isOpen: false, surfaces: [], activeSurfaceId: null },
           ),
+        ),
+      moveSurfaces: (ref, surfaceIds, targetId) =>
+        set((state) =>
+          updateThread(state, scopedThreadKey(ref), (current) => {
+            const movingIds = new Set(surfaceIds);
+            if (movingIds.has(targetId)) return current;
+            const firstIndex = current.surfaces.findIndex((surface) => movingIds.has(surface.id));
+            const targetIndex = current.surfaces.findIndex((surface) => surface.id === targetId);
+            if (firstIndex < 0 || targetIndex < 0) return current;
+            const moving = current.surfaces.filter((surface) => movingIds.has(surface.id));
+            const surfaces = current.surfaces.filter((surface) => !movingIds.has(surface.id));
+            const insertIndex =
+              surfaces.findIndex((surface) => surface.id === targetId) +
+              Number(firstIndex < targetIndex);
+            surfaces.splice(insertIndex, 0, ...moving);
+            return { ...current, surfaces };
+          }),
         ),
       reconcileBrowserSurfaces: (ref, tabIds, previewSupported, hiddenTabIds) =>
         set((state) =>
@@ -1480,6 +1512,15 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       }),
       migrate: migratePersistedRightPanelState,
+      onRehydrateStorage: () => (state) => {
+        for (const thread of Object.values(state?.byThreadKey ?? {})) {
+          for (const surface of thread.surfaces) {
+            if (surface.kind === "file") {
+              lastFileRevealRequestId = Math.max(lastFileRevealRequestId, surface.revealRequestId);
+            }
+          }
+        }
+      },
     },
   ),
 );

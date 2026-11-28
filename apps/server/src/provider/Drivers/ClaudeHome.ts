@@ -9,6 +9,7 @@ import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
+import { parseGitfileTarget } from "../../project/worktreeContainer.ts";
 import { readClaudeSettingsEnv } from "./ClaudeSkills.ts";
 
 /** Config slice that determines where this Claude instance reads/writes state. */
@@ -94,7 +95,7 @@ const CLAUDE_HOST_SESSION_VARIABLES = [
  */
 export const mergeClaudeProcessEnvironment = Effect.fn("mergeClaudeProcessEnvironment")(function* (
   // FORK (invariant 40): carries configDirPath so the settings env is read from the CLI's config dir.
-  config: ClaudeHomeConfig,
+  config: ClaudeHomeConfig & Pick<ClaudeSettings, "enabled">,
   instanceEnvironment: ProviderInstanceEnvironment | undefined,
   hostEnvironment: NodeJS.ProcessEnv,
 ) {
@@ -107,6 +108,8 @@ export const mergeClaudeProcessEnvironment = Effect.fn("mergeClaudeProcessEnviro
   // an Electron app they start (T3 Code itself, VS Code) would run as Node and exit.
   delete baseEnvironment.ELECTRON_RUN_AS_NODE;
   const environment = yield* mergeProviderInstanceEnvironment(instanceEnvironment, baseEnvironment);
+  // A turned-off Claude never runs, so its settings stay unread.
+  if (!config.enabled) return environment;
   const settingsEntrypoint = (yield* readClaudeSettingsEnv(config, undefined, environment))
     .CLAUDE_CODE_ENTRYPOINT;
   return settingsEntrypoint
@@ -135,7 +138,7 @@ const mainCheckoutRoot = Effect.fnUntraced(function* (checkout: string) {
   const path = yield* Path.Path;
   return yield* fileSystem.readFileString(path.join(checkout, ".git")).pipe(
     Effect.flatMap((pointer) => {
-      const gitDir = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
+      const gitDir = parseGitfileTarget(pointer);
       if (gitDir === undefined) return Effect.succeed(checkout);
       const worktreeGitDir = path.resolve(checkout, gitDir);
       return fileSystem.readFileString(path.join(worktreeGitDir, "commondir")).pipe(

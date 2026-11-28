@@ -40,6 +40,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
@@ -103,7 +104,10 @@ const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 const layerDatabase = SqlitePersistence.layerMemory;
 const layerEventStoreProvided = EventStore.layer.pipe(Layer.provideMerge(layerDatabase));
-const layerProjectionStoreProvided = ProjectionStore.layer.pipe(Layer.provideMerge(layerDatabase));
+const layerProjectionStoreProvided = ProjectionStore.layer.pipe(
+  Layer.provide(NodeCrypto.layerDigest),
+  Layer.provideMerge(layerDatabase),
+);
 const layerStoresProvided = Layer.mergeAll(
   layerDatabase,
   layerEventStoreProvided,
@@ -4595,7 +4599,10 @@ it.effect("routes projection node lookups to the reader connection", () =>
     const path = yield* Path.Path;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "projection-reader-" });
     const database = SqlitePersistence.layerFromPath(path.join(directory, "statev2.sqlite"));
-    const projectionLayer = ProjectionStore.layer.pipe(Layer.provideMerge(database));
+    const projectionLayer = ProjectionStore.layer.pipe(
+      Layer.provide(NodeCrypto.layerDigest),
+      Layer.provideMerge(database),
+    );
     yield* Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;
       const now = yield* DateTime.now;
@@ -4646,7 +4653,10 @@ it.effect("loads a shell snapshot while the writer connection is occupied", () =
     const path = yield* Path.Path;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "shell-reader-" });
     const database = SqlitePersistence.layerFromPath(path.join(directory, "statev2.sqlite"));
-    const projectionLayer = ProjectionStore.layer.pipe(Layer.provideMerge(database));
+    const projectionLayer = ProjectionStore.layer.pipe(
+      Layer.provide(NodeCrypto.layerDigest),
+      Layer.provideMerge(database),
+    );
     yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const projections = yield* ProjectionStore.ProjectionStoreV2;

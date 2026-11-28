@@ -31,6 +31,12 @@ units rather than merged. The server core is `apps/server/src/orchestration-v2/`
 what a fork feature did, upstream's version was adopted and the entry below is marked RETIRED with
 what superseded it. Every probe below was re-run against the ported tree.
 
+The 62nd reconcile (2026-11-28, 1,559 commits) brought Effect 4.1.6, Expo patch bumps (invariant 2),
+upstream migrations 111-119 (ids 121-129, invariant 1), the per-thread checkpoint capture index
+(invariant 55), and upstream's removal of the changed-files card under assistant turns. Upstream's
+optional "Agent tasks" section in Thread details (off by default) ships beside the fork's task and
+background panels.
+
 The 57th reconcile (2026-11-09, 178 commits) brought upstream's Labs cleanup (#33131): plan mode is
 gone on both send paths (the fork's queued send included), the old Labs toggles are gone, and
 upstream deleted its context-window meter and `ContextWindowMeter.logic.ts` for
@@ -173,7 +179,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 120 entries, ids 1-120, unique and monotonic. Upstream's v2 schema
+Current: 129 entries, ids 1-129, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
 `057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
 `059_McpAppModelContext` is **68**, `060_ThreadSnapshotWindowIndexes` is **69**,
@@ -186,7 +192,7 @@ Current: 120 entries, ids 1-120, unique and monotonic. Upstream's v2 schema
 `076_ProjectionProjectsPinArchive` is **85**). Id **90** is the fork's own `PushSubscriptions`
 repair, so upstream's `081`-`089` are **91**-**99** (a flat +10; `081_ProjectionMessageSearchText`
 is **91**, `089_ShellThreadReadIndexes` is **99**), and since the 60th reconcile its `090`-`098` are
-**100**-**108** (the same +10; `098_ActiveShellIndexIndexes` is **108**), and since the 61st its `099`-`110` are **109**-**120** (`110_Workflows` is **120**), so its next (`111`) takes **121**. Upstream's `hasPendingMigrations` also counts V2-preview rows for
+**100**-**108** (the same +10; `098_ActiveShellIndexIndexes` is **108**), since the 61st its `099`-`110` are **109**-**120** (`110_Workflows` is **120**), and since the 62nd its `111`-`119` are **121**-**129** (`119_WorkflowRunSubject` is **129**), so its next (`120`) takes **130**. Upstream's `hasPendingMigrations` also counts V2-preview rows for
 its preview reconciliation; the fork drops that clause (it would report pending forever).
 Upstream's startup guard against a skipped V2 migration (`assertV2MigrationsCanRun`, #15925) is
 adopted with `FIRST_V2_MIGRATION_ID = 64`, and its `Migrations.test.ts` is retargeted to fork ids;
@@ -212,7 +218,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -cE '^\s*\[(34|90), "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `120 120 ok` and `2`.
+Expect `129 129 ok` and `2`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -235,15 +241,16 @@ Upstream's Expo 58 upgrade (#12045) deleted its own `expo-modules-core@57.0.14` 
 `apps/mobile/scripts/permissions-service.test.ts` and `notification-center-manager.test.ts`. Upstream
 CI does not run them on macOS, so they went red only here. Measured at the 43rd reconcile:
 
-The entries are keyed `expo-modules-core@58.0.30` and `expo-notifications@58.1.8`. Since the 51st
-reconcile upstream patches `expo-modules-core` itself (an Android `ExpoView.kt` fix, #22343),
+The entries are keyed `expo-modules-core@58.1.0` and `expo-notifications@58.1.9`. Since the 51st
+reconcile upstream patches `expo-modules-core` itself (Android `ExpoView.kt` and `AppContextActivityResultRegistry.kt` fixes),
 and pnpm takes one patch per version, so the fork's iOS hunk is the second half of
-`patches/expo-modules-core@58.0.30.patch` (the 58th reconcile followed upstream's rename from
-58.0.22; the 58.1.8 iOS sources of expo-notifications are byte-identical to 58.1.5). A bump that replaces that file with upstream's drops the
+`patches/expo-modules-core@58.1.0.patch` (the 62nd reconcile followed upstream's rename from
+58.0.30; the 58.1.9 iOS sources of expo-notifications are byte-identical to 58.1.8, and
+`EXPermissionsService.m` is unchanged in 58.1.0). A bump that replaces that file with upstream's drops the
 fork half with nothing failing except `permissions-service.test.ts`. The notifications entry still
 points at `patches/expo-notifications@58.0.11.patch`.
 
-- `expo-modules-core@58.0.30` still has the unsynchronized permissions registry (ThreadSanitizer
+- `expo-modules-core@58.1.0` still has the unsynchronized permissions registry (ThreadSanitizer
   race) in `EXPermissionsService.m`.
 - `expo-notifications@58.0.11` added its own `Mutex` registry but still clears every pending
   response after a replay and records a response as pending only after no delegate handled it.
@@ -380,7 +387,8 @@ every unset install steer instead. Steer stays one setting away.
 Upstream `#7153` extracted the sidebar footer into `SidebarUtilityMenu` and reused it from
 `SettingsSidebarNav`. The fork panel (`SidebarResourceQueue`) lives **inside that component**,
 along with its open state and the `relative` row wrapper it anchors to. `SidebarChromeFooter`
-keeps only `SidebarProviderUpdatePill` and `SidebarUpdateArchitectureWarning`. Keeping the panel
+keeps only `SidebarProviderUpdatePill`, `SidebarUpdateArchitectureWarning` and upstream's
+`SidebarHostPressureWarning`. Keeping the panel
 out of the menu would have hidden it on the settings page, which is the one surface upstream
 added. (A second panel, Local models, was removed with the local LLM feature.)
 
@@ -1299,16 +1307,17 @@ recovery, and fsync'd writes. That is a superset of the fork's own seeding (`res
 `realIndexHasSkipBits`), which the 38th reconcile removed. Two fork pieces stay on top and must
 survive: `enumerateOversizedUntracked` (its `:(exclude,literal)` pathspecs are prepended to every
 `stageFiles` call, including the nested-repo retry) and the whole-operation `captureRetryPolicy`
-(on `resolveGitCommonDir` and around the body). Upstream's per-command transient retry in
+(on `resolveCaptureRepository`, which calls `resolveGitCommonDir`, and around the body). Upstream's per-command transient retry in
 `VcsProcess.run` (#11665) is complementary and kept. Upstream's racy stamp now calls the fork's
 `copiedIndexStampSeconds`, which keeps its unit test pinned to the production path.
 
 The 60th reconcile added three upstream pieces, and none escapes the fork's bound or retry:
 `readHeadMoves` (a reflog read before the retried body; it needs neither, as it fails open to no
 moves),
-untracked-blob reuse (`vcs/checkpointUntrackedBlobs.ts`, inside the retried body; it only reuses
-blobs an earlier capture staged, so oversized files stay out), and per-submodule capture through a
-recursive `captureCheckpoint`, so each submodule gets its own size bound and retry.
+and per-submodule capture through a recursive `captureCheckpoint`, so each submodule gets its own
+size bound and retry. The 62nd reconcile took upstream's per-thread capture index
+(`vcs/checkpointCaptureIndex.ts`), which replaced untracked-blob reuse; it runs inside the retried
+body, and the fork's exclusions are still spread into every `stageFiles` call.
 
 ### 56. The fork's arraybuffer WebSocket constructor must accept effect's options argument
 
@@ -1637,7 +1646,7 @@ reader that stopped taking, so each reader needs its own bound.
   bodies. At the 60th reconcile: PullRequestSyncReactor, PullRequestWatchReactor,
   ThreadPullRequestService, ThreadSettlementService, DelegatedTaskQuestionReactor,
   IdleCompactionService, UsageLimitRecoveryWorker, AgentAwarenessRelay, RemoteDelegation,
-  DelegatedTaskAnalytics, StorageCleanup, WebPushRelay. Open follow-up: upstream's
+  DelegatedTaskAnalytics, StorageCleanup, WebPushRelay, OrchestrationMilestones. Open follow-up: upstream's
   `orchestration-v2/PullRequestWatchReactor.ts` runs its pass inline in the subscriber handler
   (a projection read plus host fingerprint reads on `thread.pull-request-synced`), not on a worker. WebPushRelay's handler classifies the event
   and enqueues a run or request id; its reads and sends (up to 15 s each) run on the worker,

@@ -2,6 +2,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
+import { AppRouteModal } from "../AppRouteModal";
 import { SidebarProvider } from "../ui/sidebar";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 import { settingsNavGroups, SETTINGS_SECTION_LABELS } from "./settingsSearch";
@@ -12,6 +13,7 @@ vi.mock("./useAvailableSettingsSearchItems", () => ({
   ],
   useHasSecretProvidersEnvironment: () => false,
 }));
+vi.mock("../chat/GlobalVoiceInputIndicator", () => ({ GlobalVoiceInputIndicator: () => null }));
 
 it("ignores composing keys in the search", async () => {
   await using screen = await render(
@@ -43,6 +45,42 @@ it("ignores composing keys in the search", async () => {
   await vi.waitFor(() =>
     expect(screen.router?.state.location.pathname).toBe("/settings/appearance"),
   );
+});
+
+it("Esc clears a search of spaces and a held Esc keeps Settings open", async () => {
+  await using _screen = await render(
+    <AppRouteModal label="Settings">
+      <SidebarProvider defaultOpen>
+        <SettingsSidebarNav pathname="/settings/general" />
+      </SidebarProvider>
+    </AppRouteModal>,
+    { router: "/settings/general" },
+  );
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  const search = page.getByRole("combobox", { name: "Search settings" });
+  await expect.element(settings).toHaveFocus();
+
+  for (const text of ["theme", "   "]) {
+    await search.fill(text);
+    await userEvent.keyboard("{Escape}");
+    await expect.element(search).toHaveValue("");
+    // FORK: the search claims every Escape and lets go of focus, so the next Esc leaves Settings.
+    await expect.element(search).not.toHaveFocus();
+    await act(() =>
+      search.element().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    await expect.element(settings).toHaveAttribute("data-open");
+  }
+
+  await userEvent.keyboard("{Escape}");
+  await expect.element(settings).not.toBeInTheDocument();
 });
 
 function renderNav() {
